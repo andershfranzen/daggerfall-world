@@ -192,18 +192,23 @@ test('make permanent: a full pack queues the gem until there is room, then deliv
   assert.deepEqual(a.rpg.quests.campaignRewards, {});
 });
 
-test('make permanent: handed-over, never-received and template-less items stay out of the pack', () => {
+test('make permanent: handed-over and never-received stay out; template-less religious item converts cleanly', () => {
   const w = fakeWorld();
   const a = w.mk('a');
   const q = quest({
     gone: { className: 'gem', template: 'ruby', held: false, handedOver: true },
     never: { className: 'gem', template: 'ruby', held: false },
-    beads: { className: 'religious', template: null, held: true },
+    beads: { className: 'religious', template: null, held: true, name: 'Prayer Beads' },
+    missingArtifact: { className: 'artifact', template: null, held: true, name: 'Unknown Relic' },
   });
   for (const k of Object.keys(q.items)) permanentQuestItem(w.ctx, a, q, k, text);
-  assert.deepEqual(a.rpg.inventory, []);
-  assert.equal(q.items.beads.held, true, 'kept in the journal for the rest of the quest');
-  assert.deepEqual(q.notes, ['make permanent: no inventory item for religious']);
+  assert.deepEqual(a.rpg.inventory.map((i) => i.template), ['religious-item']);
+  assert.equal(a.rpg.inventory[0].quest.name, 'Prayer Beads');
+  assert.equal(a.rpg.inventory[0].quest.permanent, true);
+  assert.equal(q.items.beads.held, false, 'converted out of journal into inventory');
+  assert.equal(q.items.beads.permanent, true);
+  assert.equal(q.items.missingArtifact.held, true, 'unresolved unique artifact stays in journal');
+  assert.deepEqual(q.notes, ['make permanent: no inventory item for artifact']);
 });
 
 test('make permanent: artifacts are not duplicated and letters keep their text (unchanged behaviour)', () => {

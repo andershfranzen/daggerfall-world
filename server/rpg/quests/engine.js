@@ -412,6 +412,15 @@ function evalWhen(run, expr) {
   return true;
 }
 
+function compareOp(v, op, amount) {
+  switch (op) {
+    case '<=': return v <= amount;
+    case '<': return v < amount;
+    case '>': return v > amount;
+    default: return v >= amount;
+  }
+}
+
 function say(run, ref) {
   const id = messageId(ref);
   if (id) run.host.message(run.inst, id);
@@ -477,9 +486,13 @@ function check(run, a, st, ts) {
       if (!st.said) { say(run, g.say); st.said = true; }
       return true;
     }
+    case 'whenSkill': {
+      const v = run.host.skillValue?.(inst, g.skill) ?? null;
+      return v !== null && compareOp(v, g.op ?? '>=', g.amount);
+    }
     case 'whenRepute': {
       const v = run.host.factionRepute?.(inst, g.faction ?? key(g.person)) ?? null;
-      return v !== null && v >= g.amount;
+      return v !== null && compareOp(v, g.op ?? '>=', g.amount);
     }
     case 'whenAvailable': {
       const p = inst.people[key(g.person)];
@@ -804,7 +817,7 @@ function perform(run, a, st, t) {
     case 'teleportPc': {
       // Completes once the player stands inside the place (moved now, or the dungeon was still loading: retried).
       const pl = inst.places[key(g.place)];
-      if (pl && host.teleport?.(inst, pl)) return done();
+      if (pl && host.teleport?.(inst, pl, g.marker)) return done();
       return undefined;
     }
     case 'addFace':
@@ -884,6 +897,60 @@ function perform(run, a, st, t) {
       } else clearTask(run, g.task);
       return undefined;
     }
+    case 'pcAtAny': {
+      if (host.isAtAny?.(g.placeType)) {
+        if (g.say && !st.shown) { say(run, g.say); st.shown = true; }
+        startTask(run, g.task);
+      } else clearTask(run, g.task);
+      return undefined;
+    }
+    case 'payMoney': {
+      if (host.takeGold?.(inst, g.gold)) startTask(run, g.task);
+      else if (g.otherwise) startTask(run, g.otherwise);
+      return done();
+    }
+    case 'trainPc':
+      host.trainSkill?.(inst, g.skill, g.amount);
+      return done();
+    case 'killFoe': {
+      const k = key(g.foe);
+      const f = inst.foes[k];
+      if (f) {
+        f.kills = Math.max(f.kills, f.count * Math.max(1, f.ambush || 1));
+        f.injured = true;
+        f.removed = true;
+        for (const ik of f.holds ?? []) {
+          const it = inst.items[ik];
+          if (it && it.holder === k) {
+            it.held = true;
+            it.handedOver = false;
+            it.location = null;
+            it.holder = null;
+          }
+        }
+        f.holds = [];
+        host.killFoe?.(inst, k);
+      }
+      host.placed(inst);
+      return done();
+    }
+    case 'changeFoe': {
+      const k = key(g.foe);
+      const f = inst.foes[k];
+      if (f) {
+        f.team = g.team;
+        host.changeFoeTeam?.(inst, k, g.team);
+      }
+      return done();
+    }
+    case 'spawnGuards':
+      inst.guardsSpawned = { at: run.now, immediate: !!g.immediate };
+      host.spawnGuards?.(inst, { immediate: !!g.immediate });
+      return done();
+    case 'world':
+      inst.worldOverrides = { ...(inst.worldOverrides ?? {}), [g.aspect]: g.value };
+      host.worldChange?.(inst, g.aspect, g.value);
+      return done();
     default:
       if (a.status === 'ignored') return done();
       note(run, a); // unsupported: never marked complete

@@ -21,13 +21,25 @@ function dialogRefs(text) {
     .map((m) => ({ kind: kinds[m[1].toLowerCase()], symbol: m[2] }));
 }
 
+/** Normalises comparison keywords/symbols from Daggerfall Unity trigger lines. */
+function normOp(raw) {
+  const s = String(raw ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (s === 'at least' || s === '>=') return '>=';
+  if (s === 'at most' || s === '<=') return '<=';
+  if (s === 'less than' || s === '<') return '<';
+  if (s === 'greater than' || s === '>' || s === 'exceeds') return '>';
+  return '>=';
+}
+
 /** [name, regex, kind, status, (m) => args] — order matters: first match wins. */
 const DEFS = [
   // ---- conditions (IsTriggerCondition)
-  ['whenSkill', `^when\\s+skill\\s+`, 'trigger', 'unsupported', () => ({})],
-  // Classic 0x4f / Daggerfall Unity WhenReputeWith: re-evaluated every update (not latching), at least N.
-  ['whenRepute', `^when\\s+repute\\s+with\\s+(?:faction\\s+(\\d+)|${S})\\s+is\\s+at\\s+least\\s+(-?\\d+)$`, 'trigger', 'exact',
-    (m) => ({ faction: m[1] !== undefined ? +m[1] : null, person: m[2] ?? null, amount: +m[3] })],
+  // Daggerfall Unity WhenSkillLevel: re-evaluated every update (not latching).
+  ['whenSkill', `^when\\s+skill\\s+([A-Za-z0-9_ -]+?)\\s+is\\s+(at\\s+least|at\\s+most|less\\s+than|greater\\s+than|>=|<=|>|<)\\s+(-?\\d+)$`, 'trigger', 'exact',
+    (m) => ({ skill: m[1].trim(), op: normOp(m[2]), amount: +m[3] })],
+  // Classic 0x4f / Daggerfall Unity WhenReputeWith: re-evaluated every update (not latching); supports >=, <=, <, >.
+  ['whenRepute', `^when\\s+repute\\s+with\\s+(?:faction\\s+(\\d+)|${S})\\s+(?:is\\s+(at\\s+least|at\\s+most|less\\s+than|greater\\s+than|>=|<=|>|<)|exceeds)\\s+(-?\\d+)$`, 'trigger', 'exact',
+    (m) => ({ faction: m[1] !== undefined ? +m[1] : null, person: m[2] ?? null, op: m[3] ? normOp(m[3]) : '>', amount: +m[4] })],
   // Daggerfall Unity WhenNpcIsAvailable: the individual has not been destroyed or sent away by this quest.
   ['whenAvailable', `^when\\s+${S}\\s+is\\s+available$`, 'trigger', 'exact', (m) => ({ person: m[1] })],
   ['whenReputeOther', `^when\\s+repute\\s+`, 'trigger', 'unsupported', () => ({})],
@@ -50,7 +62,9 @@ const DEFS = [
 
   // ---- actions
   ['pcAt', `^pc\\s+at\\s+${S}\\s+(set|do)\\s+${S}(?:\\s+saying\\s+(\\d+))?$`, 'action', 'approx', (m) => ({ place: m[1], task: m[3], say: m[4] })],
-  ['pcAtAny', `^pc\\s+at\\s+any\\s+`, 'action', 'unsupported', () => ({})],
+  // Daggerfall Unity PcAt (any <placeType>): evaluates against the player's current building or location kind.
+  ['pcAtAny', `^pc\\s+at\\s+any\\s+${S}\\s+(set|do)\\s+${S}(?:\\s+saying\\s+(\\d+))?$`, 'action', 'approx',
+    (m) => ({ placeType: m[1].toLowerCase(), task: m[3], say: m[4] })],
   ['say', `^say\\s+${ID}$`, 'action', 'exact', (m) => ({ id: m[1] })],
   ['log', `^log\\s+(\\d+)(?:\\s+step)?\\s+(\\d+)$`, 'action', 'exact', (m) => ({ id: +m[1], step: +m[2] })],
   ['removeLog', `^remove\\s+log\\s+step\\s+(\\d+)$`, 'action', 'exact', (m) => ({ step: +m[1] })],
@@ -126,22 +140,35 @@ const DEFS = [
 
   // ---- recognised, not implemented
   ['playVideo', `^play\\s+video\\s+(\\d+)$`, 'action', 'exact', (m) => ({ video: +m[1] })],
-  // StartQuest.cs: "start quest 16 16" schedules S0000016 for the same player (index -> S{0:0000000}).
-  ['startQuest', `^start\\s+quest\\s+(?:(\\d+)\\s+\\d+|([A-Za-z0-9$]{1,8}))$`, 'action', 'exact', (m) => ({ quest: m[1] ? `S${m[1].padStart(7, '0')}` : m[2].toUpperCase() })],
+  // StartQuest.cs: "start/run quest 16 16" or "start/run quest <name>" schedules the quest for the same player.
+  ['startQuest', `^(?:start|run)\\s+quest\\s+(?:(\\d+)(?:\\s+\\d+)?|([A-Za-z0-9$_]{1,8}))$`, 'action', 'exact',
+    (m) => ({ quest: m[1] ? `S${m[1].padStart(7, '0')}` : m[2].toUpperCase() })],
   ['runQuest', `^(start|run)\\s+quest\\b`, 'action', 'unsupported', () => ({})],
   // TeleportPc.cs "transfer pc inside <place> marker <n>": only S0000016 uses it (Mantellan Crux and back).
   ['transferPc', `^transfer\\s+pc\\s+inside\\s+${S}(?:\\s+marker\\s+(\\d+))?$`, 'action', 'exact', (m) => ({ place: m[1], marker: +(m[2] || 0) })],
   ['castOther', `^cast\\b`, 'action', 'unsupported', () => ({})],
-  // Classic 0x1e with person -1 / Daggerfall Unity TeleportPc: into the place's interior at its entrance.
-  ['teleportPc', `^teleport\\s+pc\\s+to\\s+${S}$`, 'action', 'approx', (m) => ({ place: m[1] })],
+  // Classic 0x1e with person -1 / Daggerfall Unity TeleportPc: into the place's interior at its entrance (or marker).
+  ['teleportPc', `^teleport\\s+pc\\s+to\\s+${S}(?:\\s+(?:at\\s+)?marker\\s+(\\d+))?$`, 'action', 'approx',
+    (m) => ({ place: m[1], marker: m[2] === undefined ? null : +m[2] })],
   ['teleport', `^(teleport|transfer)\\s+pc\\b`, 'action', 'unsupported', () => ({})],
   ['makePcOther', `^make\\s+pc\\b`, 'action', 'unsupported', () => ({})],
-  ['world', `^(change\\s+)?(weather|climate|season)\\b`, 'action', 'unsupported', () => ({})],
-  ['trainPc', `^train\\s+pc\\b`, 'action', 'unsupported', () => ({})],
-  ['spawnGuards', `^spawn\\s+city\\s+guards`, 'action', 'unsupported', () => ({})],
-  ['changeFoe', `^change\\s+foe\\b`, 'action', 'unsupported', () => ({})],
-  ['killFoe', `^kill\\s+foe\\b`, 'action', 'unsupported', () => ({})],
-  ['payMoney', `^pay\\s+(\\d+)\\s+money\\b`, 'action', 'unsupported', () => ({})],
+  // Multiplayer-safe per-player atmosphere/season override (never mutates shared world clock or other players).
+  ['world', `^(?:change\\s+)?(weather|climate|season)\\s+${S}$`, 'action', 'approx',
+    (m) => ({ aspect: m[1].toLowerCase(), value: m[2] })],
+  // Daggerfall Unity TrainPc: advances the player's skill via character service.
+  ['trainPc', `^train\\s+pc\\s+([A-Za-z0-9_ -]+?)(?:\\s+by\\s+(\\d+))?$`, 'action', 'approx',
+    (m) => ({ skill: m[1].trim(), amount: m[2] === undefined ? null : +m[2] })],
+  // Daggerfall Unity SpawnCityGuards: invokes law guard spawn hook when installed, degrades cleanly otherwise.
+  ['spawnGuards', `^spawn\\s+city\\s+guards(?:\\s+(immediate))?$`, 'action', 'approx',
+    (m) => ({ immediate: !!m[1] })],
+  // Daggerfall Unity ChangeFoeTeam: sets faction/team override on a quest foe.
+  ['changeFoe', `^change\\s+foe\\s+${S}\\s+team\\s+(-?\\d+|${S})$`, 'action', 'approx',
+    (m) => ({ foe: m[1], team: /^-?\d+$/.test(m[2]) ? +m[2] : m[2] })],
+  // Daggerfall Unity KillFoe: marks the foe slain and removes live quest foe entities.
+  ['killFoe', `^kill\\s+foe\\s+${S}$`, 'action', 'exact', (m) => ({ foe: m[1] })],
+  // Daggerfall Unity PayMoney: deducts gold transactionally or triggers the optional otherwise task.
+  ['payMoney', `^pay\\s+(\\d+)\\s+money\\s+(?:do|set)\\s+${S}(?:\\s+otherwise\\s+(?:do|set)\\s+${S})?$`, 'action', 'exact',
+    (m) => ({ gold: +m[1], task: m[2], otherwise: m[3] ?? null })],
   ['unknownOpcode', `^unknown\\s+opcode\\b`, 'action', 'unsupported', () => ({})],
 ];
 
@@ -161,7 +188,7 @@ export function compileAction(source) {
         name: d.name,
         kind: d.kind,
         status: d.status,
-        always: d.name === 'when' || d.name === 'whenRepute' || d.name === 'whenAvailable',
+        always: d.name === 'when' || d.name === 'whenRepute' || d.name === 'whenSkill' || d.name === 'whenAvailable',
         rearm: !['givePc', 'givePcNothing', 'endQuest', 'prompt', 'startQuest', 'transferPc', 'teleportPc'].includes(d.name),
         args: d.args(m),
       };

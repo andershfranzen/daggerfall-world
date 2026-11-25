@@ -47,6 +47,7 @@ import { questItemIdentity } from './quests/itemIdentity.js';
 import { itemArt } from '../../client/gameplay/inventory/images.js';
 import { dateFromMinutes, formatDate } from '../../client/gameplay/atmosphere/calendar.js';
 import { CLASSIC_STARTERS } from '../../client/gameplay/travel/classic.js';
+import { SKILLS } from '../../client/gameplay/character/rules.js';
 import { parseFactionText } from '../../client/gameplay/npcs/factionFile.js';
 import { exteriorOf, parseLocation } from '../../client/world/interiors/index.js';
 import { MANTELLAN } from '../../client/world/interiors/dungeonAccess.js';
@@ -89,6 +90,15 @@ const ID_RE = /^[\w:,.-]{1,100}$/; // source people ids carry block coordinates 
 const fail = (msg) => {
   throw new Error(msg);
 };
+
+const SKILL_BY_NORM = new Map(SKILLS.map((s) => [s.toLowerCase().replace(/[^a-z0-9]/g, ''), s]));
+/** Resolves a QBN/DFU skill token ("Short_Blade", "ShortBlade", "Long Blade", or numeric index 0..34) to canonical name. */
+export function resolveSkillName(raw) {
+  if (raw === undefined || raw === null) return null;
+  const s = String(raw).trim();
+  if (/^\d+$/.test(s)) return SKILLS[Number(s)] ?? null;
+  return SKILL_BY_NORM.get(s.toLowerCase().replace(/[^a-z0-9]/g, '')) ?? null;
+}
 
 const hash32 = (s) => {
   let h = 2166136261;
@@ -387,10 +397,11 @@ export function install(ctx, opts = {}) {
         if (it) { it.held = false; it.handedOver = true; }
       },
       takeGold: (inst, n) => {
+        if (n <= 0) return true;
         const gold = Number(p.rpg?.gold) || 0;
         if (gold < n) return false;
         if (typeof services.takeGold === 'function') services.takeGold(p, n);
-        else p.rpg.gold = gold - n;
+        else { p.rpg.gold = gold - n; ctx.dirty(p); }
         return true;
       },
       end: (inst, result) => {
@@ -569,6 +580,101 @@ export function install(ctx, opts = {}) {
         if (it) it.permanent = true;
         permanentQuestItem(ctx, p, inst, k, text);
       },
+      // ---- expanded QBN opcodes (whenSkill, pcAtAny, trainPc, killFoe, changeFoe, spawnGuards, world)
+      skillValue: (inst, rawSkill) => {
+        const canonical = resolveSkillName(rawSkill);
+        if (!canonical) return null;
+        if (typeof services.skillValue === 'function') return Number(services.skillValue(p, canonical)) || 0;
+        const v = p.rpg?.character?.skills?.[canonical];
+        return Number.isFinite(v) ? Number(v) : null;
+      },
+      trainSkill: (inst, rawSkill, amount) => {
+        const canonical = resolveSkillName(rawSkill);
+        if (!canonical) return;
+        const delta = Number.isFinite(amount) && amount > 0 ? Math.trunc(amount) : null;
+        if (typeof services.advanceSkill === 'function') {
+          try { services.advanceSkill(p, canonical, delta ?? 10); } catch (err) { log.warn?.(`[quests] trainPc ${canonical}: ${err.message}`); }
+        } else if (p.rpg?.character?.skills && Object.hasOwn(p.rpg.character.skills, canonical)) {
+          p.rpg.character.skills[canonical] = Math.min(100, (Number(p.rpg.character.skills[canonical]) || 0) + (delta ?? 1));
+          ctx.dirty(p);
+        }
+        ctx.emit('questTrainPc', { player: p, quest: inst.name, uid: inst.uid, skill: canonical, amount: delta });
+      },
+      isAtAny: (placeType) => {
+        const kind = String(placeType ?? '').toLowerCase();
+        const here = locOf(p);
+        if (kind === 'anywhere') return true;
+        const ext = exteriorOf(here) ?? here;
+        if (kind === 'town') return ext.startsWith('town:');
+        const spec = PLACE_TYPES.get(kind);
+        if (!spec) return false;
+        if (spec.p1 === 0) {
+          const bt = services.portals?.into?.(here)?.meta?.buildingType;
+          if (bt === undefined || bt === null) return false;
+          if (kind === 'house') return HOUSES.has(bt);
+          if (kind === 'shop') return SHOPS.has(bt);
+          if (kind === 'random') return true;
+          return bt === spec.p2;
+        }
+        if (spec.p1 === 1) {
+          if (!here.startsWith('dungeon:')) return false;
+          if (spec.p2 < 0) return true;
+          const entry = services.travel?.lookup?.(ext.startsWith('town:') ? ext : `town:${here.slice(8)}`);
+          return entry?.dungeonType === spec.p2;
+        }
+        if (spec.p1 === 2) {
+          const entry = services.travel?.lookup?.(ext.startsWith('town:') ? ext : here.startsWith('dungeon:') ? `town:${here.slice(8)}` : ext);
+          return !!entry?.type && String(entry.type).toLowerCase() === kind;
+        }
+        return false;
+      },
+      killFoe: (inst, k) => {
+        const mine = owned.get(p.id);
+        if (mine) {
+          for (const id of [...mine]) {
+            const e = ctx.entities.get(id);
+            if (e?._quest?.uid === inst.uid && e._quest.foe === k) {
+              ctx.entities.delete(id);
+              mine.delete(id);
+            }
+          }
+        }
+        ctx.dirty(p);
+        ctx.emit('questKillFoe', { player: p, quest: inst.name, uid: inst.uid, foe: k });
+      },
+      changeFoeTeam: (inst, k, team) => {
+        for (const id of owned.get(p.id) ?? []) {
+          const e = ctx.entities.get(id);
+          if (e?._quest?.uid === inst.uid && e._quest.foe === k && !e.dead) e.questTeam = team;
+        }
+        ctx.dirty(p);
+        ctx.emit('questChangeFoeTeam', { player: p, quest: inst.name, uid: inst.uid, foe: k, team });
+      },
+      spawnGuards: (inst, { immediate = false } = {}) => {
+        const location = locOf(p);
+        try {
+          if (typeof services.law?.spawnGuards === 'function') {
+            services.law.spawnGuards(p, { immediate, source: 'quest', quest: inst.name, uid: inst.uid, location });
+          }
+        } catch (err) {
+          log.warn?.(`[quests] spawnGuards: ${err.message}`);
+        }
+        ctx.dirty(p);
+        ctx.emit('questSpawnGuards', { player: p, quest: inst.name, uid: inst.uid, location, immediate });
+      },
+      worldChange: (inst, aspect, value) => {
+        // Multiplayer safety: never mutate the shared world clock or other players' atmosphere; scope strictly to `p`.
+        try {
+          if (typeof services.atmosphere?.setPlayerOverride === 'function') {
+            services.atmosphere.setPlayerOverride(p, aspect, value, { source: 'quest', quest: inst.name, uid: inst.uid });
+          }
+        } catch (err) {
+          log.warn?.(`[quests] worldChange (${aspect}=${value}): ${err.message}`);
+        }
+        send({ kind: 'questWorld', uid: inst.uid, title: inst.title, aspect, value });
+        ctx.dirty(p);
+        ctx.emit('questWorldChange', { player: p, quest: inst.name, uid: inst.uid, aspect, value });
+      },
     };
   }
 
@@ -680,6 +786,7 @@ export function install(ctx, opts = {}) {
           name: f.mobile >= 128 ? `${f.name} the ${f.kind}` : f.kind,
           quest: inst.title, visibleTo: [p.id], _quest: { owner: p.id, uid: inst.uid, foe: k },
           ...(f.spells?.length ? { questSpells: [...f.spells] } : {}),
+          ...(f.team !== undefined ? { questTeam: f.team } : {}),
         });
       }
     }
@@ -718,6 +825,7 @@ export function install(ctx, opts = {}) {
       _targetId: null,
       _damageBy: new Map(),
       _quest: { owner: p.id, uid: inst.uid, foe: k },
+      ...(f.team !== undefined ? { questTeam: f.team } : {}),
     };
   }
 
