@@ -180,7 +180,7 @@ test('quest sounds reach only the owner and end with the quest; conversation hoo
 });
 
 test('atmosphere maps questSound events to self clips and NPCs consume quest rumours and mute flags', () => {
-  assert.deepEqual(clipsForEvent({ kind: 'questSound', sound: 72 }), [{ clip: 72, self: true }]);
+  assert.deepEqual(clipsForEvent({ kind: 'questSound', sound: 72 }), [{ clip: 72, self: true, record: true }]);
   assert.deepEqual(clipsForEvent({ kind: 'questSound', song: 'Tavern' }), []);
 
   const players = new Map();

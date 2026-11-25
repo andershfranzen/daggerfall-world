@@ -51,6 +51,8 @@ const LOOK_EVERY_MS = 1000;
 const LOOK_SETTLE_MS = 1500;
 /** A failed seasonal rebuild is tried again after this long. */
 const LOOK_RETRY_MS = 20000;
+/** Arrival waits this long for the server's clock before showing a place as built: a missing clock must not hold the loading screen. */
+const SEASON_WAIT_MS = 5000;
 const SKY_CACHE = 4;
 
 /** Read one SKYnn.DAT day sky from the player's files (the frame the scene builders use). */
@@ -141,6 +143,7 @@ export function install(api, {
     lastLook: -Infinity,
     reskin: null, // {mesh, key, ctrl, look} the one background build in flight
     reskinFailed: new WeakMap(), // mesh -> time of its last failed rebuild
+    seasonWaitFrom: null, // when arrival first waited for the server's clock (SEASON_WAIT_MS)
     skies: new Map(), // SKY index -> promise of sky data
     skyWant: null, // index wanted for the current exterior
     skyData: null, // sky data applied for skyWant
@@ -783,7 +786,7 @@ export function install(api, {
       if (screen === 'game') return;
       S.overland = null;
       // Signed out or reconnecting: the next clock event names the season again.
-      S.clockKnown = false; S.look = null; S.lookCandidate = null;
+      S.clockKnown = false; S.look = null; S.lookCandidate = null; S.seasonWaitFrom = null;
       if (S.reskin) { S.reskin.ctrl.aborted = true; S.reskin = null; }
     }),
     api.on('location', sync),
@@ -844,6 +847,18 @@ export function install(api, {
     const plan = stream.plan(location, null);
     // A town whose pixel has not been built yet does not know its neighbours: not ready until it does.
     if (isTownId(location) && plan.surround && !stream.ready(plan.surround) && status === 'ready') status = 'loading';
+    // The season's textures before the first visible frame: wait for the shared clock, then swap any drawn scene
+    // built in another look (the shell's bootstrap town is always summer). A failed swap keeps the old look.
+    if (status === 'ready' && api.atmosphere) {
+      const want = settledLook(now());
+      if (!want) {
+        S.seasonWaitFrom ??= now();
+        if (now() - S.seasonWaitFrom < SEASON_WAIT_MS) status = 'loading';
+      } else if ([...drawnMeshes()].some((m) => !sameLook(lookOf(m), want) && !S.reskinFailed.has(m))) {
+        lookTick(now());
+        status = 'loading';
+      }
+    }
     return error ? { status, error, parts } : { status, parts };
   }
 

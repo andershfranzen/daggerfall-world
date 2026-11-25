@@ -953,3 +953,30 @@ test('operator SPELLS.STD (local only)', { skip: !existsSync(REAL) && 'no local 
   assert.equal(cat.spells.get('std:10').effects[0].template.key, 'FreeAction', 'DFU Free Action data fix');
   assert.ok(cat.spells.has('std:58') && cat.spells.has('std:58.1'), 'duplicate indices stay distinct');
 });
+
+test('feedback: healing sends a private heal with the amount applied; enemy spells report hurt as a spell', () => {
+  const w = world();
+  const p = w.add(1, 'Ana');
+  const q = w.add(2, 'Bo', 0, -2, 0, character({ health: 10 }));
+  p.rpg.magic.known.push('std:64', 'std:40');
+  p.rpg.character.health = 47;
+  ok(w.rt.act(p, 'magic.cast', { spellId: 'std:64' }));
+  w.advance(2000);
+  ok(w.rt.act(p, 'magic.cast', { spellId: 'std:40', targetId: 'player:2' }));
+  assert.deepEqual(w.events(1, 'heal'), [{ kind: 'heal', amount: 3 }], 'clamped to what was restored');
+  assert.deepEqual(w.events(2, 'heal'), [{ kind: 'heal', amount: 6 }]);
+
+  const foe = w.monster('foe', 0, -10, 50, { magicka: 1000 });
+  w.clear();
+  assert.ok(w.rt.ctx.services.enemyCast(foe, 8, q).pending);
+  w.rt.tick(0.5);
+  assert.deepEqual(w.events(2, 'hurt'), [{ kind: 'hurt', damage: 10, cause: 'spell' }]);
+  assert.equal(w.events(1, 'hurt').length, 0);
+
+  const causes = [];
+  const w2 = world({ services: { hurtPlayerBy: (pl, n, src, cause) => { causes.push(cause); return n; } } });
+  const r = w2.add(1, 'Cy');
+  assert.ok(w2.rt.ctx.services.enemyCast(w2.monster('foe', 0, -10, 50, { magicka: 1000 }), 8, r).pending);
+  w2.rt.tick(0.5);
+  assert.deepEqual(causes, ['spell']);
+});

@@ -190,6 +190,13 @@ test('opcode-9 caster-only traps grant a free ready-to-cast spell with 0 magicka
   assert.equal(expired.ok, false);
   assert.equal(p.rpg.magic.readySpell, null);
 
+  // An expired ready spell is dropped by the magic round without a cast attempt, so saved state and the client's
+  // FREE chip do not keep offering it.
+  h.ctx.services.objectCast(trap, 10, p, { level: 3 });
+  h.ctx.advance(60_001);
+  h.tick(5);
+  assert.equal(p.rpg.magic.readySpell, null, 'expired ready spell cleared by the round');
+
   // Harmful trap spell still casts immediately and does NOT set readySpell.
   p.rpg.magic.active = [];
   const hpBefore = p.rpg.character.health;

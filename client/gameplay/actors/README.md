@@ -40,10 +40,10 @@ The renderer additions in `client/render/renderer.js` are:
 
 ### Hiding placeholder cubes
 
-The shell should skip its cube avatar for a remote only when a sprite is drawn:
+The shell skips its cube avatar for a remote while a sprite is drawn or can still be drawn (archive loading, out of range, snapshot not in yet). A remote whose figure can never be drawn (no game files, archive failed) keeps the cube instead of vanishing:
 
 ```js
-if (renderer.hasActorSprite(r.id)) continue; // sprite drawn by actors.js
+if (shouldSkipFallbackAvatar({ hasActorSprite: renderer.hasActorSprite(r.id), figureDrawable: api.actors?.figureDrawable?.(r.id), peer })) continue;
 ```
 
 The pass runs inside `renderer.render`. If the shell does not emit `frame`, the pass updates itself from `renderer.camera` and `renderer.town`. Sprites only show while the screen is `game`.
@@ -51,7 +51,7 @@ The pass runs inside `renderer.render`. If the shell does not emit `frame`, the 
 ## Inputs read
 
 - **Entities.** The module reads `id, kind, name, x, z, yaw, y?, moving?, animation?, hp?, maxHp?, location?`. Appearance comes from `sprite {archive, record}` when present; otherwise from `mobileType` (a MobileTypes id or name such as `"Skeletal Warrior"`), or the name for monsters. `gender` and `race`, `role` and `variant` apply to NPCs, and `corpseSprite`, `loot`/`items`/`lootable`/`looted` to corpses and loot. A `sprite` from a person archive uses the walker layout. A `sprite` from any other non-mobile archive is drawn as a flat.
-- **Peers.** The module reads `id, name, x, z, yaw, moving, readied, className, gender, race, variant, animation`. A readied peer is drawn from the class's armed archive (for example Battlemage female 489), which has attack records. A sheathed peer is drawn from a town-walker archive for their race and gender. Only identifiers come from the server; every pixel comes from the viewer's own files.
+- **Peers.** The module reads `id, name, x, z, yaw, moving, readied, className, gender, race, variant, animation`, and the worn-gear summary from `server/rpg/peerAppearance.js` (`wearingHeavyArmor`, `wearingRobes`, `weaponKind`, `armorTier`, `primaryDye`, `form`, `defeated`, `mounted`). By default (`classic8dir`) every peer is an 8-direction world sprite. A peer with any weapon equipped (drawn or sheathed), any armour or robes, or anywhere in a dungeon or the wilderness, is drawn from the class's armed archive (for example Battlemage female 489), which has attack records. Only a peer with nothing equipped but clothes, in a town or interior, is drawn from a town-walker archive for their race and gender (Breton art for races Daggerfall has no town walkers for). Only identifiers come from the server; every pixel comes from the viewer's own files.
 - **Events.** `swing`/`attack {playerId|attackerId|entityId}` plays an attack, and `cast {playerId}` plays the ranged/spell records. `hit`/`damage {targetId}` plays the hurt frames with a red flash. `loot`/`looted {entityId}` gives a brief glow. An hp drop in state also plays hurt.
 
 ## Animation rules (classic tables)

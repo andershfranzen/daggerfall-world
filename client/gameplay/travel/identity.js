@@ -62,7 +62,7 @@ export function entryOf(catalog, id, hint = null) {
 // ------------------------------------------------------------------ discoveries
 
 export const BITSET_PREFIX = 'b:';
-/** Regions above this many entries auto-compact to a base64 bitset so all 15,251 Iliac Bay records fit in a few KB. */
+/** Regions above this many entries auto-compact to a base64 bitset (all 15,251 Iliac Bay records: about 23 KB). */
 export const BITSET_THRESHOLD = 512;
 const MAX_LOCATION_INDEX = 65535;
 const MAX_BITSET_BYTES = (MAX_LOCATION_INDEX + 1) >> 3; // 8192 bytes

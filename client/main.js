@@ -385,6 +385,9 @@ async function restoreSavedData() {
     await arena2Store.clearCache();
     ui.dataStatus.textContent = DATA_PROMPT;
     setCacheStatus('The copy saved in this browser was incomplete and has been removed.');
+  } else if (!stale()) {
+    // No manifest: a copy interrupted by a reload left its bytes behind with nothing to restore them from.
+    await arena2Store.clearCache();
   }
   const saved = canPickDir ? await arena2Store.loadSavedFolder() : null;
   if (saved && !stale()) {
@@ -1592,11 +1595,10 @@ function gameFrame(now, dt) {
     r.pos = [s.x, r.footY, s.z];
     r.coverage = peerCoverage(appearances.get(String(r.id))?.concealment, s.moving);
     peers.push({ id: String(r.id), name: r.name, x: s.x, y: r.footY, z: s.z, yaw: s.yaw, moving: s.moving, stance: s.stance ?? null, speed: s.speed ?? 0 });
-    // Never show placeholder cube avatars when ARENA2 classic figures are loaded or an actor sprite is active.
-    const arena2Loaded = !!(S.files?.length || api.actors?.library?.index || api.actors?.dollLibrary?.hasFiles);
+    // The cube stands in only for a player whose ARENA2 figure cannot be drawn (no files, archive failed).
     if (shouldSkipFallbackAvatar({
       hasActorSprite: !!renderer.hasActorSprite?.(String(r.id)),
-      arena2Loaded,
+      figureDrawable: !!api.actors?.figureDrawable?.(String(r.id)),
       peer: { coverage: r.coverage },
     })) continue;
     avatars.push({ ...r.avatar.pose(s.x, r.footY, s.z, s.yaw, s.moving, dt, now), coverage: r.coverage });

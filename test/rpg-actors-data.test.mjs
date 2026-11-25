@@ -98,3 +98,45 @@ test('controller loads real archives from the selected folder and draws them', {
   assert.equal(renderer.ids.size, 4);
   assert.equal(api.spritesActive, true);
 });
+
+test('every remote-player figure resolves to a real billboard: classes, all races and genders, beasts, corpses, combat', { skip }, async () => {
+  const { resolvePeerBillboardItem } = await import('../client/gameplay/actors/peerHybrid.js');
+  const { resolvePeerAppearance } = await import('../client/gameplay/actors/peerFigure.js');
+  const lib = new SpriteLibrary();
+  lib.setFiles(await arena2Files());
+  const camera = { x: 0, z: 4 };
+  const town = { location: 'town:Daggerfall/Gothway Garden' };
+  const draw = async (peer, animState = 'idle') => {
+    const app = resolvePeerAppearance(peer, town);
+    for (const a of [app.archive, (app.corpse ?? [])[0], 264, 269, 487, 488]) if (a != null) await lib.load(a);
+    const view = { id: peer.id, key: `p:${peer.id}`, data: peer, app, x: 0, z: 0, yaw: Math.PI, footY: 0, animState, animTime: 0 };
+    return { app, it: resolvePeerBillboardItem({ view, camera, now: 0, spriteLibrary: lib }) };
+  };
+  const races = ['Breton', 'Redguard', 'Nord', 'Dark Elf', 'High Elf', 'Wood Elf', 'Khajiit', 'Argonian'];
+  const classes = ['Mage', 'Spellsword', 'Battlemage', 'Sorcerer', 'Healer', 'Nightblade', 'Bard', 'Burglar', 'Rogue', 'Acrobat', 'Thief', 'Assassin', 'Monk', 'Archer', 'Ranger', 'Barbarian', 'Warrior', 'Knight'];
+  let n = 0;
+  for (const gender of ['Male', 'Female']) {
+    for (const race of races) {
+      // In town with nothing equipped: a town walker of the race's set (Breton art for races without their own).
+      const { app, it } = await draw({ id: ++n, race, gender, className: 'Warrior', weaponKind: 'none', armorTier: 'none', readied: false });
+      assert.equal(app.layout, 'person', `${race} ${gender}`);
+      assert.ok(it && it.source === 'sprite' && it.h > 1.6 && it.h < 2.4, `${race} ${gender} walker ${it?.h}`);
+    }
+    for (const className of classes) {
+      for (const state of ['idle', 'move', 'attack']) {
+        const { app, it } = await draw({ id: ++n, race: 'Nord', gender, className, readied: true }, state);
+        assert.equal(app.layout, 'enemy', className);
+        assert.ok(it && it.h > 1.4 && it.h < 3, `${gender} ${className} ${state} ${it?.h}`);
+      }
+    }
+  }
+  for (const form of ['werewolf', 'wereboar']) {
+    const { app, it } = await draw({ id: ++n, form, race: 'Breton', gender: 'Male', className: 'Mage' });
+    assert.equal(app.archive, form === 'werewolf' ? 264 : 269);
+    assert.ok(it && it.source === 'sprite', form);
+  }
+  for (const peer of [{ className: 'Knight', readied: true }, { className: 'Mage' }]) {
+    const { it } = await draw({ id: ++n, race: 'Nord', gender: 'Female', defeated: true, ...peer });
+    assert.ok(it && it.source === 'corpse' && it.w > it.h, `${peer.className} lies as a corpse ${it?.w}x${it?.h}`);
+  }
+});

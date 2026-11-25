@@ -203,8 +203,7 @@ test('make permanent: handed-over and never-received stay out; template-less rel
   });
   for (const k of Object.keys(q.items)) permanentQuestItem(w.ctx, a, q, k, text);
   assert.deepEqual(a.rpg.inventory.map((i) => i.template), ['religious-item']);
-  assert.equal(a.rpg.inventory[0].quest.name, 'Prayer Beads');
-  assert.equal(a.rpg.inventory[0].quest.permanent, true);
+  assert.equal(a.rpg.inventory[0].quest, undefined, 'an ordinary record, not a quest item');
   assert.equal(q.items.beads.held, false, 'converted out of journal into inventory');
   assert.equal(q.items.beads.permanent, true);
   assert.equal(q.items.missingArtifact.held, true, 'unresolved unique artifact stays in journal');

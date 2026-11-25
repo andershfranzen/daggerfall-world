@@ -15,7 +15,7 @@ import {
   groupName, guildSkills, trainingSkills, privileges, rankTitle, repFaction, isGroup, factionTable,
 } from './guilds/rules.js';
 import { groupKey } from './guilds.js';
-import { CHAT_BURST, CHAT_RATE_PER_SEC, cleanChatText, isMuted, regionOf, tokenBucket } from './social/chat.js';
+import { cleanChatText, createChatLimiter, isMuted, regionOf, tokenBucket } from './social/chat.js';
 import { regionNameOf } from '../../client/gameplay/travel/identity.js';
 
 export const name = 'guildhall';
@@ -175,7 +175,7 @@ export function install(ctx, options = {}) {
   function limiter(p) {
     let l = limits.get(p);
     if (!l) {
-      l = { chat: tokenBucket(CHAT_RATE_PER_SEC, CHAT_BURST, now), request: tokenBucket(REQUEST_RATE_PER_SEC, REQUEST_BURST, now) };
+      l = { chat: createChatLimiter(now), request: tokenBucket(REQUEST_RATE_PER_SEC, REQUEST_BURST, now) };
       limits.set(p, l);
     }
     return l;
@@ -368,7 +368,7 @@ export function install(ctx, options = {}) {
         name: q.name,
         rank: m.rank,
         rankTitle: rankTitle(group, m.rank),
-        region: regionOf(locationOf(q)),
+        region: regionOf(locationOf(q), ctx),
         self: q.id === p.id,
       });
     }
@@ -387,7 +387,7 @@ export function install(ctx, options = {}) {
         name: live?.name ?? m.name,
         rank: m.rank,
         online: Boolean(live),
-        region: live ? regionOf(locationOf(live)) : null,
+        region: live ? regionOf(locationOf(live), ctx) : null,
         joinedAt: m.joinedAt,
         self: m.id === viewerId,
       };
@@ -457,7 +457,7 @@ export function install(ctx, options = {}) {
       onlinePlayers.push({
         id: q.id,
         name: q.name,
-        region: regionOf(locationOf(q)),
+        region: regionOf(locationOf(q), ctx),
         inOrder: Boolean(qOrd),
         orderTag: qOrd?.tag ?? null,
         inMyOrder: Boolean(myOrder && qOrd && qOrd.id === myOrder.id),
@@ -572,7 +572,7 @@ export function install(ctx, options = {}) {
     const label = groupName(table(), group, m.variant);
     const variant = m.variant ?? null;
     dirty(p);
-    delete guilds[group];
+    services.guilds.resign(p, group);
     ctx.emit?.('guildResign', { player: p, guild: group, variant });
     pushOverview(p, 'resign', `You have resigned from ${label}.`, { group, variant });
   });
@@ -581,7 +581,8 @@ export function install(ctx, options = {}) {
     if (isMuted(ctx, p)) throw new Error('You are muted and cannot chat right now.');
     const text = cleanChatText(args.text);
     const okShared = typeof p.chatOk === 'function' ? p.chatOk() : true;
-    if (!okShared || !limiter(p).chat()) throw new Error('You are chatting too fast.');
+    // Guild and order channels are group conversation: the party budget (CHAT_LIMITS), not the tight global one.
+    if (!okShared || !limiter(p).chat('party')) throw new Error('You are chatting too fast.');
 
     const scope = args.scope === 'order' || args.group === 'order' ? 'order' : 'classic';
     if (scope === 'order') {
@@ -600,16 +601,17 @@ export function install(ctx, options = {}) {
         text,
         at: now(),
       };
-      ctx.services?.logChat?.(p, {
+      const heard = Object.values(ord.members).map((m) => online(m.id)).filter(Boolean);
+      // Moderation needs every delivered line on record, with who heard it: a failed (synchronous) write is not delivered.
+      const logged = ctx.services?.logChat?.(p, {
         channel: 'order',
         location: p?.rpg?.location ?? '',
         groupId: ord.id,
+        recipientIds: heard.filter((q) => q.id !== p.id).map((q) => q.id),
         text,
       });
-      for (const m of Object.values(ord.members)) {
-        const live = online(m.id);
-        if (live) ctx.notify(live, ev);
-      }
+      if (logged === null) throw new Error('Chat is unavailable right now.');
+      for (const live of heard) ctx.notify(live, ev);
       return;
     }
 
@@ -631,18 +633,19 @@ export function install(ctx, options = {}) {
       text,
       at: now(),
     };
-    ctx.services?.logChat?.(p, {
+    const heard = [...(ctx.players?.values?.() ?? [])].filter((q) => {
+      const qm = q?.rpg?.guilds?.[group];
+      return qm && !((group === 'temple' || group === 'knights') && qm.variant !== variant);
+    });
+    const logged = ctx.services?.logChat?.(p, {
       channel: 'guild',
       location: p?.rpg?.location ?? '',
       groupId: variant != null ? `${group}:${variant}` : group,
+      recipientIds: heard.filter((q) => q.id !== p.id).map((q) => q.id),
       text,
     });
-    for (const q of ctx.players?.values?.() ?? []) {
-      const qm = q?.rpg?.guilds?.[group];
-      if (!qm) continue;
-      if ((group === 'temple' || group === 'knights') && qm.variant !== variant) continue;
-      ctx.notify(q, ev);
-    }
+    if (logged === null) throw new Error('Chat is unavailable right now.');
+    for (const q of heard) ctx.notify(q, ev);
   });
 
   // ---------------------------------------------------------------- player-founded order actions
@@ -841,6 +844,7 @@ export function install(ctx, options = {}) {
 
     const remaining = Object.values(ord.members);
     if (!remaining.length) {
+      if (ord.treasury > 0) addGold(p, ord.treasury);
       orders.delete(ord.id);
       nameIndex.delete(ord.name.toLowerCase());
       tagIndex.delete(ord.tag.toUpperCase());
@@ -874,6 +878,7 @@ export function install(ctx, options = {}) {
     if (!ord) throw new Error('You are not in a player order.');
     if (ord.leaderId !== p.id) throw new Error('Only the order Leader can disband the order.');
     const formerIds = Object.values(ord.members).map((m) => m.id);
+    if (ord.treasury > 0) addGold(p, ord.treasury);
     orders.delete(ord.id);
     nameIndex.delete(ord.name.toLowerCase());
     tagIndex.delete(ord.tag.toUpperCase());

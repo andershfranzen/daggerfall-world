@@ -112,13 +112,13 @@ Derived directly from `SKILLS` in `client/gameplay/character/rules.js`. Each ski
 
 ### 2.5 Player-Founded Orders Board (`orders`)
 
-Projected from `world_state` entries with key prefix `pguild:`. Orders with at least one valid member are eligible.
+Projected from `world_state` entries with key prefix `pguild:`. Orders with at least one valid member are eligible. `combinedLevel` and `combinedTotalSkill` count only members who are publicly listed, `leaderName` is `"Unknown"` when the leader is hidden, banned or not listed, and `createdAt` is epoch milliseconds.
 
-| Sort Key (`sort`) | Primary Metric | Secondary Tie-Breaker | Tertiary Tie-Breaker |
+| Sort Key (`sort`) | Primary Metric | Secondary Tie-Breaker | Further Tie-Breakers |
 | :--- | :--- | :--- | :--- |
-| `members` *(default)* | `memberCount` DESC | `combinedLevel` DESC | `createdAt` ASC, `orderId` ASC |
-| `level` | `combinedLevel` DESC | `combinedTotalSkill` DESC | `createdAt` ASC, `orderId` ASC |
-| `treasury` | `treasury` (gold) DESC | `memberCount` DESC | `createdAt` ASC, `orderId` ASC |
+| `members` *(default)* | `memberCount` DESC | `combinedLevel` DESC | `treasury` DESC, `createdAt` ASC, name, `id` |
+| `level` | `combinedLevel` DESC | `memberCount` DESC | `treasury` DESC, `createdAt` ASC, name, `id` |
+| `treasury` | `treasury` (gold) DESC | `memberCount` DESC | `combinedLevel` DESC, `createdAt` ASC, name, `id` |
 
 ---
 
@@ -411,7 +411,7 @@ Both SQLite (`server/hiscores/sqlite-store.js`) and PostgreSQL (`server/storage/
 
 ### 6.2 Snapshot Cache
 
-`server/hiscores/engine.js` caches the ranked in-memory index across all boards for **30 s** (`DEFAULT_TTL_MS = 30_000`), providing O(1) lookup by character name/ID and O(1) rank retrieval. Concurrent cache misses coalesce onto a single in-flight snapshot load; privacy toggles and rebuilds call `engine.invalidate()` to mark the cache dirty immediately.
+`server/hiscores/engine.js` caches the ranked in-memory index across all boards for **30 s** (`DEFAULT_TTL_MS = 30_000`), providing O(1) lookup by character name/ID and O(1) rank retrieval. Concurrent cache misses coalesce onto a single in-flight snapshot load; privacy toggles and rebuilds call `engine.invalidate()` to mark the cache dirty immediately. Every periodic save that changes a character (every 5 s while players are online) also invalidates it, so on a live server the next request rebuilds at most once per save interval (about 175 ms for 10,000 characters on a laptop).
 
 ### 6.3 Operator CLI (`tools/hiscores.mjs`)
 

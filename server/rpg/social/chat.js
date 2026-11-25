@@ -57,8 +57,11 @@ export function cleanChatText(raw, maxLength = MAX_CHAT_LENGTH) {
 }
 
 // `town:Daggerfall/Gothway Garden` -> `Daggerfall`; `town:0/272` -> `Alik'r Desert`; `dungeon:Privateer's Hold` -> `Privateer's Hold`.
-export function regionOf(location) {
+// A wilderness pixel names no region; pass the runtime ctx so the travel service reads it from POLITIC.PAK.
+export function regionOf(location, ctx = null) {
   if (typeof location !== 'string' || !location) return 'Unknown';
+  const viaTravel = ctx?.services?.travel?.regionOf?.(location);
+  if (viaTravel) return viaTravel;
   const body = location.includes(':') ? location.slice(location.indexOf(':') + 1) : location;
   return regionNameOf(body.split('/')[0]) || 'Unknown';
 }

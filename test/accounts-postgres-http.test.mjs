@@ -86,6 +86,8 @@ function createMockAccountsPgPool() {
       return { rows: [], rowCount: 0 };
     }
 
+    if (sql.includes('pg_advisory_xact_lock')) return { rows: [{}], rowCount: 1 }; // single-process mock: no contention
+
     if (sql.includes('CREATE TABLE IF NOT EXISTS schema_migrations')) {
       state.schemaApplied += 1;
       return { rows: [], rowCount: 0 };
@@ -196,6 +198,16 @@ function createMockAccountsPgPool() {
         a.recovery_hash = params[1] ?? null;
       }
       return { rows: [], rowCount: a ? 1 : 0 };
+    }
+
+    if (sql === 'UPDATE accounts SET password_hash = $1, recovery_hash = $2 WHERE id = $3 AND recovery_hash = $4') {
+      const a = state.accounts.get(Number(params[2]));
+      const hit = !!a && a.recovery_hash === params[3];
+      if (hit) {
+        a.password_hash = params[0];
+        a.recovery_hash = params[1] ?? null;
+      }
+      return { rows: [], rowCount: hit ? 1 : 0 };
     }
 
     if (sql === 'DELETE FROM accounts WHERE id = $1') {
@@ -551,6 +563,14 @@ describe('createPostgresAccounts exports & lifecycle storage methods', () => {
     const updated = await store.get(acc.id);
     assert.equal(updated.password_hash, 'hash3');
     assert.equal(updated.recovery_hash, 'c'.repeat(64));
+
+    // recoverAccount spends the code only while it is still the stored one.
+    assert.equal(await store.recoverAccount(acc.id, 'hashX', 'd'.repeat(64), { expectedRecoveryHash: 'b'.repeat(64) }), null);
+    assert.equal((await store.get(acc.id)).password_hash, 'hash3');
+    const spent = await store.recoverAccount(acc.id, 'hash4', 'd'.repeat(64), { expectedRecoveryHash: 'c'.repeat(64) });
+    assert.ok(spent?.logId);
+    assert.equal((await store.get(acc.id)).recovery_hash, 'd'.repeat(64));
+    assert.equal(await store.recoverAccount(acc.id, 'hash5', 'e'.repeat(64), { expectedRecoveryHash: 'c'.repeat(64) }), null);
 
     const s1 = await store.createSession(acc.id, 't1', { ts: 1_000_000 });
     const s2 = await store.createSession(acc.id, 't2', { ts: 1_000_001 });

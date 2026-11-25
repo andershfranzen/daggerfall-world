@@ -14,6 +14,7 @@ function redactDbUrl(raw) {
     const u = new URL(raw);
     if (u.username) u.username = '***';
     if (u.password) u.password = '***';
+    for (const k of ['password', 'sslpassword', 'sslkey']) if (u.searchParams.has(k)) u.searchParams.set(k, '***');
     return u.toString();
   } catch {
     return String(raw).replace(/\/\/[^/@]+@/, '//***@');
@@ -106,13 +107,18 @@ if (usingPostgresAccounts) {
     console.error('ACCOUNTS_DATABASE_URL / DATABASE_URL requires createPostgresAccounts in server/accounts.js');
     process.exit(1);
   }
-  accounts = await createPostgresAccounts({
-    connectionString: accountsUrl,
-    trustProxy,
-    requireHttps,
-    publicOrigin,
-    secureCookies,
-  });
+  try {
+    accounts = await createPostgresAccounts({
+      connectionString: accountsUrl,
+      trustProxy,
+      requireHttps,
+      publicOrigin,
+      secureCookies,
+    });
+  } catch (err) {
+    console.error(`failed to initialize PostgreSQL accounts store: ${err.message}`);
+    process.exit(1);
+  }
 } else {
   accounts = createAccounts({
     dbPath: process.env.ACCOUNTS_DB_PATH ? resolve(process.env.ACCOUNTS_DB_PATH) : ACCOUNT_DEFAULTS.dbPath,
@@ -129,7 +135,9 @@ let hiscoresStore = null;
 if (usingPostgresGame) {
   try {
     const pgGame = await openPostgresGameStore({ connectionString: databaseUrl });
-    gameStore = createBufferedGameStore(pgGame);
+    gameStore = createBufferedGameStore(pgGame, {
+      onError: (err, batch) => console.error(`[game] PostgreSQL save failed, will retry ${batch.players.length} character(s) and ${batch.world.length} world row(s): ${err.message}`),
+    });
     await gameStore.preloadWorld();
     chatLog = await openPostgresChatLog(pgGame.pool);
     hiscoresStore = await openPostgresHiscoresStore(pgGame.pool, { applySchema: false });

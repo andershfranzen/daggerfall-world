@@ -285,6 +285,11 @@ async function onSubmit(ev) {
     setUser(data.user);
     announce();
     feedback(reg ? `Welcome, ${data.user.username}. Your account is ready.` : `Welcome back, ${data.user.username}.`, 'ok');
+    // The server returns the recovery code once, at registration; it is the only way back in.
+    if (reg && data.recoveryCode) {
+      root.append(el('p', { class: 'acct-note acct-warn', text: 'Write down your recovery code now. It is shown only once and lets you set a new password if you forget this one:' }),
+        el('p', { class: 'acct-code', text: data.recoveryCode }));
+    }
     root.querySelector('button')?.focus();
   } catch (err) {
     setBusy(false);

@@ -1236,9 +1236,13 @@ export function install(ctx) {
       say(p, `You take the ${it.name}.`);
       return;
     }
+    const healthBefore = Number(rpg.character?.health) || 0;
     const msg = withRollback([rpg], () => useItem(rpg, itemId, restrictionFor(p)));
     changed(p, 'use');
     say(p, msg);
+    // A healing potion reports like a healing spell: a private `heal` with what was restored.
+    const healed = (Number(rpg.character?.health) || 0) - healthBefore;
+    if (healed > 0) ctx.notify?.(p, { kind: 'heal', amount: healed });
   });
   function readAction(p, it) {
     const r = readable(it);

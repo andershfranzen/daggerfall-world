@@ -27,6 +27,7 @@ export function magicOf(state) {
     known: Array.isArray(m?.known) ? m.known.map(String) : [],
     selected: m?.selected != null ? String(m.selected) : null,
     active: Array.isArray(m?.active) ? m.active : [],
+    readySpell: isObj(m?.readySpell) ? m.readySpell : null,
   };
 }
 

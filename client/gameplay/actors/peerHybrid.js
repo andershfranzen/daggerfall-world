@@ -1,8 +1,9 @@
-// Pure hybrid authentic Daggerfall peer billboard selector.
-// Combines real ARENA2 equipped-gear paper doll billboards (front & front-side
-// views) with real ARENA2 8-direction classic TEXTURE sprites (rear views,
-// weapon swings, spell casts, beast forms, and corpses). Zero DOM or WebGL
-// side effects; never falls back to procedural boxy avatars once ARENA2 is loaded.
+// Pure Daggerfall peer billboard selector.
+// Default ('classic8dir'): every remote player is a real ARENA2 8-direction classic
+// TEXTURE world sprite, as mobiles are drawn in the original game. The opt-in 'hybrid'
+// and 'doll' modes put the equipped-gear paper doll in the world instead (front views
+// only in 'hybrid'). Zero DOM or WebGL side effects; never falls back to procedural
+// boxy avatars once ARENA2 is loaded.
 
 import { facingIndex, animRecord, frameAt, hasLoot } from './logic.js';
 import { CORPSE_FALLBACK } from './tables.js';
@@ -28,7 +29,7 @@ function round3(n) {
 
 function normalizeMode(mode) {
   if (mode === 'doll' || mode === 'classic8dir' || mode === 'hybrid') return mode;
-  return 'hybrid';
+  return 'classic8dir';
 }
 
 function isBeastPeer(peer, app) {
@@ -89,30 +90,30 @@ export function matchHeight(w, h, targetHeight) {
 }
 
 /**
- * True when the procedural fallback cube avatar should be suppressed for a peer.
- * Prevents blocky cube flashes whenever the peer already has an ARENA2 sprite OR
- * whenever ARENA2 assets are loaded and the real texture is still decoding/compositing.
+ * True when the procedural fallback cube avatar should be suppressed for a peer: its ARENA2
+ * sprite is drawn, or can still be drawn (archive loading, out of draw range, snapshot not in
+ * yet; see ActorController.figureDrawable). A peer whose figure cannot be drawn (archive failed,
+ * no game files) keeps the cube rather than becoming invisible.
  */
-export function shouldSkipFallbackAvatar({ hasActorSprite = false, arena2Loaded = false, peer = null } = {}) {
+export function shouldSkipFallbackAvatar({ hasActorSprite = false, figureDrawable = false, peer = null } = {}) {
   if (hasActorSprite === true) return true;
-  if (arena2Loaded === true) return true;
+  if (figureDrawable === true) return true;
   if (peer && typeof peer.coverage === 'number' && peer.coverage <= 0) return true;
   return false;
 }
 
 /**
- * Resolve a remote player's `SpritePass` billboard item using the hybrid authentic
- * Daggerfall strategy:
+ * Resolve a remote player's `SpritePass` billboard item:
  * - Defeated / downed peers -> classic corpse sprite (`source: 'corpse'`).
  * - Beast forms (Werewolf / Wereboar) -> classic 8-dir beast sprite (`source: 'sprite'`).
- * - `'hybrid'` (default):
+ * - `'classic8dir'` (default): always classic 8-dir `TEXTURE` sprites with archetype & dye tinting.
+ * - `'hybrid'`:
  *   - Active combat (`attack` / `ranged`) -> classic 8-dir combat frames (`TEXTURE.475–490`).
  *   - Rear views (`facing` 3, 4, 5) -> classic 8-dir rear frames, height-matched to doll.
  *   - Front & front-side views (`facing` 0, 1, 2, 6, 7) during idle/move/hurt ->
  *     equipped-gear ARENA2 paper doll (`source: 'doll'`) with subtle walk bob and mirror,
  *     falling back only to the classic 8-dir ARENA2 sprite while the doll composites.
  * - `'doll'`: always equipped-gear ARENA2 doll (except beast forms & corpses).
- * - `'classic8dir'`: always classic 8-dir `TEXTURE` sprites with archetype & dye tinting.
  *
  * Returns `{ key, id, entry, record, frame, flip, x, y, z, w, h, light, tint, hurt, source }`
  * or `null` if no ARENA2 texture is ready yet.
@@ -123,7 +124,7 @@ export function resolvePeerBillboardItem({
   now = 0,
   spriteLibrary = null,
   dollLibrary = null,
-  mode = 'hybrid',
+  mode = 'classic8dir',
   targetId = null,
 } = {}) {
   if (!view || !camera) return null;

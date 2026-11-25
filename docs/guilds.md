@@ -21,7 +21,7 @@ Standing is kept for every faction in the installed FACTION.TXT. When a quest su
 | Service | Consumer | Meaning |
 |---|---|---|
 | `guildHallAccess(p, portal)` | package 2 (doors), `townServices/access.js`, `npcs/places.js` | `Guild.HallAccessAnytime` for exactly this hall |
-| `guildIsMember(p, target, opts)` / `guilds.isMember(…)` | interiors, town services, NPCs | true when `p` belongs to the given guild group (matching `factionId` for temples/orders), portal/building, or NPC hall |
+| `guildIsMember(p, target, opts)` / `guilds.isMember(…)` | no server caller yet (tests only) | true when `p` belongs to the given guild group (matching `factionId` for temples/orders), portal/building, or NPC hall |
 | `guildCanRest(p, portal or location)` | packages 2 and 20 (rest) | `Guild.CanRest` for exactly this hall; never in taverns |
 | `guildRank(p, group, {factionId})` | quests, repairs, law (14), summoning (19) | rank or null. Groups: `fighters`, `mages`, `thieves`, `brotherhood` (alias `darkBrotherhood`), `temple`, `knights`. Temples and orders must match `factionId` when it is given |
 | `templeRank(p, deityId)` | 19 | the same, for a deity |
@@ -52,7 +52,7 @@ The perk formulas the browser also needs are in [client/gameplay/guilds/perks.js
 
 Secret recruitment: package 19 tallies crimes from package 14 and sends the letter three days later, outdoors. It then emits `guildInvite {player, guild, quest, started}`. On `questComplete` for O0A0AL00 or L0A01L00, this feature adds the membership at rank 0. If the quest could not start, the letter itself is the invitation, and the hall offers "Ask to join".
 
-Saved state is `rpg.guilds[group] = {rank, joinedAt, lastRankChange, variant?, flags?}`, `rpg.guildInvites` and `rpg.factions`. A legacy temple membership without a deity becomes the Order of Arkay's.
+Saved state is `rpg.guilds[group] = {rank, joinedAt, lastRankChange, variant?, flags?}`, `rpg.guildInvites` and `rpg.factions`. Resigning (`guild.resign`, guildhall.js) keeps an order's `flags` in `rpg.guildFlags["group:variant"]`, so a rejoin does not hand out the rank armour or the house again. A legacy temple membership without a deity becomes the Order of Arkay's.
 
 ## Specialist wiring
 

@@ -133,6 +133,11 @@ export class SpatialGrid {
     return this.entries.has(id);
   }
 
+  /** Ids of every indexed entity (server/game.js prunes players no longer in the scene). */
+  ids() {
+    return this.entries.keys();
+  }
+
   clear() {
     this.entries.clear();
     this.cells.clear();

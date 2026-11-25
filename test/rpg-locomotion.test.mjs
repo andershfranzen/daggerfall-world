@@ -429,7 +429,7 @@ test('[stage 8] the server step applies modifiers from other owners and turns ev
     magicStatus: () => ({}),
     characterTraversal: () => ({ exertionMultiplier: 2, jumpMultiplier: 1, climbingBonus: 0, swimmingBonus: 0 }),
     spendFatigue: (p, n) => { spent.push(n); p.rpg.character.fatigue -= n; return true; },
-    damagePlayer: (p, n, src) => { damage.push([n, src.kind]); return { dead: false }; },
+    damagePlayer: (p, n, src) => { damage.push([n, src.kind]); p.rpg.character.health -= n; return { dead: false }; },
     advanceSkill: (p, s) => practised.push(s),
   });
   installLocomotion(ctx);
@@ -443,6 +443,7 @@ test('[stage 8] the server step applies modifiers from other owners and turns ev
   assert.ok(Number.isFinite(p.motionSpeed));
   assert.deepEqual(damage, [[25, 'fall']]);
   assert.ok(notes.some(([, ev]) => ev.kind === 'locomotion' && ev.event === 'fall'));
+  assert.deepEqual(notes.filter(([, ev]) => ev.kind === 'hurt'), [[1, { kind: 'hurt', damage: 25, cause: 'fall' }]]);
   assert.ok(spent.reduce((a, b) => a + b, 0) >= 4, `running fatigue with exertion x2: ${spent}`);
   // Jump: Jumping practice tallied once per jump, from the activity handler only.
   step({ jumpSeq: 0 });

@@ -367,6 +367,7 @@ export function install(ctx, options = {}) {
         const before = c[eff.pool];
         c[eff.pool] = Math.min(c[max], before + scaled(eff.mag, level));
         parts.push(`+${c[eff.pool] - before} ${eff.pool}`);
+        if (eff.pool === 'health' && c.health > before) ctx.notify?.(p, { kind: 'heal', amount: c.health - before });
       } else if (eff.kind === 'fortify' || eff.kind === 'status') {
         const rounds = Math.max(1, scaled(eff.dur, level));
         const entry = { uid: Date.now() + Math.floor(rng() * 1e6), key: eff.key, name: recipe.name, spellId: `potion:${recipe.key}`, spellName: `Potion of ${recipe.name}`, element: 'magic', casterId: p.id, casterName: p.name, roundsLeft: rounds, totalRounds: rounds };

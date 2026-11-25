@@ -465,6 +465,8 @@ export function createRpgRuntime(opts) {
     let peers = c.peers.filter((q) => q.id !== p.id && q.scene === scene);
     if (peers.length > MAX_RPG_PEERS_IN_CROWD) {
       const partyIds = new Set(ctx.services.partyOf?.(p)?.memberIds ?? []);
+      const partner = ctx.services.tradePartnerOf?.(p);
+      if (partner != null) partyIds.add(partner);
       const px = p.x ?? 0;
       const pz = p.z ?? 0;
       peers = peers
@@ -475,7 +477,8 @@ export function createRpgRuntime(opts) {
         })
         .sort((a, b) => a.priority - b.priority || a.d2 - b.d2 || a.q.id - b.q.id)
         .slice(0, MAX_RPG_PEERS_IN_CROWD)
-        .map((x) => x.q);
+        .map((x) => x.q)
+        .sort((a, b) => a.id - b.id); // id order: a reorder by distance alone must not change the diff key
     }
     // Outdoor players just across a boundary (server/rpg/peers.js): public appearance only, in p's frame.
     // Listed by id, not distance, so walking alone never changes the snapshot's diff key.
@@ -488,6 +491,8 @@ export function createRpgRuntime(opts) {
     const locomotion = ctx.services.locomotionMods?.(p);
     const peerKeys = peers.map((q) => q.rest);
     for (const { rest } of across) peerKeys.push(rest === '{}' ? '{"across":true}' : `${rest.slice(0, -1)},"across":true}`);
+    const peerIds = peers.map((q) => q.id);
+    for (const { a } of across) peerIds.push(a.player.id);
     // One JSON part per snapshot field: character, entities, peers, readiness, locomotion.
     const parts = [
       JSON.stringify(p.rpg) ?? 'null',
@@ -496,7 +501,7 @@ export function createRpgRuntime(opts) {
       readiness === c.readiness ? c.readinessJson : JSON.stringify(readiness),
       JSON.stringify(locomotion) ?? 'null',
     ];
-    return { p, loc, ents, peers, across, readiness, locomotion, parts, key: parts.join('\n') };
+    return { p, loc, ents, peers, across, peerIds, peerKeys, readiness, locomotion, parts, key: parts.join('\n') };
   }
 
   function entityMapOf(ents) {
@@ -511,10 +516,51 @@ export function createRpgRuntime(opts) {
     return map;
   }
 
-  /** Per-entity delta `{ upsert?, remove? }` against the viewer's last-sent entities, or null to send full `entities`. */
-  function buildEntityDelta(ents, prevEntMap) {
+  /** Peer id -> diff key for a delta viewer, or null (duplicate ids) to always send full `peers`. */
+  function peerMapOf(peerIds, peerKeys) {
+    const map = new Map();
+    for (let i = 0; i < peerIds.length; i++) {
+      if (map.has(peerIds[i])) return null;
+      map.set(peerIds[i], peerKeys[i]);
+    }
+    return map;
+  }
+
+  /**
+   * Field-level change of one entity since the JSON the viewer last got: `{id, ...changed, $del?: [keys]}`,
+   * or null when the whole record is as small. Memoized per sync: most viewers last got the same JSON.
+   */
+  function entityPatch(x, prevJson, cache) {
+    let byPrev = cache.get(x);
+    if (!byPrev) cache.set(x, (byPrev = new Map()));
+    if (byPrev.has(prevJson)) return byPrev.get(prevJson);
+    const old = JSON.parse(prevJson);
+    const patch = { id: x.v.id };
+    const del = [];
+    let ok = true;
+    for (const [k, v] of Object.entries(x.v)) {
+      if (k[0] === '$') ok = false;
+      if (v === undefined) continue;
+      const j = JSON.stringify(v);
+      if (j !== undefined && j !== JSON.stringify(old[k])) patch[k] = v;
+    }
+    for (const k of Object.keys(old)) if (x.v[k] === undefined || JSON.stringify(x.v[k]) === undefined) del.push(k);
+    if (del.length) patch.$del = del;
+    const out = ok && JSON.stringify(patch).length < x.json.length ? patch : null;
+    byPrev.set(prevJson, out);
+    return out;
+  }
+
+  /**
+   * Per-entity delta `{ upsert?, patch?, remove? }` against the viewer's last-sent entities, or null to send
+   * full `entities`. A changed entity goes as a field `patch` when that is smaller than the whole record.
+   */
+  function buildEntityDelta(ents, prevEntMap, cache) {
+    // `cache` null: a client on the previous delta protocol (no `patch: true` at join). It gets changed entities
+    // whole, and the full list on an order-only change, exactly as before.
     if (!prevEntMap) return null;
     const upsert = [];
+    const patch = [];
     const seen = new Set();
     for (const x of ents) {
       const id = x.v.id;
@@ -523,33 +569,69 @@ export function createRpgRuntime(opts) {
       if (seen.has(key)) return null;
       seen.add(key);
       const prev = prevEntMap.get(key);
-      if (!prev || prev.json !== x.json) upsert.push(x.v);
+      if (prev && prev.json === x.json) continue;
+      const pt = cache && prev && prev.id === id ? entityPatch(x, prev.json, cache) : null;
+      if (pt) patch.push(pt);
+      else upsert.push(x.v);
     }
     const remove = [];
     for (const [key, prev] of prevEntMap) {
       if (!seen.has(key)) remove.push(prev.id);
     }
-    if (!upsert.length && !remove.length) return null; // order-only change: send full list
+    if (!cache && !upsert.length && !remove.length) return null;
+    const delta = {};
+    if (upsert.length) delta.upsert = upsert;
+    if (patch.length) delta.patch = patch;
+    if (remove.length) delta.remove = remove;
+    return delta; // empty on an order-only change: `patch` clients keep entities keyed by id
+  }
+
+  /** Per-peer delta `{ upsert?, remove? }` against the viewer's last-sent peers, or null to send full `peers`. */
+  function buildPeerDelta(view, prevPeerMap) {
+    if (!prevPeerMap) return null;
+    const { peers, across, peerIds, peerKeys } = view;
+    if (peerMapOf(peerIds, peerKeys) === null) return null;
+    const upsert = [];
+    for (let i = 0; i < peerIds.length; i++) {
+      if (prevPeerMap.get(peerIds[i]) === peerKeys[i]) continue;
+      if (i < peers.length) upsert.push(peers[i].peer);
+      else {
+        const { a, peer } = across[i - peers.length];
+        upsert.push({ ...peer, x: r3(a.x), z: r3(a.z), across: true });
+      }
+    }
+    const ids = new Set(peerIds);
+    const remove = [];
+    for (const id of prevPeerMap.keys()) if (!ids.has(id)) remove.push(id);
     const delta = {};
     if (upsert.length) delta.upsert = upsert;
     if (remove.length) delta.remove = remove;
     return delta;
   }
 
-  /** The snapshot; with `prev` (a delta client) only changed fields and per-entity `entityDelta` within one location. */
-  function messageOf({ p, loc, ents, peers, across, readiness, locomotion, parts }, prev = null) {
+  /** The snapshot; with `prev` (a delta client) only changed fields, `entityDelta` and `peerDelta` within one location. */
+  function messageOf(view, prev = null, cache = new Map()) {
+    const { p, loc, ents, peers, across, readiness, locomotion, parts } = view;
     const prevParts = prev?.parts ?? null;
     const msg = { type: 'rpg', selfId: p.id };
     const want = (i) => !prevParts || prevParts[i] !== parts[i];
+    const sameLoc = prev && prev.loc === loc;
+    // `patch: true` at join: the client merges `peerDelta` and `entityDelta.patch`. A tab still running an older
+    // client across a server reload joined without it and must keep getting what it understands.
+    const patches = p.patch === true;
     if (want(0)) msg.character = p.rpg;
     if (want(1)) {
-      const delta = prev && prev.loc === loc ? buildEntityDelta(ents, prev.entMap) : null;
+      const delta = sameLoc ? buildEntityDelta(ents, prev.entMap, patches ? cache : null) : null;
       if (delta) msg.entityDelta = delta;
       else msg.entities = ents.map((x) => x.v);
     }
     if (want(2)) {
-      msg.peers = peers.map((q) => q.peer);
-      for (const { a, peer } of across) msg.peers.push({ ...peer, x: r3(a.x), z: r3(a.z), across: true });
+      const delta = sameLoc && patches ? buildPeerDelta(view, prev.peerMap) : null;
+      if (delta) msg.peerDelta = delta;
+      else {
+        msg.peers = peers.map((q) => q.peer);
+        for (const { a, peer } of across) msg.peers.push({ ...peer, x: r3(a.x), z: r3(a.z), across: true });
+      }
     }
     if (want(3)) msg.readiness = readiness;
     if (want(4)) msg.locomotion = locomotion;
@@ -577,6 +659,7 @@ export function createRpgRuntime(opts) {
   /** Sends rpg snapshots whose content changed. `list` defaults to every live player. */
   function sync(list = players.values(), { force = false } = {}) {
     const cache = new Map();
+    const patchCache = new Map();
     for (const p of list) {
       if (players.get(p.id) !== p) continue;
       const prev = lastSent.get(p);
@@ -584,7 +667,7 @@ export function createRpgRuntime(opts) {
       try {
         view = viewOf(p, cache);
         if (!force && prev?.key === view.key) continue;
-        msg = messageOf(view, !force && p.delta === true ? prev : null);
+        msg = messageOf(view, !force && p.delta === true ? prev : null, patchCache);
       } catch (err) {
         log.error('[rpg] snapshot failed:', err);
         continue;
@@ -594,6 +677,7 @@ export function createRpgRuntime(opts) {
         loc: view.loc,
         parts: view.parts,
         entMap: p.delta === true ? entityMapOf(view.ents) : null,
+        peerMap: p.delta === true && p.patch === true ? peerMapOf(view.peerIds, view.peerKeys) : null,
       });
       send(p, msg);
     }

@@ -220,7 +220,7 @@ test('panel open auto-fetches active tab and respects 30s staleness window', () 
   assert.equal(h.sent.length, 1);
   assert.deepEqual(h.sent[0], {
     verb: 'chronicles.board',
-    args: { board: 'overall', page: 1, pageSize: 20 },
+    args: { board: 'overall', page: 1, limit: 20 },
   });
 
   h.emitChronicles({
@@ -284,7 +284,7 @@ test('rankings tab renders board selector (7 core, 6 guilds, 35 skills), medals,
   h.root.byClass('hs-page-next')[0].click();
   assert.deepEqual(h.sent.at(-1), {
     verb: 'chronicles.board',
-    args: { board: 'overall', page: 2, pageSize: 20 },
+    args: { board: 'overall', page: 2, limit: 20 },
   });
 
   // Search with Enter key + class/race filters reset page to 1
@@ -294,7 +294,7 @@ test('rankings tab renders board selector (7 core, 6 guilds, 35 skills), medals,
   search.dispatch('keydown', { key: 'Enter' });
   assert.deepEqual(h.sent.at(-1), {
     verb: 'chronicles.board',
-    args: { board: 'overall', page: 1, pageSize: 20, search: 'Aur' },
+    args: { board: 'overall', page: 1, limit: 20, query: 'Aur' },
   });
 
   const classSel = h.root.byClass('hs-filter-class')[0];
@@ -351,7 +351,7 @@ test('clicking a player row opens their 35-skill profile, and clicking a skill o
   assert.equal(h.mod.ui.board, 'skill:long-blade');
   assert.deepEqual(h.sent.at(-1), {
     verb: 'chronicles.board',
-    args: { board: 'skill:long-blade', page: 1, pageSize: 20 },
+    args: { board: 'skill:long-blade', page: 1, limit: 20 },
   });
 });
 
@@ -410,7 +410,7 @@ test('player orders tab supports sorting, search, rendering, and pagination', ()
   assert.equal(h.mod.ui.tab, 'orders');
   assert.deepEqual(h.sent.at(-1), {
     verb: 'chronicles.orders',
-    args: { sort: 'members', page: 1, pageSize: 20 },
+    args: { sort: 'members', page: 1, limit: 20 },
   });
 
   h.emitChronicles({
@@ -435,7 +435,14 @@ test('player orders tab supports sorting, search, rendering, and pagination', ()
   treasuryBtn.click();
   assert.deepEqual(h.sent.at(-1), {
     verb: 'chronicles.orders',
-    args: { sort: 'treasury', page: 1, pageSize: 20 },
+    args: { sort: 'treasury', page: 1, limit: 20 },
+  });
+
+  // Combined Level uses the server's sort id (server/hiscores/engine.js ORDER_SORTS: members|level|treasury).
+  h.root.byClass('hs-sort-btn').find((b) => b.attrs['data-sort'] === 'level').click();
+  assert.deepEqual(h.sent.at(-1), {
+    verb: 'chronicles.orders',
+    args: { sort: 'level', page: 1, limit: 20 },
   });
 });
 

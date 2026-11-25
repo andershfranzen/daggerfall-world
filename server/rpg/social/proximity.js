@@ -181,8 +181,8 @@ export function selectChatAudience(ctx, sender, rawChannel = 'say', options = {}
   if (channel === 'global') return [...players.values()];
 
   if (channel === 'region') {
-    const region = regionOf(locationOf(ctx, sender));
-    return [...players.values()].filter((o) => regionOf(locationOf(ctx, o)) === region);
+    const region = regionOf(locationOf(ctx, sender), ctx);
+    return [...players.values()].filter((o) => regionOf(locationOf(ctx, o), ctx) === region);
   }
 
   if (channel === 'party') {

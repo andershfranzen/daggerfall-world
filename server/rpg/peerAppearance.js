@@ -260,7 +260,6 @@ export function projectVisibleEquipment(rpg) {
 
   let highestArmorRank = 0;
   let hasRobe = false;
-  let hasCloak = false;
   let hasShield = false;
 
   for (const slot of VISIBLE_EQUIP_SLOTS) {
@@ -280,12 +279,11 @@ export function projectVisibleEquipment(rpg) {
       if (rank > highestArmorRank) highestArmorRank = rank;
     }
     if (isRobeItem(projected)) hasRobe = true;
-    if (slot === 'cloak' || slot === 'cloak2' || projected.doll?.cloak === true) hasCloak = true;
   }
 
   const armorTier = ARMOR_TIERS[highestArmorRank] ?? 'none';
   const wearingHeavyArmor = highestArmorRank >= ARMOR_TIER_RANK.chain;
-  const wearingRobes = hasRobe || (hasCloak && !wearingHeavyArmor);
+  const wearingRobes = hasRobe; // a cloak over ordinary clothes is not a robe
 
   const primaryWeapon = rawBySlot.rightHand?.group === 'weapon'
     ? rawBySlot.rightHand
@@ -344,7 +342,6 @@ function summarizeWornForArchetype(wornItems) {
 
   let highestArmorRank = 0;
   let hasRobe = false;
-  let hasCloak = false;
   let hasShield = false;
   let weaponKind = 'none';
 
@@ -360,7 +357,6 @@ function summarizeWornForArchetype(wornItems) {
       if (rank > highestArmorRank) highestArmorRank = rank;
     }
     if (isRobeItem(item)) hasRobe = true;
-    if (slot === 'cloak' || slot === 'cloak2' || item.doll?.cloak === true) hasCloak = true;
     if (item.group === 'weapon' && (slot === 'rightHand' || weaponKind === 'none')) {
       const kind = classifyWeaponKind(item);
       if (kind !== 'none') weaponKind = kind;
@@ -368,7 +364,7 @@ function summarizeWornForArchetype(wornItems) {
   }
 
   const wearingHeavyArmor = highestArmorRank >= ARMOR_TIER_RANK.chain;
-  const wearingRobes = hasRobe || (hasCloak && !wearingHeavyArmor);
+  const wearingRobes = hasRobe; // a cloak over ordinary clothes is not a robe
   return { weaponKind, wearingRobes, wearingHeavyArmor, hasShield };
 }
 

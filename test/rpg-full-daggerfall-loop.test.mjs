@@ -120,7 +120,8 @@ describe('[unit] inventory search, filter and equipment comparison', () => {
 // Part 2: Full "Play Daggerfall" Two-Player Live Multiplayer Loop
 // -------------------------------------------------------------------------------------------------
 
-function spendDraft(draft, career) {
+function spendDraft(draft) {
+  const career = draft.career; // the server's class (CLASS*.CFG with real data), never the built-in table
   const attributes = charRules.spendLowest({ ...draft.attributeBase }, charRules.ATTRIBUTES, draft.bonusPool);
   const skills = { ...draft.skillBase };
   for (const [, list] of charRules.groupsOf(career)) {
@@ -250,7 +251,7 @@ describe('[live] full "Play Daggerfall" two-player multiplayer loop + restart pe
     // Roll & create Nord Male Warrior
     assert.equal((await warrior.act('character.roll', { className: 'Warrior' })).ok, true);
     const wDraft = (await warrior.stateWhere((m) => m.character.character?.draft?.className === 'Warrior', 'warrior draft')).character.character.draft;
-    const wSpent = spendDraft(wDraft, charRules.CLASS_BY_NAME.Warrior);
+    const wSpent = spendDraft(wDraft);
     const wCreate = await warrior.act('character.create', {
       name: 'Torvald Ironhand',
       race: 'Nord',
@@ -264,7 +265,7 @@ describe('[live] full "Play Daggerfall" two-player multiplayer loop + restart pe
     // Roll & create High Elf Female Mage
     assert.equal((await mage.act('character.roll', { className: 'Mage' })).ok, true);
     const mDraft = (await mage.stateWhere((m) => m.character.character?.draft?.className === 'Mage', 'mage draft')).character.character.draft;
-    const mSpent = spendDraft(mDraft, charRules.CLASS_BY_NAME.Mage);
+    const mSpent = spendDraft(mDraft);
     const mCreate = await mage.act('character.create', {
       name: 'Lyra Starweaver',
       race: 'High Elf',

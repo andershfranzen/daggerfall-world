@@ -147,14 +147,6 @@ export function biogItemTemplate({ group, index, material }) {
   return key && isTemplate(key) ? key : null;
 }
 
-const CUSTOM_SCHOOL_STARTER_SPELLS = Object.freeze({
-  Destruction: [8],
-  Restoration: [97],
-  Illusion: [37, 44],
-  Alteration: [1, 2],
-  Thaumaturgy: [2],
-  Mysticism: [1],
-});
 const ROBE_CLASSES = new Set(['Mage', 'Sorcerer', 'Healer']);
 const STAFF_CLASSES = new Set(['Mage', 'Sorcerer', 'Healer', 'Monk']);
 
@@ -176,17 +168,11 @@ export function startingSpellIdsForCareer(catalogue, career) {
     if (catalogue.source !== 'SPELLS.STD') return FALLBACK_STARTING.filter((id) => catalogue.spells.has(id));
     return std.map((i) => `std:${i}`).filter((id) => catalogue.spells.has(id));
   }
-  if (!isSpellcastingCareer(career)) return [];
+  // DFU StartGameBehaviour.AssignStartingSpells: a custom class with a magic primary or major skill gets the Spellsword set.
+  const core = [...(career.primarySkills ?? []), ...(career.majorSkills ?? [])];
+  if (!core.some((s) => R.MAGIC_SKILLS.includes(s))) return [];
   if (catalogue.source !== 'SPELLS.STD') return FALLBACK_STARTING.filter((id) => catalogue.spells.has(id));
-  const indices = new Set();
-  for (const skill of [...(career.primarySkills ?? []), ...(career.majorSkills ?? [])]) {
-    for (const idx of CUSTOM_SCHOOL_STARTER_SPELLS[skill] ?? []) indices.add(idx);
-  }
-  if (!indices.size) {
-    indices.add(37); // Light
-    indices.add(8); // Shock
-  }
-  return [...indices].map((i) => `std:${i}`).filter((id) => catalogue.spells.has(id));
+  return STARTING_SPELLS.Spellsword.map((i) => `std:${i}`).filter((id) => catalogue.spells.has(id));
 }
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -984,7 +970,7 @@ export function install(ctx) {
       let given = null;
       if (template && typeof S.giveItem === 'function') {
         try {
-          S.giveItem(p, template, template === 'arrow' ? 20 : 1);
+          S.giveItem(p, template, 1); // BIOG lists one IT line per arrow ("A dozen arrows" is twelve lines)
           given = template;
         } catch (err) {
           ctx.log?.warn?.(`[character] biography item ${template} not given: ${err.message}`);

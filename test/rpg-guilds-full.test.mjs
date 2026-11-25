@@ -229,13 +229,13 @@ test('classic guild.chat reaches only fellow members and respects mute & rate li
   assert.match(mutedRes.error, /muted/i);
   a.muted = false;
 
-  // Rate limit triggers after burst (5)
-  let throttled = false;
-  for (let i = 0; i < 8; i++) {
-    const r = w.runtime.act(b, 'guild.chat', { scope: 'classic', group: 'mages', text: `Spam ${i}` });
-    if (!r.ok) { throttled = true; assert.match(r.error, /too fast/i); break; }
-  }
-  assert.equal(throttled, true);
+  // Guild chat uses the conversational budget (CHAT_LIMITS.party, burst 15): quick talk goes through, a flood does not.
+  const sent = [];
+  for (let i = 0; i < 40; i++) sent.push(w.runtime.act(b, 'guild.chat', { scope: 'classic', group: 'mages', text: `Line ${i}` }));
+  assert.ok(sent.slice(0, 8).every((r) => r.ok), 'eight quick lines of guild conversation are not throttled');
+  const refused = sent.find((r) => !r.ok);
+  assert.ok(refused, 'a flood is throttled');
+  assert.match(refused.error, /too fast/i);
 });
 
 test('guild.resign cleanly removes classic membership and persists', () => {
@@ -380,6 +380,15 @@ test('shared treasury deposit/withdraw enforces permissions, balances, and rolls
   assert.equal(w.runtime.act(leader, 'order.withdraw', { amount: 100 }).ok, true);
   assert.equal(leader.rpg.gold, 1100);
   assert.equal(w.worldMap.get(`${PGUILD_PREFIX}${orderId}`).treasury, 50);
+
+  // Closing the order hands what is left in the treasury to the one who closes it; no gold vanishes.
+  assert.equal(w.runtime.act(leader, 'order.disband', {}).ok, true);
+  assert.equal(leader.rpg.gold, 1150);
+  assert.equal(w.worldMap.has(`${PGUILD_PREFIX}${orderId}`), false);
+  assert.equal(w.runtime.act(member, 'order.create', { name: 'Lone Purse', tag: 'LP' }).ok, true);
+  assert.equal(w.runtime.act(member, 'order.deposit', { amount: 40 }).ok, true);
+  assert.equal(w.runtime.act(member, 'order.leave', {}).ok, true);
+  assert.equal(member.rpg.gold, 250, 'the last member leaving takes the treasury back');
 });
 
 test('player-founded order persists fully across server restart via world_state', () => {

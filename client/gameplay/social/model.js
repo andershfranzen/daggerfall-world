@@ -23,7 +23,7 @@ export const CHAT_COMMAND_PREFIXES = Object.freeze({
   '/?': 'help',
 });
 
-export const CHAT_HELP_SUMMARY = 'Chat: plain text speaks nearby (~24 m) · /msg or /yell (/y, /s, /shout) shouts across the area · /me <action> · /w <name> <msg> · /p party · /r region · /g global';
+export const CHAT_HELP_SUMMARY = 'Chat: plain text speaks nearby (~24 m) · /<message> or /yell (/y, /s, /shout) shouts across the area · /me <action> · /w <name> <msg> · /p party · /r region · /g global';
 
 /** `/p hello` -> {channel:'party', text:'hello'}; anything else -> null (location chat). */
 export function parseChannelCommand(raw) {

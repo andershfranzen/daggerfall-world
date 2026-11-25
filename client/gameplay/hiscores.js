@@ -44,7 +44,7 @@ export const GUILD_BOARDS = Object.freeze([
 
 export const ORDER_SORTS = Object.freeze([
   { id: 'members', label: 'Members' },
-  { id: 'combinedLevel', label: 'Combined Level' },
+  { id: 'level', label: 'Combined Level' },
   { id: 'treasury', label: 'Treasury' },
 ]);
 
@@ -252,7 +252,7 @@ export function install(api, opts = {}) {
     compareData: null,
     compareError: '',
     // Player Orders state
-    ordersSort: 'members', // 'members' | 'combinedLevel' | 'treasury'
+    ordersSort: 'members', // 'members' | 'level' | 'treasury'
     ordersPage: 1,
     ordersPageSize: DEFAULT_PAGE_SIZE,
     ordersSearch: '',
@@ -307,10 +307,10 @@ export function install(api, opts = {}) {
     const args = {
       board: ui.board,
       page: ui.boardPage,
-      pageSize: ui.boardPageSize,
+      limit: ui.boardPageSize,
     };
     const q = ui.boardSearch.trim();
-    if (q) args.search = q;
+    if (q) args.query = q;
     if (ui.boardClass) args.className = ui.boardClass;
     if (ui.boardRace) args.race = ui.boardRace;
     act('chronicles.board', args);
@@ -353,10 +353,10 @@ export function install(api, opts = {}) {
     const args = {
       sort: ui.ordersSort,
       page: ui.ordersPage,
-      pageSize: ui.ordersPageSize,
+      limit: ui.ordersPageSize,
     };
     const q = ui.ordersSearch.trim();
-    if (q) args.search = q;
+    if (q) args.query = q;
     act('chronicles.orders', args);
     rerender();
   }

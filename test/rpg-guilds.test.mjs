@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { install as installNpcs } from '../server/rpg/npcs.js';
 import { install as installGuilds } from '../server/rpg/guilds.js';
+import { install as installGuildhall } from '../server/rpg/guildhall.js';
 import {
   DIVINES, GROUPS, cureCost, donationRaises, eligibility, factionTable, groupOfFaction, hallAccessAnytime,
   newRank, privileges, rankFor, rankUpdate, reputationChanges, serviceAccess, canRest,
@@ -142,9 +143,11 @@ test('temple membership is per deity: join at Kynareth, a stranger at Arkay; fre
   // Kynareth heals members for free only from rank 1.
   assert.equal(talk(ctx, p, kyHeal).services.find((s) => s.id === 'heal').cost, 60);
   p.rpg.guilds.temple.rank = 1;
+  const woundedAt = p.rpg.character.health;
   v = talk(ctx, p, kyHeal);
   assert.match(v.text, /tend your wounds/);
   assert.equal(p.rpg.character.health, 40);
+  assert.deepEqual(ctx.notes.filter((n) => n.to === p.id && n.ev.kind === 'heal').map((n) => n.ev.amount), [40 - woundedAt], 'told how much the priests restored');
   assert.equal(ctx.services.templeRank(p, 35), 1);
   assert.equal(ctx.services.templeRank(p, 21), null);
   assert.equal(ctx.services.guildRank(p, 'temple', { factionId: 82 }), null);
@@ -280,6 +283,22 @@ test('knightly orders: join at the questor, one armour piece per rank at the smi
   assert.match(serve(ctx, p, smith, 'armor', { piece: 'boots' }).text, /already drawn/);
   assert.equal(ctx.services.guilds.freeTavernRoom(p, 17), true, 'free rooms in the order’s home region');
   assert.equal(ctx.services.guilds.freeTavernRoom(p, 5), false);
+});
+
+test('resigning and rejoining a knightly order does not hand out the rank armour again', () => {
+  const ctx = makeCtx();
+  installGuildhall(ctx);
+  const q = staff(ctx, 'ko', { role: 'knights', guild: 'knights', services: ['join'], hall: 368, npcFaction: 846 });
+  const smith = staff(ctx, 'ks', { role: 'knights', guild: 'knights', services: ['armor'], hall: 368, npcFaction: 845 });
+  const p = player({ Etiquette: 30, Medical: 10 });
+  ctx.join(p);
+  serve(ctx, p, q, 'join');
+  assert.match(serve(ctx, p, smith, 'armor', { piece: 'helm' }).text, /iron helm/);
+  ctx.act(p, 'guild.resign', { group: 'knights' });
+  assert.equal(p.rpg.guilds.knights, undefined);
+  assert.match(serve(ctx, p, q, 'join').text, /Welcome to The Knights of the Dragon/);
+  assert.match(serve(ctx, p, smith, 'armor', { piece: 'boots' }).text, /already drawn/);
+  assert.equal(p.rpg.inventory.filter((i) => i.template.startsWith('iron-')).length, 1);
 });
 
 test('donation keeps the 100-gold offering; cures charge by count, rank, quality and holiday', () => {

@@ -101,6 +101,8 @@ export async function openPostgresAccountStore(options = {}) {
   async function ensureSchema() {
     const sql = schemaSql ?? loadSchemaSql();
     await transaction(async (client) => {
+      // Serialize concurrent first boots: parallel CREATE ... IF NOT EXISTS races on pg_type.
+      await client.query('SELECT pg_advisory_xact_lock(7243911)');
       await client.query(sql);
     });
   }
@@ -164,6 +166,18 @@ export async function openPostgresAccountStore(options = {}) {
       });
     };
     client.on('notification', listenHandler);
+    // A dropped LISTEN connection would otherwise throw an unhandled 'error' and stop the server.
+    client.on('error', (err) => {
+      console.error('[postgres-accounts] moderation listener connection lost:', err.message);
+      if (listenClient !== client) return;
+      listenClient = null;
+      client.release(err);
+      const retry = () => {
+        if (closed || listenClient || moderationListeners.size === 0) return;
+        startModerationListener().catch(() => setTimeout(retry, 2000).unref());
+      };
+      setTimeout(retry, 1000).unref();
+    });
     await client.query(`LISTEN ${MODERATION_CHANNEL}`);
   }
 
@@ -400,13 +414,15 @@ export async function openPostgresAccountStore(options = {}) {
       });
     },
 
-    async recoverAccount(accountId, newPasswordHash, nextRecoveryHash, { ts = now() } = {}) {
+    // Returns null when expectedRecoveryHash is no longer stored (the code was already spent).
+    async recoverAccount(accountId, newPasswordHash, nextRecoveryHash, { ts = now(), expectedRecoveryHash } = {}) {
       return transaction(async (client) => {
-        const { rows: sessRows } = await client.query('SELECT id FROM sessions WHERE account_id = $1', [accountId]);
-        await client.query(
-          'UPDATE accounts SET password_hash = $1, recovery_hash = $2 WHERE id = $3',
-          [newPasswordHash, nextRecoveryHash, accountId],
+        const spent = await client.query(
+          'UPDATE accounts SET password_hash = $1, recovery_hash = $2 WHERE id = $3 AND recovery_hash = $4',
+          [newPasswordHash, nextRecoveryHash, accountId, expectedRecoveryHash],
         );
+        if (!Number(spent.rowCount ?? 0)) return null;
+        const { rows: sessRows } = await client.query('SELECT id FROM sessions WHERE account_id = $1', [accountId]);
         await client.query('DELETE FROM sessions WHERE account_id = $1', [accountId]);
         const { rows: logRows } = await client.query(
           `INSERT INTO moderation_log (account_id, action, reason, until, actor, at)

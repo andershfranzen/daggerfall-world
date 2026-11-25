@@ -147,7 +147,13 @@ function hashRecoveryCode(code) {
   return sha256(normalizeRecoveryCode(code));
 }
 
-function verifyRecoveryCode(code, storedHash) {
+async function verifyRecoveryCode(code, storedHash) {
+  // Accounts made on the pre-registration sign-up service carry a scrypt hash of their code,
+  // normalized the way that service did it. They stay valid until spent or rotated.
+  if (typeof storedHash === 'string' && storedHash.startsWith('scrypt$')) {
+    const legacy = typeof code === 'string' ? code.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+    return legacy.length > 0 && verifyPassword(legacy, storedHash);
+  }
   const normalized = typeof code === 'string' ? normalizeRecoveryCode(code) : '';
   const actual = createHash('sha256').update(normalized).digest();
   const validStored = typeof storedHash === 'string' && /^[0-9a-f]{64}$/i.test(storedHash);
@@ -253,7 +259,10 @@ export function openAccountStore(dbPath) {
     touchLogin: db.prepare('UPDATE accounts SET last_login_at = ? WHERE id = ?'),
     setPassword: db.prepare('UPDATE accounts SET password_hash = ? WHERE id = ?'),
     setRecovery: db.prepare('UPDATE accounts SET recovery_hash = ? WHERE id = ?'),
-    setPasswordAndRecovery: db.prepare('UPDATE accounts SET password_hash = ?, recovery_hash = ? WHERE id = ?'),
+    // Spends a recovery code: only matches while the verified code is still the stored one.
+    consumeRecovery: db.prepare(
+      'UPDATE accounts SET password_hash = ?, recovery_hash = ? WHERE id = ? AND recovery_hash = ?'
+    ),
     deleteAccount: db.prepare('DELETE FROM accounts WHERE id = ?'),
     setMute: db.prepare('UPDATE accounts SET muted_until = ?, mute_reason = ? WHERE id = ?'),
     setBan: db.prepare('UPDATE accounts SET banned_at = ?, ban_reason = ? WHERE id = ?'),
@@ -273,9 +282,11 @@ export function openAccountStore(dbPath) {
     sessDeleteOther: db.prepare('DELETE FROM sessions WHERE account_id = ? AND id != ?'),
     sessDeleteAccount: db.prepare('DELETE FROM sessions WHERE account_id = ?'),
     sessExpire: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
+    sessCountActive: db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE account_id = ? AND expires_at > ?'),
+    countActive: db.prepare('SELECT COUNT(*) AS n FROM accounts WHERE banned_at IS NULL'),
     sessTrim: db.prepare(
       `DELETE FROM sessions WHERE account_id = ? AND id NOT IN
-         (SELECT id FROM sessions WHERE account_id = ? ORDER BY last_seen_at DESC LIMIT ?)`
+         (SELECT id FROM sessions WHERE account_id = ? ORDER BY last_seen_at DESC, id DESC LIMIT ?)`
     ),
     log: db.prepare(
       'INSERT INTO moderation_log (account_id, action, reason, until, actor, at) VALUES (?, ?, ?, ?, ?, ?)'
@@ -578,6 +589,44 @@ function createHttpDispatcher(routes, helpers, limiters, cfg) {
   };
 }
 
+// GET /api/account (the signed-in account's own details) and GET /api/stats (public account count),
+// read by the website's account page and player counter. `q` adapts the storage backend:
+// get(id), activeSessions(id, now), accountCount(); each may return a promise.
+function createAccountViews({ sessionFor, mutedPayload, tokenFrom, cookie, cfg, now, q }) {
+  let counted = { at: 0, accounts: 0 };
+  return {
+    async accountDetails(req, res) {
+      const s = await sessionFor(req);
+      const acc = s && (await q.get(s.user.id));
+      if (!acc || acc.banned_at != null) {
+        return sendJson(res, 401, { error: 'Sign in first.' }, tokenFrom(req) ? { 'Set-Cookie': cookie('', 0) } : {});
+      }
+      const muted = await mutedPayload(acc.id);
+      sendJson(
+        res,
+        200,
+        {
+          account: {
+            id: acc.id,
+            username: acc.username,
+            createdAt: Number(acc.created_at),
+            lastLoginAt: acc.last_login_at != null ? Number(acc.last_login_at) : null,
+            activeSessions: Number(await q.activeSessions(acc.id, now())),
+            hasRecoveryCode: Boolean(acc.recovery_hash),
+            ...(muted ? { muted } : {}),
+          },
+        },
+        s.renewed ? { 'Set-Cookie': cookie(s.token, Math.floor(cfg.sessionTtlMs / 1000)) } : {}
+      );
+    },
+    async stats(req, res) {
+      const t = now();
+      if (!counted.at || t - counted.at >= 30_000) counted = { at: t, accounts: Number(await q.accountCount()) };
+      sendJson(res, 200, { accounts: counted.accounts }, { 'Cache-Control': 'public, max-age=30' });
+    },
+  };
+}
+
 // ---------------------------------------------------------------- service
 
 export function createAccounts(options = {}) {
@@ -862,7 +911,7 @@ export function createAccounts(options = {}) {
     const wait = limiters.recover.hit(ip) || limiters.recoverName.check(key);
     if (wait) return limited(res, wait);
     const acc = store.find(username);
-    const ok = verifyRecoveryCode(recoveryCode, acc?.recovery_hash ?? null);
+    const ok = await verifyRecoveryCode(recoveryCode, acc?.recovery_hash ?? null);
     if (!ok) {
       limiters.recoverName.hit(key);
       return sendJson(res, 401, { error: 'Incorrect account name or recovery code.' });
@@ -877,12 +926,14 @@ export function createAccounts(options = {}) {
     const nextCode = generateRecoveryCode();
     const nextHash = hashRecoveryCode(nextCode);
     const oldSids = store.tx(() => {
+      // A concurrent request may have spent this code since we verified it.
+      if (!Number(store.q.consumeRecovery.run(newHash, nextHash, acc.id, acc.recovery_hash).changes)) return null;
       const rows = store.q.sessIdsForAccount.all(acc.id);
-      store.q.setPasswordAndRecovery.run(newHash, nextHash, acc.id);
       store.q.sessDeleteAccount.run(acc.id);
       store.q.log.run(acc.id, 'revoke', 'password recovery', null, 'recovery', now());
       return rows.map((r) => Number(r.id));
     });
+    if (!oldSids) return sendJson(res, 401, { error: 'Incorrect account name or recovery code.' });
     drainModeration();
     for (const sid of oldSids) endSession(acc.id, sid, 'recovery');
     const setCookie = startSession(acc.id);
@@ -903,8 +954,19 @@ export function createAccounts(options = {}) {
     sendJson(res, 200, { user: s ? s.user : null, ...(muted ? { muted } : {}) }, headers);
   }
 
+  const { accountDetails, stats } = createAccountViews({
+    sessionFor, mutedPayload, tokenFrom, cookie, cfg, now,
+    q: {
+      get: store.get,
+      activeSessions: (id, t) => store.q.sessCountActive.get(id, t).n,
+      accountCount: () => store.q.countActive.get().n,
+    },
+  });
+
   const routes = {
     '/api/me': { GET: me, HEAD: me },
+    '/api/account': { GET: accountDetails, HEAD: accountDetails },
+    '/api/stats': { GET: stats, HEAD: stats },
     '/api/register': { POST: register },
     '/api/login': { POST: login },
     '/api/logout': { POST: logout },
@@ -1320,7 +1382,7 @@ export async function createPostgresAccounts(options = {}) {
     const wait = limiters.recover.hit(ip) || limiters.recoverName.check(key);
     if (wait) return limited(res, wait);
     const acc = await store.find(username);
-    const ok = verifyRecoveryCode(recoveryCode, acc?.recovery_hash ?? null);
+    const ok = await verifyRecoveryCode(recoveryCode, acc?.recovery_hash ?? null);
     if (!ok) {
       limiters.recoverName.hit(key);
       return sendJson(res, 401, { error: 'Incorrect account name or recovery code.' });
@@ -1334,7 +1396,12 @@ export async function createPostgresAccounts(options = {}) {
     const newHash = await hashPassword(newPassword, cfg.scrypt);
     const nextCode = generateRecoveryCode();
     const nextHash = hashRecoveryCode(nextCode);
-    const { sids: oldSids, logId } = await store.recoverAccount(acc.id, newHash, nextHash, { ts: now() });
+    const recovered = await store.recoverAccount(acc.id, newHash, nextHash, {
+      ts: now(),
+      expectedRecoveryHash: acc.recovery_hash,
+    });
+    if (!recovered) return sendJson(res, 401, { error: 'Incorrect account name or recovery code.' });
+    const { sids: oldSids, logId } = recovered;
     handleModerationEvent({ id: logId, accountId: acc.id, action: 'revoke' });
     for (const sid of oldSids) endSession(acc.id, sid, 'recovery');
     setMuteCache(acc.id, acc.muted_until);
@@ -1356,8 +1423,20 @@ export async function createPostgresAccounts(options = {}) {
     sendJson(res, 200, { user: s ? s.user : null, ...(muted ? { muted } : {}) }, headers);
   }
 
+  const count = async (sql, params = []) => (await store.pool.query(sql, params)).rows[0].n;
+  const { accountDetails, stats } = createAccountViews({
+    sessionFor, mutedPayload, tokenFrom, cookie, cfg, now,
+    q: {
+      get: (id) => store.get(id),
+      activeSessions: (id, t) => count('SELECT COUNT(*) AS n FROM sessions WHERE account_id = $1 AND expires_at > $2', [id, t]),
+      accountCount: () => count('SELECT COUNT(*) AS n FROM accounts WHERE banned_at IS NULL'),
+    },
+  });
+
   const routes = {
     '/api/me': { GET: me, HEAD: me },
+    '/api/account': { GET: accountDetails, HEAD: accountDetails },
+    '/api/stats': { GET: stats, HEAD: stats },
     '/api/register': { POST: register },
     '/api/login': { POST: login },
     '/api/logout': { POST: logout },

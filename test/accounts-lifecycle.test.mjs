@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import WebSocket from 'ws';
-import { createAccounts } from '../server/accounts.js';
+import { createAccounts, hashPassword } from '../server/accounts.js';
 import { createGameServer, CLOSE } from '../server/game.js';
 
 const FAST_SCRYPT = { N: 2 ** 10, r: 8, p: 1, keyLen: 32 };
@@ -257,6 +257,60 @@ describe('account lifecycle APIs', () => {
     assert.equal((await h.api('/api/recover', { body: { username: 'Symmachus', recoveryCode: rec.json.recoveryCode, newPassword: PW3 } })).status, 401);
   });
 
+  test('a recovery code is single-use even when two /api/recover requests race', async () => {
+    const reg = await h.api('/api/register', { body: { username: 'Mannimarco', password: PW1 } });
+    const code = reg.json.recoveryCode;
+    const jars = [{}, {}];
+    const results = await Promise.all([
+      h.api('/api/recover', { body: { username: 'Mannimarco', recoveryCode: code, newPassword: PW2 }, jar: jars[0] }),
+      h.api('/api/recover', { body: { username: 'Mannimarco', recoveryCode: code, newPassword: PW3 }, jar: jars[1] }),
+    ]);
+    assert.deepEqual(results.map((r) => r.status).sort(), [200, 401]);
+    // The winner's password and session are the ones in force.
+    const win = results.findIndex((r) => r.status === 200);
+    assert.equal((await h.api('/api/me', { method: 'GET', jar: jars[win] })).json.user?.username, 'Mannimarco');
+    assert.equal((await h.api('/api/login', { body: { username: 'Mannimarco', password: win === 0 ? PW2 : PW3 } })).status, 200);
+  });
+
+  test('a recovery code issued by the pre-registration sign-up service still resets the password, once', async () => {
+    // That service stored scrypt(code without separators) and accepted any punctuation between the groups.
+    const reg = await h.api('/api/register', { body: { username: 'Medora', password: PW1 } });
+    const db = new DatabaseSync(h.accountsDbPath);
+    try {
+      db.prepare('UPDATE accounts SET recovery_hash = ? WHERE id = ?')
+        .run(await hashPassword('K7QM2XWP9RTBHD4NV3YZ', FAST_SCRYPT), reg.json.user.id);
+    } finally {
+      db.close();
+    }
+    const recover = (recoveryCode, newPassword) =>
+      h.api('/api/recover', { body: { username: 'Medora', recoveryCode, newPassword } });
+    assert.equal((await recover('K7QM-2XWP-9RTB-HD4N-V3YA', PW2)).status, 401);
+    const ok = await recover(' k7qm 2xwp.9rtb-hd4n-v3yz ', PW2);
+    assert.equal(ok.status, 200);
+    assert.match(ok.json.recoveryCode, /^[0-9A-F]{4}(-[0-9A-F]{4}){7}$/);
+    assert.equal((await recover('K7QM-2XWP-9RTB-HD4N-V3YZ', PW3)).status, 401, 'the old code is spent');
+    assert.equal((await h.api('/api/login', { body: { username: 'Medora', password: PW2 } })).status, 200);
+    assert.equal((await recover(ok.json.recoveryCode, PW3)).status, 200, 'the replacement code works');
+  });
+
+  test('GET /api/account and /api/stats answer the website account page and player count', async () => {
+    assert.equal((await h.api('/api/account', { method: 'GET' })).status, 401);
+    const jar = {};
+    const reg = await h.api('/api/register', { body: { username: 'Akorithi', password: PW1 }, jar });
+    await h.api('/api/login', { body: { username: 'Akorithi', password: PW1 } }); // a second session elsewhere
+    const { status, json } = await h.api('/api/account', { method: 'GET', jar });
+    assert.equal(status, 200);
+    assert.deepEqual(Object.keys(json.account).sort(), ['activeSessions', 'createdAt', 'hasRecoveryCode', 'id', 'lastLoginAt', 'username']);
+    assert.deepEqual(
+      { ...json.account, createdAt: typeof json.account.createdAt, lastLoginAt: typeof json.account.lastLoginAt },
+      { id: reg.json.user.id, username: 'Akorithi', createdAt: 'number', lastLoginAt: 'number', activeSessions: 2, hasRecoveryCode: true }
+    );
+    const stats = await h.api('/api/stats', { method: 'GET' });
+    assert.equal(stats.status, 200);
+    assert.ok(stats.json.accounts >= 1);
+    assert.equal(stats.headers.get('cache-control'), 'public, max-age=30');
+  });
+
   test('POST /api/delete-account disconnects live /ws sockets and deletes the character row', async () => {
     const jar = {};
     const reg = await h.api('/api/register', { body: { username: 'Lysandus', password: PW1 }, jar });
@@ -349,4 +403,19 @@ describe('recovery rate limits and per-account WS action rate limiting', () => {
       await h.stop();
     }
   });
+});
+
+test('session cap keeps the newest session when last_seen_at ties (same order as PostgreSQL)', async () => {
+  const h = createHarness({ accounts: { now: () => 1_800_000_000_000, maxSessionsPerAccount: 2 } });
+  await h.start();
+  try {
+    await h.api('/api/register', { body: { username: 'Jagar', password: PW1 } });
+    const jars = [{}, {}, {}];
+    for (const jar of jars) await h.api('/api/login', { body: { username: 'Jagar', password: PW1 }, jar });
+    const users = [];
+    for (const jar of jars) users.push((await h.api('/api/me', { method: 'GET', jar })).json.user?.username ?? null);
+    assert.deepEqual(users, [null, 'Jagar', 'Jagar']);
+  } finally {
+    await h.stop();
+  }
 });

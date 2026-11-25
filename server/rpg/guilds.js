@@ -207,11 +207,22 @@ export function install(ctx, options = {}) {
 
   function addMembership(p, group, variant, rank = 0) {
     const rpg = stateOf(p);
-    rpg.guilds[group] = { rank, joinedAt: new Date().toISOString(), lastRankChange: today(), ...(variant != null ? { variant } : {}) };
+    const flags = rpg.guildFlags?.[`${group}:${variant ?? ''}`];
+    rpg.guilds[group] = { rank, joinedAt: new Date().toISOString(), lastRankChange: today(), ...(variant != null ? { variant } : {}), ...(flags ? { flags } : {}) };
     ctx.dirty?.(p);
     ctx.emit?.('guildJoin', { player: p, guild: group, factionId: repFaction(group, variant), variant });
     if (SECRET_HALL_FACTION[group]) revealHalls(p);
     return rpg.guilds[group];
+  }
+  /** Leaving by choice (guildhall.js guild.resign). The order's flags (armour drawn per rank, house) stay with the
+   *  character, so resigning and rejoining does not hand them out again. */
+  function resign(p, group) {
+    const rpg = stateOf(p);
+    const m = rpg.guilds[group];
+    if (!m) return;
+    if (m.flags) (rpg.guildFlags ||= {})[`${group}:${m.variant ?? ''}`] = m.flags;
+    delete rpg.guilds[group];
+    ctx.dirty?.(p);
   }
 
   /** Guild.UpdateRank at a hall of this guild. Returns a line for the speaker, or null. */
@@ -263,6 +274,7 @@ export function install(ctx, options = {}) {
     const rank = rankAt(p, hall) ?? -1;
     const c = p.rpg?.character;
     if (c && freeHealing(hall.group, hall.variant, rank) && Number.isFinite(c.maxHealth) && c.health < c.maxHealth) {
+      ctx.notify?.(p, { kind: 'heal', amount: c.maxHealth - c.health });
       c.health = c.maxHealth;
       lines.push('The priests tend your wounds.');
     }
@@ -656,7 +668,7 @@ export function install(ctx, options = {}) {
 
   const api = {
     joinOffered, freeHealingAt, table, hallOf, hallOfBuilding, memberOf, isMember, rankAt, describe, access, join, greet, donate, cureQuote, receiveArmor,
-    tutor, updateRank, addMembership, changeReputation, normalize,
+    tutor, updateRank, addMembership, resign, changeReputation, normalize,
     reputation, rankFor, privileges: (p) => Object.entries(stateOf(p).guilds).map(([g, m]) => ({
       group: g, variant: m.variant ?? null, name: groupName(table, g, m.variant), rank: m.rank, title: rankTitle(g, m.rank),
       privileges: privileges(g, m.variant, m.rank),

@@ -255,7 +255,8 @@ export function clipsForEvent(ev, { selfId = null, rand = Math.random } = {}) {
     case 'journal': case 'quest':
       return [{ clip: CLIP.PageTurn, self: true }];
     case 'questSound':
-      return Number.isInteger(ev.sound) ? [{ clip: ev.sound, self: true }] : [];
+      // QBN 0x54 names a DAGGER.SND record id (e.g. 11146), not a SoundClips index.
+      return Number.isInteger(ev.sound) ? [{ clip: ev.sound, self: true, record: true }] : [];
     case 'travel':
       return [{ clip: CLIP.AnimalHorse, self: true }];
     default:

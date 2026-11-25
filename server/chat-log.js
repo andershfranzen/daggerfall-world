@@ -33,7 +33,9 @@ export const CHAT_CHANNELS = Object.freeze([
 const CHANNEL_SET = new Set(CHAT_CHANNELS);
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
-const DEFAULT_DB_PATH = fileURLToPath(new URL('./data/world.db', import.meta.url));
+// Same file server/game.js DEFAULTS.dbPath writes; the CLI must read the live log by default.
+export const CLI_DEFAULT_DB_PATH = fileURLToPath(new URL('./data/daggerfallworld.db', import.meta.url));
+const DEFAULT_DB_PATH = CLI_DEFAULT_DB_PATH;
 
 export const SQLITE_DDL = Object.freeze([
   `CREATE TABLE IF NOT EXISTS chat_messages (
@@ -47,7 +49,8 @@ export const SQLITE_DDL = Object.freeze([
     target_player_id INTEGER,
     target_name TEXT,
     group_id TEXT,
-    body TEXT NOT NULL
+    body TEXT NOT NULL,
+    recipient_ids TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages (created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_chat_messages_sender_account_created ON chat_messages (sender_account_id, created_at DESC)`,
@@ -67,12 +70,15 @@ export const POSTGRES_DDL = Object.freeze([
     target_player_id BIGINT,
     target_name TEXT,
     group_id TEXT,
-    body TEXT NOT NULL
+    body TEXT NOT NULL,
+    recipient_ids TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages (created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_chat_messages_sender_account_created ON chat_messages (sender_account_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_chat_messages_sender_name_created ON chat_messages (LOWER(sender_name), created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_created ON chat_messages (channel, created_at DESC)`,
+  // Tables created before recipient_ids existed.
+  `ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS recipient_ids TEXT`,
 ]);
 
 function isSqliteDb(value) {
@@ -183,6 +189,12 @@ export function normalizeChatEntry(entry) {
     entry.groupId ?? entry.group_id ?? entry.partyId ?? entry.guildId ?? entry.orderId
   );
 
+  // Who heard it (player ids, sender excluded): the audience of a say/shout depends on where everyone stood.
+  const rawRecipients = entry.recipientIds ?? entry.recipient_ids ?? null;
+  const recipientIds = Array.isArray(rawRecipients)
+    ? rawRecipients.map((id) => optionalInt(id, 'recipientIds')).filter((id) => id !== null)
+    : null;
+
   return {
     createdAt,
     channel,
@@ -194,6 +206,7 @@ export function normalizeChatEntry(entry) {
     targetName,
     groupId,
     body,
+    recipientIds,
   };
 }
 
@@ -211,6 +224,7 @@ function formatRow(row) {
     targetName: row.target_name ?? null,
     groupId: row.group_id ?? null,
     body: row.body,
+    recipientIds: row.recipient_ids ? JSON.parse(row.recipient_ids) : null,
   };
 }
 
@@ -334,13 +348,17 @@ export function openSqliteChatLog(dbOrPath, options = {}) {
   for (const ddl of SQLITE_DDL) {
     db.exec(ddl);
   }
+  // Tables created before recipient_ids existed (SQLite has no ADD COLUMN IF NOT EXISTS).
+  if (!db.prepare('PRAGMA table_info(chat_messages)').all().some((c) => c.name === 'recipient_ids')) {
+    db.exec('ALTER TABLE chat_messages ADD COLUMN recipient_ids TEXT');
+  }
 
   const insertStmt = db.prepare(`
     INSERT INTO chat_messages (
       created_at, channel, location,
       sender_player_id, sender_account_id, sender_name,
-      target_player_id, target_name, group_id, body
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      target_player_id, target_name, group_id, body, recipient_ids
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const countAllStmt = db.prepare('SELECT COUNT(*) AS total FROM chat_messages');
 
@@ -358,7 +376,8 @@ export function openSqliteChatLog(dbOrPath, options = {}) {
         data.targetPlayerId,
         data.targetName,
         data.groupId,
-        data.body
+        data.body,
+        data.recipientIds ? JSON.stringify(data.recipientIds) : null
       );
       return { id: Number(info.lastInsertRowid), ...data };
     } catch (err) {
@@ -383,7 +402,7 @@ export function openSqliteChatLog(dbOrPath, options = {}) {
       .prepare(
         `SELECT id, created_at, channel, location,
                 sender_player_id, sender_account_id, sender_name,
-                target_player_id, target_name, group_id, body
+                target_player_id, target_name, group_id, body, recipient_ids
            FROM chat_messages
            ${whereSql}
           ORDER BY created_at ${dir}, id ${dir}
@@ -459,11 +478,11 @@ export async function openPostgresChatLog(poolOrUrl, options = {}) {
       INSERT INTO chat_messages (
         created_at, channel, location,
         sender_player_id, sender_account_id, sender_name,
-        target_player_id, target_name, group_id, body
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        target_player_id, target_name, group_id, body, recipient_ids
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING id, created_at, channel, location,
                 sender_player_id, sender_account_id, sender_name,
-                target_player_id, target_name, group_id, body
+                target_player_id, target_name, group_id, body, recipient_ids
     `;
     const params = [
       data.createdAt,
@@ -476,6 +495,7 @@ export async function openPostgresChatLog(poolOrUrl, options = {}) {
       data.targetName,
       data.groupId,
       data.body,
+      data.recipientIds ? JSON.stringify(data.recipientIds) : null,
     ];
     try {
       const res = await pool.query(sql, params);
@@ -507,7 +527,7 @@ export async function openPostgresChatLog(poolOrUrl, options = {}) {
     const dataRes = await pool.query(
       `SELECT id, created_at, channel, location,
               sender_player_id, sender_account_id, sender_name,
-              target_player_id, target_name, group_id, body
+              target_player_id, target_name, group_id, body, recipient_ids
          FROM chat_messages
          ${whereSql}
         ORDER BY created_at ${dir}, id ${dir}
@@ -591,6 +611,7 @@ export function createChatLogService(store, options = {}) {
       targetName: payload.targetName ?? payload.target_name ?? payload.toName ?? target?.name ?? null,
       groupId: payload.groupId ?? payload.group_id ?? payload.partyId ?? payload.guildId ?? payload.orderId ?? null,
       body: payload.body ?? payload.text ?? payload.message,
+      recipientIds: payload.recipientIds ?? payload.recipient_ids ?? null,
     };
   }
 
@@ -671,7 +692,8 @@ function usageText() {
     '  node server/chat-log.js count [--db <path>]',
     '',
     'Environment:',
-    '  CHAT_LOG_DB_PATH or DB_PATH (default: server/data/world.db)',
+    '  CHAT_LOG_DB_PATH or DB_PATH (default: server/data/daggerfallworld.db)',
+    '  DATABASE_URL=postgres://... reads the PostgreSQL chat log instead',
   ].join('\n');
 }
 
@@ -732,11 +754,21 @@ export async function runCli(argv = process.argv.slice(2), io = {}) {
         ? resolve(env.DB_PATH)
         : DEFAULT_DB_PATH;
 
-  const store = openSqliteChatLog(dbPath);
+  // A PostgreSQL deployment (server/main.js DATABASE_URL) keeps chat there, not in SQLite.
+  const pgUrl = !parsed.flags.db && !env.CHAT_LOG_DB_PATH && /^postgres(ql)?:\/\//i.test(env.DATABASE_URL ?? '')
+    ? env.DATABASE_URL.trim()
+    : null;
+  let store;
+  try {
+    store = pgUrl ? await openPostgresChatLog(pgUrl) : openSqliteChatLog(dbPath);
+  } catch (err) {
+    stderr.write(`error: ${err.message}\n`);
+    return 1;
+  }
   try {
     if (parsed.command === 'tail') {
       const limit = parsed.flags.limit ?? parsed.args[0] ?? 50;
-      const rows = store.recent(limit);
+      const rows = await store.recent(limit);
       if (parsed.flags.json) {
         stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
       } else {
@@ -746,7 +778,7 @@ export async function runCli(argv = process.argv.slice(2), io = {}) {
     }
 
     if (parsed.command === 'search') {
-      const res = store.query({
+      const res = await store.query({
         senderName: parsed.flags.user,
         accountId: parsed.flags.account,
         playerId: parsed.flags.player,
@@ -770,7 +802,7 @@ export async function runCli(argv = process.argv.slice(2), io = {}) {
     }
 
     if (parsed.command === 'count') {
-      const total = store.count();
+      const total = await store.count();
       if (parsed.flags.json) {
         stdout.write(`${JSON.stringify({ total })}\n`);
       } else {
@@ -785,7 +817,7 @@ export async function runCli(argv = process.argv.slice(2), io = {}) {
     stderr.write(`error: ${err.message}\n`);
     return 1;
   } finally {
-    store.close();
+    await store.close();
   }
 }
 

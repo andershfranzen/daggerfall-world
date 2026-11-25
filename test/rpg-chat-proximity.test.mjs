@@ -235,3 +235,57 @@ test('command parsers route plain text to proximity, slash/yell to shout, and al
   assert.deepEqual(parseChannelCommand('/p hi'), { channel: 'party', text: 'hi' });
   assert.equal(parseChannelCommand('/shrug'), null);
 });
+
+test('chat.send say allows the local-channel burst, not the tighter global one', () => {
+  const rt = makeRuntime();
+  const a = rt.join(1, 'Aldric', { x: 0, z: 0 });
+  let ok = 0;
+  for (let i = 0; i < 12; i++) {
+    try {
+      rt.act(a, 'chat.send', { channel: 'say', text: `line ${i}` });
+      ok++;
+    } catch {}
+  }
+  assert.equal(ok, 12, 'say via chat.send gets CHAT_LIMITS.local.burst (12) lines');
+  // Global keeps its own tighter budget, independent of say.
+  let g = 0;
+  for (let i = 0; i < 8; i++) {
+    try {
+      rt.act(a, 'chat.send', { channel: 'global', text: `g ${i}` });
+      g++;
+    } catch {}
+  }
+  assert.equal(g, 5);
+});
+
+test('chat.send logs who heard each message', () => {
+  const rt = makeRuntime();
+  const logged = [];
+  rt.services.logChat = (p, entry) => logged.push(entry);
+  const a = rt.join(1, 'Aldric', { x: 0, z: 0 });
+  rt.join(2, 'Brisa', { x: 10, z: 0 });
+  rt.join(3, 'Cyrus', { x: 40, z: 0 });
+  rt.act(a, 'chat.send', { channel: 'say', text: 'hi' });
+  rt.act(a, 'chat.send', { channel: 'shout', text: 'HI' });
+  assert.deepEqual(logged[0].recipientIds, [2]);
+  assert.deepEqual(logged[1].recipientIds, [2, 3]);
+});
+
+test('region chat resolves wilderness through the travel service', () => {
+  const rt = makeRuntime();
+  rt.services.travel = { regionOf: (loc) => (loc.startsWith('wilderness:') ? 'Daggerfall' : null) };
+  const a = rt.join(1, 'Aldric', { location: 'town:Daggerfall/Daggerfall' });
+  const b = rt.join(2, 'Brisa', { location: 'wilderness:207,213' });
+  rt.act(b, 'chat.send', { channel: 'region', text: 'outside the walls' });
+  assert.equal(rt.chats(a).at(-1)?.text, 'outside the walls');
+  assert.equal(rt.chats(b).at(-1)?.region, 'Daggerfall');
+});
+
+test('chat.send does not deliver a message the chat log failed to store', () => {
+  const rt = makeRuntime();
+  rt.services.logChat = () => null; // createChatLogService's result when the write failed
+  const a = rt.join(1, 'Aldric', { x: 0, z: 0 });
+  const b = rt.join(2, 'Brisa', { x: 5, z: 0 });
+  assert.throws(() => rt.act(a, 'chat.send', { channel: 'say', text: 'unlogged' }), /unavailable/);
+  assert.equal(rt.chats(b).length, 0);
+});

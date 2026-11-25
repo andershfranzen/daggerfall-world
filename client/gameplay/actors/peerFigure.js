@@ -15,6 +15,7 @@ const DANGER_PREFIXES = ['dungeon:', 'wilderness:'];
 const STEALTH_WEAPONS = new Set(['dagger', 'short_blade', 'shortblade', 'tanto', 'wakizashi', 'knife']);
 const CASTER_IDS = new Set([128, 129, 130, 131, 132, 133]);
 const NEUTRAL_ARMOR_TIERS = new Set(['', 'none', 'unarmored', 'cloth', 'leather', 'chain', 'iron', 'steel']);
+const UNARMORED_TIERS = new Set(['', 'none', 'unarmored', 'cloth']);
 
 const RACE_LABELS = Object.freeze({
   breton: 'Breton',
@@ -235,13 +236,16 @@ export function resolvePeerAppearance(peer, opts = {}) {
   }
 
   const weaponKind = normalizeWeaponKind(p);
-  const hasWeapon = weaponKind !== '' && weaponKind !== 'none' && weaponKind !== 'unarmed' && weaponKind !== 'hand';
   const wearingRobes = p.wearingRobes === true;
   const wearingHeavyArmor = p.wearingHeavyArmor === true;
   const location = typeof opts.location === 'string' ? opts.location : (typeof p.location === 'string' ? p.location : '');
   const inDangerZone = typeof opts.inDangerZone === 'boolean' ? opts.inDangerZone : isDangerLocation(location);
 
-  const useArmedFigure = readied || wearingHeavyArmor || wearingRobes || hasWeapon || inDangerZone;
+  // Any weapon or armour, drawn or sheathed, makes a player their class figure: the owner wants
+  // players shown as the Daggerfall figure for their gear, not collapsed into townsfolk.
+  const hasWeapon = weaponKind !== '' && weaponKind !== 'none' && weaponKind !== 'unarmed' && weaponKind !== 'hand';
+  const wearingArmor = !UNARMORED_TIERS.has(norm(p.armorTier));
+  const useArmedFigure = readied || wearingHeavyArmor || wearingArmor || wearingRobes || hasWeapon || inDangerZone;
 
   // 3. Armed / class / dungeon / gear-bearing classic humanoid (TEXTURE.475–490).
   if (useArmedFigure) {

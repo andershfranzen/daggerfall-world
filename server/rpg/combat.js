@@ -766,11 +766,11 @@ export function install(ctx, options = {}) {
 
   // ------------------------------------------------------------------ damage, death, defeat
 
-  function applyMonsterDamage(e, amount, attacker, source) {
+  function applyMonsterDamage(e, amount, attacker, source, extra = null) {
     if (ctx.entities.get(e.id) !== e || e.dead || transforming(e) || !(amount >= 1)) return { damage: 0, hp: e.hp, killed: false };
     const remaining = S.absorbDamage?.(e, amount);
     if (Number.isFinite(remaining)) amount = Math.max(0, Math.min(amount, remaining));
-    if (amount < 1) return { damage: 0, hp: e.hp, killed: false };
+    if (amount < 1) return { damage: 0, hp: e.hp, killed: false, absorbed: true };
     const monster = attacker?._m ? attacker : null;
     const player = monster ? null : attacker;
     const owner = monster ? allyOwner(monster) : player;
@@ -782,7 +782,7 @@ export function install(ctx, options = {}) {
     if (player) provoke(e, player);
     else if (monster) respondToMonster(e, monster);
     entityEvent(e, { kind: 'hit', playerId: player?.id ?? null, ...(monster ? { attackerId: monster.id } : {}),
-      entityId: e.id, damage: n, hp: e.hp, maxHp: e.maxHp, source });
+      entityId: e.id, damage: n, hp: e.hp, maxHp: e.maxHp, source, ...extra });
     if (e.hp <= 0) {
       killMonster(e, owner, monster);
       return { damage: n, hp: 0, killed: true };
@@ -910,7 +910,8 @@ export function install(ctx, options = {}) {
     return { x: 0, z: 0 };
   }
 
-  function hurtPlayer(p, amount, source, onApplied) {
+  /** `cause` (spell, trap, ...) sends the injured player a private `hurt`; monster blows report through monsterAttack. */
+  function hurtPlayer(p, amount, source, onApplied, cause = null) {
     if (!(amount > 0) || isDefeated(p)) return;
     // Magical shields (magic feature) soak damage first.
     if (typeof S.absorbDamage === 'function') {
@@ -918,7 +919,7 @@ export function install(ctx, options = {}) {
         const left = Number(S.absorbDamage(p, amount));
         if (Number.isFinite(left)) amount = Math.max(0, Math.min(amount, Math.trunc(left)));
       } catch {}
-      if (amount <= 0) return;
+      if (amount <= 0) return 'absorbed';
     }
     const healthBefore = characterOf(p)?.health ?? 0;
     let dead;
@@ -934,6 +935,7 @@ export function install(ctx, options = {}) {
     ctx.dirty(p);
     const damage = Math.max(0, healthBefore - (characterOf(p)?.health ?? 0));
     if (damage > 0) onApplied?.(damage);
+    if (damage > 0 && cause) ctx.notify(p, { kind: 'hurt', damage, cause });
     ctx.emit('damage', { target: p, player: p, source, amount });
     if (dead) defeat(p, source);
     return damage;
@@ -1263,15 +1265,16 @@ export function install(ctx, options = {}) {
     const r = ranged && weapon && !effective ? { damage: 0 }
       : rollMonsterStrike(e, monsterView(target), reflexes, effective ? weapon : null);
     if (r.damage > 0) S.breakMagicConcealment?.(e);
-    const { damage } = applyMonsterDamage(target, r.damage, e, ranged ? 'arrow' : 'melee');
+    const { damage, absorbed } = applyMonsterDamage(target, r.damage, e, ranged ? 'arrow' : 'melee');
     if (!damage) respondToMonster(target, e);
     if (damage > 0 && !target.dead && !ranged) onMonsterHit(e, target, damage);
     entityEvent(e, { kind: 'monsterAttack', entityId: e.id, targetId: target.id, hit: damage > 0, damage,
-      ...(ranged ? { ranged: true } : {}) });
+      ...(ranged ? { ranged: true } : {}), ...(absorbed && r.damage >= 1 ? { absorbed: true } : {}) });
   }
 
   function monsterStrike(e, p, ranged = false) {
     const r = rollMonsterStrike(e, playerView(p), reflexesOf(characterOf(p)), e._weapon);
+    let absorbed = false;
     if (r.damage > 0) S.breakMagicConcealment?.(e);
     // EnemyAttack.ShootBow: the arrow ends up in the target's inventory.
     if (ranged && typeof S.giveItem === 'function') {
@@ -1287,21 +1290,24 @@ export function install(ctx, options = {}) {
       // or EnemyAttack.BowDamage, returns the calculated damage before the player's shields and health take it.
       const calculated = r.damage;
       try { if (!isDefeated(p)) S.enchantmentStruck?.(p, e, calculated); } catch {}
-      r.damage = hurtPlayer(p, r.damage, e, ranged ? undefined : (damage) => {
+      const applied = hurtPlayer(p, r.damage, e, ranged ? undefined : (damage) => {
         S.conditionExposure?.(p, { source: e, damage, delivery: 'melee' });
         if (e._weaponPoison != null && S.conditionExposure) {
           S.conditionExposure(p, { source: e, damage, delivery: 'weapon', poison: e._weaponPoison });
           delete e._weaponPoison;
         }
         onMonsterHit(e, p, damage);
-      }) ?? 0;
+      });
+      absorbed = applied === 'absorbed';
+      r.damage = absorbed ? 0 : applied ?? 0;
     }
     if (typeof S.advanceSkill === 'function') {
       try {
         S.advanceSkill(p, 'Dodging', 1);
       } catch {}
     }
-    entityEvent(e, { kind: 'monsterAttack', entityId: e.id, targetId: p.id, hit: r.damage > 0, damage: r.damage, ...(ranged ? { ranged: true } : {}) });
+    entityEvent(e, { kind: 'monsterAttack', entityId: e.id, targetId: p.id, hit: r.damage > 0, damage: r.damage, ...(ranged ? { ranged: true } : {}),
+      ...(absorbed ? { absorbed: true } : {}) });
   }
 
   /**
@@ -1782,7 +1788,7 @@ export function install(ctx, options = {}) {
         ...(arrow.variant != null ? { variant: arrow.variant } : {}),
       });
     }
-    const result = applyMonsterDamage(target, damage, p, weapon?.bow ? 'arrow' : weapon ? 'weapon' : 'hand');
+    const result = applyMonsterDamage(target, damage, p, weapon?.bow ? 'arrow' : weapon ? 'weapon' : 'hand', r.backstab ? { backstab: true } : null);
     if (result.damage > 0) S.conditionPlayerHit?.(p, target, result.damage);
     if (strike?.after) {
       try { strike.after(result); } catch {}
@@ -1894,12 +1900,15 @@ export function install(ctx, options = {}) {
     const table = climateEncounterTable(climateOf(location), { inLocation: kind === 'town', night: time < 360 || time > 1080 });
     return spawnNearPlayer(p, scene, table, 'climate-rest', MIN_SPAWN_DISTANCE);
   };
-  /** Damage to a player from an enemy source other than a weapon (enemy spells): shields, defeat, events. */
-  S.hurtPlayerBy = (p, amount, source) => {
+  /**
+   * Damage to a player from a source other than a monster's weapon (enemy spells, traps, holy ground): shields,
+   * defeat, and a private `hurt` event whose cause is `cause`, else 'trap' for trap sources, else 'other'.
+   */
+  S.hurtPlayerBy = (p, amount, source, cause) => {
     const c = characterOf(p);
     if (!c || !(amount > 0)) return 0;
     const before = c.health;
-    hurtPlayer(p, Math.trunc(amount), source?.kind === 'monster' ? source : null);
+    hurtPlayer(p, Math.trunc(amount), source?.kind === 'monster' ? source : null, undefined, cause ?? (source?.kind === 'trap' ? 'trap' : 'other'));
     return Math.max(0, before - (characterOf(p)?.health ?? before));
   };
   S.monstersIn = (location) => [...ctx.entities.values()].filter((e) => e.kind === 'monster' && e._m && !e.dead && e.location === location);
