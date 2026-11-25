@@ -72,8 +72,8 @@ test('installed climate suppresses snow in subtropical and desert places, includ
   assert.equal(w.clockOf(w.join(1, sentinel)).climate, 229, 'the installed climate is subtropical');
   assert.equal(w.clockOf(w.join(2, atriga)).climate, 224, 'the installed climate is desert');
   for (const location of [sentinel, 'wilderness:397,343', atriga, 'wilderness:589,392']) {
-    assert.equal(weatherAt(w.travel.service.regionOf(location), winter, location).type, 'snow', 'the regional schedule rolls snow');
-    assert.equal(w.atmo.weatherFor(location, winter).type, 'sunny');
+    assert.equal(weatherAt(w.travel.service.regionOf(location), winter, location).type, 'snow', 'the default woodlands schedule rolls snow');
+    assert.notEqual(w.atmo.weatherFor(location, winter).type, 'snow', 'snow-free climate never rolls snow');
   }
   assert.equal(w.atmo.weatherFor(mountain, winter).type, 'snow', 'snow reaches a mountain town in the same political region');
   assert.equal(w.atmo.weatherFor(HOME, 5 * MINUTES_PER_YEAR + 330 * MINUTES_PER_DAY).type, 'snow', 'a winter roll still reaches the woodlands');

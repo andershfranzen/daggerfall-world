@@ -22,8 +22,13 @@ import {
   regionOf,
   weatherAt,
   WEATHER_LABEL,
+  WEATHER_TABLE,
+  climateWeatherGroup,
+  weatherWeightsFor,
   WORLD_EPOCH_MS,
 } from '../../client/gameplay/atmosphere/calendar.js';
+
+export { WEATHER_TABLE, climateWeatherGroup, weatherWeightsFor };
 
 export const DEFAULTS = Object.freeze({
   /** Wall-clock instant at which the world reads the new-game start (3E405, 4 Morning Star, 13:30). */
