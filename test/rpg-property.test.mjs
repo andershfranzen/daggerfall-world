@@ -656,3 +656,23 @@ test('grantHouse: a knight\'s free house is allocated like a purchase at price 0
   const b = await joinAt(world, 2, 'Squire', { location: WR, x: 0, z: 4 });
   assert.equal(S.property.grantHouse(b.player, { town: WR }).status, 'none');
 });
+
+test('ship.board waits for the deck: no landing without a foot height (Play stood beside the hull at y 0)', async (t) => {
+  // FIXTURE collision: the deck area is still loading (no ground), then settles at the small ship's 9.075 m deck.
+  let deckY = null;
+  const preloads = [];
+  const stub = { name: 'collision-stub', install: (ctx) => { ctx.services.collision = { groundAt: (loc) => (loc === 'town:31/1' ? deckY : 0), preload: (loc) => preloads.push(loc) }; } };
+  const { world } = await makeWorld(t, [stub, ...FEATURES]);
+  const a = await joinAt(world, 1, 'Sailor', { location: GG, x: 12, z: -3 });
+  a.player.rpg.property.ship = { type: 'small', boughtAt: 0 }; // FIXTURE: the deed (purchase is covered above)
+  const requestId = req();
+  assert.match(a.act('ship.board', { requestId }).error, /being made ready/);
+  assert.equal(a.player.rpg.location, GG, 'still ashore');
+  assert.equal(st(a).board ?? null, null, 'no boarding point kept');
+  assert.equal(a.events('teleport').length, 0, 'no landing was sent');
+  assert.ok(preloads.includes('town:31/1'), 'the deck load was started');
+  deckY = 9.075;
+  a.must('ship.board', { requestId }); // the refused claim was rolled back, so the same request now boards
+  assert.equal(a.player.rpg.location, 'town:31/1');
+  assert.equal(a.events('teleport').at(-1).y, 9.075, 'the landing names the deck');
+});

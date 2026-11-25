@@ -822,3 +822,59 @@ describe('[asset] live Mercantile and Personality in every trade price (Calculat
     assert.equal(browserPriceContext({ character: ch, mercantile: null }).mercantile, 30, 'null falls back');
   });
 });
+
+describe('checkout reply right after a reconnect (server/rpg/economy.js)', () => {
+  test('the keeper offers the basket before the interior survey re-announces it, and an open conversation updates', async () => {
+    const { createRpgRuntime } = await import('../server/rpg/runtime.js');
+    const { install: economy } = await import('../server/rpg/economy.js');
+    // FIXTURE: one shop interior whose survey (portal meta with shelves) arrives late, and a stub ledger with a keeper.
+    const SHOP = 'interior:Daggerfall/Gothway Garden/2,1/15';
+    let meta = null;
+    const keeper = { id: 'keeper-1', kind: 'npc', location: SHOP, shop: true, name: 'Keeper' };
+    const shop = { rev: 1, stock: new Map([['s1:iron-dagger', { template: 'iron-dagger', name: 'Iron Dagger', value: 10, quantity: 2, shelf: 1, group: 'Weapons' }]]) };
+    pick(shop, 1, 's1:iron-dagger', 1, 0); // picked before the disconnect: the ledger keeps it through the grace period
+    const talked = [];
+    const players = new Map();
+    const sent = [];
+    const rt = createRpgRuntime({
+      players,
+      features: [
+        { name: 'fixture', install: (ctx) => Object.assign(ctx.services, {
+          portals: { into: (loc) => (loc === SHOP && meta ? { meta } : null) },
+          shopLedger: {
+            keeperAt: (loc) => (loc === SHOP ? keeper : null),
+            peek: (loc) => (loc === SHOP ? shop : null),
+            withHolds: () => [[SHOP, shop]],
+            economy: { context: () => priceContext({ quality: 15, regionIndex: regionIndexOf(SHOP), minutes: 0, character: null }) },
+            talkBack: (p, e) => talked.push([p.id, e.id]),
+          },
+        }) },
+        { name: 'economy', install: economy },
+      ],
+      save: () => {},
+      send: (p, msg) => sent.push([p.id, msg]),
+      now: () => 0,
+      log: { info() {}, warn() {}, error() {} },
+    });
+    const p = { id: 1, name: 'Aldora', x: 0, z: 0, yaw: 0, moving: false, rpg: { location: SHOP, gold: 100 } };
+    players.set(1, p);
+    rt.join(p);
+    rt.tick(0.1, 0);
+    const baskets = () => sent.filter(([, m]) => m.type === 'gameEvent' && m.event.kind === 'shop.basket');
+    assert.equal(baskets().length, 0, 'the survey is still pending: no basket announced yet');
+
+    // The player talks to the keeper now: the dialogue view must already carry the checkout reply.
+    const b = rt.ctx.services.shopBasketFor(p, keeper);
+    assert.ok(b, 'the checkout reply is present on the first line');
+    assert.equal(b.count, 1);
+    assert.equal(b.basket, basketOf(shop, 1).id);
+    assert.ok(Number.isInteger(b.total) && b.total > 0);
+    assert.equal(rt.ctx.services.shopBasketFor(p, { ...keeper, id: 'someone-else' }), null, 'only this shop\'s keeper offers it');
+
+    // The survey lands: the basket is announced and the open conversation is re-sent with the reply.
+    meta = { shelves: [{ number: 1, x: 0, y: 0, z: 0, r: 1 }], buildingName: 'Shop', quality: 15 };
+    rt.tick(0.1, 0);
+    assert.equal(baskets().length, 1);
+    assert.deepEqual(talked.at(-1), [1, keeper.id]);
+  });
+});

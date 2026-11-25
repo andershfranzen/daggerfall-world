@@ -513,6 +513,9 @@ export function install(ctx) {
     const deck = shipLocation(st.ship.type);
     prepareDeck(deck);
     const y = services.collision?.groundAt?.(deck, 0, 0);
+    // Without the deck's collision the landing has no foot height and Play would stand at y 0, beside the hull.
+    // prepareDeck has started the load; the refusal rolls the request claim back, so a retry boards on deck.
+    if (services.collision?.groundAt && !Number.isFinite(y)) fail('Your ship is being made ready. Try again in a moment.');
     move(p, { location: deck, x: 0, y: Number.isFinite(y) ? y : undefined, z: 0, yaw: 0 }, 'your ship');
     say(p, `You board your ${SHIPS[st.ship.type].label.toLowerCase()}.`);
   });

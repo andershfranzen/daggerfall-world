@@ -12,7 +12,7 @@
 //   vampire:   null | {clanFactionId, lastFed, since}
 //   lycanthrope: null | {form:'werewolf'|'wereboar', transformed, lastMorph, lastKill, since}
 //   previousClanFactionId: null | number,
-//   sun: minutes of sunlight not yet charged, ticks: {quest, cure} last quest ticks announced
+//   sun / holy: minutes of sunlight / holy ground not yet charged, ticks: {quest, cure} last quest ticks announced
 // }
 
 import {
@@ -65,6 +65,7 @@ export function normalize(rpg, now) {
     lycanthrope: lyc ? { form: lyc.form, transformed: lyc.transformed === true, lastMorph: int(lyc.lastMorph, time - MORPH_COOLDOWN_MINUTES - 1), lastKill: int(lyc.lastKill, time), since: int(lyc.since, time) } : null,
     previousClanFactionId: CLANS[raw.previousClanFactionId] ? int(raw.previousClanFactionId) : null,
     sun: Math.max(0, Math.min(1e6, int(raw.sun))),
+    holy: Math.max(0, Math.min(1e6, int(raw.holy))),
     ticks: { quest: int(raw.ticks?.quest, Math.floor(time / QUEST_PERIOD)), cure: int(raw.ticks?.cure, Math.floor(time / CURE_QUEST_PERIOD)) },
   };
   return rpg.conditions;
@@ -230,6 +231,7 @@ export function healAttribute(st, attr, amount) {
  * Advance the character clock by `minutes`. `env`:
  *   rng()                      [0,1)
  *   sunMinutes: number         minutes of this stretch spent outdoors in shared daylight
+ *   holyMinutes: number        minutes of this stretch spent inside a holy place
  *   fullMoon: boolean          either moon full on the shared calendar now
  *   maxHealth: number
  * Returns a list of outcome objects the feature turns into vitals changes and messages:
@@ -323,6 +325,16 @@ export function advance(st, minutes, env) {
     if (hits) vit.health += hits * 12;
     if (hits) out.push({ type: 'sunlight', damage: hits * 12 });
   } else st.sun = 0;
+
+  // Vampire holy ground (VampirismEffect adds HolyDamage; PassiveSpecialsEffect.DamageFromHolyPlaces: 12 / 4 minutes).
+  const holyMinutes = Math.min(m, Math.max(0, Math.trunc(env.holyMinutes ?? 0)));
+  if (wasVampire && holyMinutes > 0) {
+    st.holy = (st.holy ?? 0) + holyMinutes;
+    const hits = Math.floor(st.holy / 4);
+    st.holy -= hits * 4;
+    if (hits) vit.health += hits * 12;
+    if (hits) out.push({ type: 'holy', damage: hits * 12 });
+  } else st.holy = 0;
 
   // ForceTransformDuringFullMoon does not happen while Hircine's Ring is worn.
   if (st.lycanthrope && env.fullMoon && !env.hircine && !st.lycanthrope.transformed) {

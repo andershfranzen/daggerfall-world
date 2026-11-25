@@ -43,6 +43,8 @@ export const name = 'conditions';
 const MAX_STEP = 1440 * 60; // catch-up bound per tick (60 days)
 const IDLE_STEP = 15; // game minutes batched while nothing time-critical runs
 const NOTIFY_PREFIX = 'condition';
+const TEMPLE_BUILDING = 14; // DFLocation.BuildingTypes.Temple
+const FIGHTER_TRAINERS = 849; // FactionFile.FactionIDs.Fighter_Trainers
 
 export function install(ctx, options = {}) {
   const S = (ctx.services ||= {});
@@ -154,6 +156,14 @@ export function install(ctx, options = {}) {
     if (!(Number(character(p)?.health) > 0)) return 0;
     return Math.max(0, Math.min(delta, c.minuteOfDay - 6 * 60));
   };
+  /** PlayerEnterExit.IsPlayerInHolyPlace: inside a temple or a Fighter Trainers hall (faction 849). */
+  const holyMinutes = (p, delta) => {
+    if (!delta || p.rpg?.defeated || !(Number(character(p)?.health) > 0)) return 0;
+    const loc = locationOf(p);
+    const meta = loc.startsWith('temple:') ? null : S.portals?.into?.(loc)?.meta;
+    const holy = S.isHolyPlace?.(p) ?? (loc.startsWith('temple:') || meta?.buildingType === TEMPLE_BUILDING || meta?.factionId === FIGHTER_TRAINERS);
+    return holy ? delta : 0;
+  };
   const level = (p) => Math.max(1, Math.trunc(character(p)?.level) || 1);
   const attr = (p, a) => {
     const v = S.effectiveAttribute?.(p, a);
@@ -253,13 +263,13 @@ export function install(ctx, options = {}) {
 
   // ------------------------------------------------------------------ time
 
-  function step(p, minutes, sunMinutes) {
+  function step(p, minutes, sunMinutes, holyMinutes = 0) {
     const st = state(p);
     const elapsed = Math.max(0, Math.min(minutes, MAX_STEP));
     const due = st.infection?.kind === 'vampirism' && M.infectionDue(st.infection, st.time + elapsed);
     if (!elapsed && !due) return true;
     const cemetery = due ? cemeteryFor(p, st.infection) : undefined;
-    const run = () => advance(p, st, elapsed, sunMinutes, cemetery);
+    const run = () => advance(p, st, elapsed, sunMinutes, cemetery, holyMinutes);
     // The awakening is one save: moving, charging time and granting spells are never separate writes.
     if (due && cemetery !== undefined && ctx.runAtomic && !ctx.inAction?.()) {
       return ctx.runAtomic(p, 'conditions.awakening', run).ok;
@@ -268,12 +278,12 @@ export function install(ctx, options = {}) {
     return true;
   }
 
-  function advance(p, st, minutes, sunMinutes, cemetery) {
+  function advance(p, st, minutes, sunMinutes, cemetery, holyMinutes = 0) {
     const c = S.worldClock?.();
     const date = c && Number.isFinite(c.minutes) ? dateFromMinutes(c.minutes) : null;
     const hourBefore = Math.floor(st.time / 60);
     const events = M.advance(st, minutes, {
-      rng, sunMinutes, fullMoon: !!date && isFullMoon(date), maxHealth: Number(character(p)?.maxHealth) || 0, hircine: hircine(p),
+      rng, sunMinutes, holyMinutes, fullMoon: !!date && isFullMoon(date), maxHealth: Number(character(p)?.maxHealth) || 0, hircine: hircine(p),
       deferVampire: cemetery === undefined,
     });
     if (events.length || Math.floor(st.time / 60) !== hourBefore) ctx.dirty(p);
@@ -323,6 +333,9 @@ export function install(ctx, options = {}) {
         return;
       case 'sunlight':
         tell(p, 'sunlight', 'The sunlight burns you!', { damage: e.damage });
+        return;
+      case 'holy':
+        tell(p, 'holy', 'This holy place burns you!', { damage: e.damage });
         return;
       case 'fullMoon':
         transformed(p, st.lycanthrope.form, true, 'You dream of the moon.');
@@ -412,8 +425,9 @@ export function install(ctx, options = {}) {
       lastWorld.set(p.id, world);
       const worldDelta = world !== null && prev !== null && prev !== undefined ? Math.max(0, world - prev) : 0;
       const target = playerMinutes(p);
-      const due = pending.get(p.id) ?? { minutes: 0, sun: 0 };
+      const due = pending.get(p.id) ?? { minutes: 0, sun: 0, holy: 0 };
       due.sun += sunlitMinutes(p, worldDelta);
+      due.holy += holyMinutes(p, worldDelta);
       if (target === null) due.minutes += worldDelta;
       const minutes = target !== null ? target - st.time : due.minutes;
       if (target !== null && target < st.time - 1440) { st.time = target; continue; } // clock reset by an operator: follow it
@@ -422,7 +436,7 @@ export function install(ctx, options = {}) {
       const awakening = st.infection?.kind === 'vampirism' && M.infectionDue(st.infection, st.time + Math.max(0, Math.min(minutes, MAX_STEP)));
       const urgent = !!st.vampire || st.poisons.some((x) => x.state !== 'complete') || Math.floor((st.time + minutes) / 1440) !== Math.floor(st.time / 1440);
       if (awakening || (minutes > 0 && (minutes >= IDLE_STEP || urgent))) {
-        if (step(p, minutes, due.sun)) pending.delete(p.id);
+        if (step(p, minutes, due.sun, due.holy)) pending.delete(p.id);
         else pending.set(p.id, due);
       } else pending.set(p.id, due);
     }

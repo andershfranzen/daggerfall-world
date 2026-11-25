@@ -316,7 +316,7 @@ export function install(api) {
       const price = { adjust: ui.market?.adjust ?? 1000, mercantile: pc.mercantile, personality: pc.personality };
       const rank = ch.guilds?.fighters?.rank;
       const quote = (it) => repairCost(it, smith.quality, Number.isInteger(rank) ? rank : null, price);
-      const leaveable = damaged.filter((it) => !repairRefusal(it) && !it.equipped);
+      const leaveable = damaged.filter((it) => !repairRefusal(it));
       if (leaveable.length > 1) {
         const total = leaveable.reduce((a, it) => a + quote(it), 0);
         const longest = Math.max(...repairBatchMinutes(leaveable));
@@ -324,11 +324,11 @@ export function install(api) {
           button('Leave all', () => act('repair.leave', { counterId: smith.id, itemIds: leaveable.map((it) => it.id), cost: total }), (ch.gold ?? 0) < total)));
       }
       for (const it of damaged) {
-        const refusal = repairRefusal(it) || (it.equipped ? `Unequip ${it.name} first.` : null);
+        const refusal = repairRefusal(it);
         const cost = quote(it);
         const pct = Math.round((100 * it.condition) / it.maxCondition);
         ul.append(el('li', {},
-          el('span', { class: 'tsv-name' }, itemIcon(api, it), it.name),
+          el('span', { class: 'tsv-name' }, itemIcon(api, it), it.name, it.equipped ? ' (worn)' : ''),
           el('span', { class: 'tsv-dim', text: `${pct}% · ${cost} gold · ${formatWait(repairMinutes(it), 0)}` }),
           refusal ? el('span', { class: 'tsv-dim tsv-small', text: refusal })
             : button('Leave for repair', () => act('repair.leave', { counterId: smith.id, itemId: it.id, cost }), (ch.gold ?? 0) < cost)));

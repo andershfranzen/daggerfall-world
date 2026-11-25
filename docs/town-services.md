@@ -50,7 +50,7 @@ Measured on the operator data: Gothway Garden has one Bank (quality 15) about 13
 ```
 { version: 1,
   accounts: { [regionKey]: { region, gold } },      // one account per region, key = lower-case region name
-  letters:  [{ id, amount, region, issuedAt }],      // letters of credit the character carries
+  letters:  [{ id, amount, region, issuedAt }],      // legacy only: moved into the pack as Letter of Credit items on join
   repairs:  [{ ticket, counterId, town, shop, item, cost, leftAt, readyAt }],
   recent:   [requestId, …],                          // last 64 processed client request ids
   seq }
@@ -69,7 +69,7 @@ All actions take `counterId` (from the counters event) and an optional `requestI
 | `bank.withdraw` | `amount` | At most this region's balance. Refused if the gold (400 per kg) would exceed the encumbrance limit. |
 | `bank.letter` | `amount` | At least 100. Charges `trunc(amount × 1.01)` to this region's account and gives a letter. |
 | `bank.redeem` | — | Deposits every carried letter into this region's account (classic deposit-all). |
-| `repair.leave` | `itemId, cost` | The item must be an unequipped, damaged weapon, armour or shield. `cost` must equal the server's quote. Pays, removes the item record from the pack, and opens a ticket. |
+| `repair.leave` | `itemId, cost` | The item must be a damaged weapon, armour or shield. An equipped item is unequipped as it is handed over (inventory `takeItem` with `allowEquipped`); a refusal or failed save rolls back the slot with the gold and the ticket. `cost` must equal the server's quote. Pays, removes the item record from the pack, and opens a ticket. A collected item comes back in the pack, not worn. |
 | `repair.collect` | `ticket, interrupt?` | Only at the same counter, in the same town. When ready, returns the same item record (same id) at full condition. With `interrupt:true` before it is ready, returns it unrepaired and does not refund the fee (classic). |
 
 Repair cost is `max(1, value / 10)`, then `2 × (c × (quality − 10) / 100 + c)` with C# integer division, then the Fighters Guild discount for members (`((10 − rank) << 8) / 10 × price >> 8`), with the shared regional price adjustment applied first and the classic buying trade price (Mercantile, Personality) last. See [shops-and-economy.md](shops-and-economy.md#repairs); several items left together use the classic batch timing. Repair time is `max(damage × 86400 / 1000, 86400)` game seconds, which is at least one game day, rounded up to minutes. It is measured on the shared world clock (`ctx.services.worldClock().minutes`), which advances 12× real time and never skips. A day is two real hours.
@@ -84,13 +84,13 @@ The panel `townServices` ("Bank & Repairs") is registered with the shell and lis
 
 ## Supported subset and differences from classic
 
-- Supported: regional accounts, deposit/withdraw, letters of credit (issue and deposit-all), repair at real armourers, weaponsmiths and general stores and at smith NPCs, shared-clock repair times, early pickup without refund, and the Fighters Guild repair discount.
-- Letters of credit are kept in `rpg.townServices.letters`, not as inventory items: the equipment catalogue has no letter template. They cannot be dropped, traded or sold.
-- Loans, houses, ships, the wagon and owned storage are in docs/property.md (package 13). Outstanding here: and repairing equipped items. Regional prices, batch timing and magic-item restrictions are in [shops-and-economy.md](shops-and-economy.md).
+- Supported: regional accounts, deposit/withdraw, letters of credit (issue and deposit-all), repair at real armourers, weaponsmiths and general stores and at smith NPCs (including items still worn), shared-clock repair times, early pickup without refund, and the Fighters Guild repair discount.
+- Letters of credit are Letter of Credit items (`letter-of-credit`, ItemTemplates 275, with a `credit` extra) in the pack. Records in `rpg.townServices.letters` from older saves become items on join. See [property.md](property.md) for paying with letters.
+- Loans, houses, ships, the wagon and owned storage are in docs/property.md (package 13). Regional prices, batch timing and magic-item restrictions are in [shops-and-economy.md](shops-and-economy.md).
 - Using a counter from the street door stands in for the shop interior. Once inside the building's interior instance, the whole interior counts as at the counter.
 
 ## Coordination notes
 
-- Server registration is in `server/rpg/features.js` (done by the manifest owner). The browser panel still needs `{ name: 'townServices', install }` from `client/gameplay/townServices.js` in `client/gameplay/features.js`.
+- Server registration is in `server/rpg/features.js`; the browser panel is registered as `{ name: 'townServices', install }` in `client/gameplay/features.js`.
 - `buildings.js` reuses `arena2Files` from `server/rpg/collision/arena2.js` and the interiors module's `locationPortals`. It loads the town once more for the spawn origin, because the interiors portal registry does not keep building type or quality. If the registry exposed `buildingType` and `quality` per portal, this feature could read counters from it instead.
 - Repairs re-insert the stored record with the inventory module's exported `normalizeRpg` and emit `inventoryChanged`. They never create a new item.
