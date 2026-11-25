@@ -258,6 +258,22 @@ export async function openPostgresGameStore(options = {}) {
       );
     },
 
+    /** Deletes an account's character link and linked player row in one transaction. Returns deleted playerId or null. */
+    async deleteForAccount(accountId) {
+      return transaction(async (client) => {
+        const key = accountKey(accountId);
+        const existing = await client.query(
+          'SELECT player_id FROM account_characters WHERE account_id = $1',
+          [key],
+        );
+        if (!existing.rows.length) return null;
+        const playerId = Number(existing.rows[0].player_id);
+        await client.query('DELETE FROM account_characters WHERE account_id = $1', [key]);
+        await client.query('DELETE FROM players WHERE id = $1', [playerId]);
+        return playerId;
+      });
+    },
+
     /**
      * Saves full rows (name, position, rpg) for all players and the given world-state rows
      * (`[[key, value|null]]`, null deletes) in ONE transaction. Throws on failure.
@@ -350,6 +366,8 @@ export function createBufferedGameStore(pgStore, options = {}) {
   // Latest un-committed snapshots keyed by player.id / world key.
   const pendingPlayers = new Map(); // id -> { id, name, x, z, yaw, rpg }
   const pendingWorld = new Map(); // key -> value (parsed clone) | null
+  // In-memory world_state mirror so synchronous callers (e.g. createRpgRuntime) can loadWorld() without awaiting.
+  const worldCache = new Map(); // key -> parsed value
 
   let inFlight = null; // Promise for the currently running commit batch
   let lastError = null;
@@ -441,6 +459,7 @@ export function createBufferedGameStore(pgStore, options = {}) {
     backend: 'postgres',
     buffered: true,
     inner: pgStore,
+    pool: pgStore.pool,
 
     create: (...args) => pgStore.create(...args),
     findByToken: (...args) => pgStore.findByToken(...args),
@@ -448,7 +467,32 @@ export function createBufferedGameStore(pgStore, options = {}) {
     createForAccount: (...args) => pgStore.createForAccount(...args),
     claimGuest: (...args) => pgStore.claimGuest(...args),
     setAccountUsername: (...args) => pgStore.setAccountUsername(...args),
-    loadWorld: (...args) => pgStore.loadWorld(...args),
+    async deleteForAccount(accountId) {
+      const deletedId = await pgStore.deleteForAccount(accountId);
+      if (deletedId != null) pendingPlayers.delete(deletedId);
+      return deletedId;
+    },
+    async preloadWorld(prefix = '') {
+      const rows = await pgStore.loadWorld(prefix);
+      for (const [k, v] of rows) {
+        if (!pendingWorld.has(k)) {
+          worldCache.set(k, structuredClone(v));
+        }
+      }
+      return rows;
+    },
+    /** Synchronous world_state read from the preloaded/write-through in-memory cache. */
+    loadWorld(prefix = '') {
+      const pfx = String(prefix ?? '');
+      const out = [];
+      for (const [k, v] of worldCache) {
+        if (k.startsWith(pfx)) {
+          out.push([k, structuredClone(v)]);
+        }
+      }
+      out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      return out;
+    },
     transaction: (...args) => pgStore.transaction(...args),
     ensureSchema: (...args) => pgStore.ensureSchema(...args),
 
@@ -459,7 +503,11 @@ export function createBufferedGameStore(pgStore, options = {}) {
       const pSnaps = snapshotPlayers(players);
       const wSnaps = snapshotWorld(world);
       for (const snap of pSnaps) pendingPlayers.set(snap.id, snap);
-      for (const [k, v] of wSnaps) pendingWorld.set(k, v);
+      for (const [k, v] of wSnaps) {
+        pendingWorld.set(k, v);
+        if (v === null) worldCache.delete(k);
+        else worldCache.set(k, structuredClone(v));
+      }
       scheduleDrain();
     },
 
