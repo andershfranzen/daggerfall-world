@@ -38,14 +38,23 @@
         <div class="field">
           <span class="label" id="data-label">Game data</span>
           <div id="data-drop" class="drop" data-state="empty" aria-labelledby="data-label">
-            <button id="data-pick" type="button" class="btn">Choose ARENA2 folder…</button>
+            <div class="drop-actions">
+              <button id="data-resume" type="button" class="btn btn-primary" hidden>Resume saved folder</button>
+              <button id="data-pick" type="button" class="btn">Choose ARENA2 folder…</button>
+              <button id="data-forget" type="button" class="btn btn-quiet" hidden>Forget saved folder &amp; clear cache</button>
+            </div>
             <p id="data-status" class="note" aria-live="polite">
               Select the ARENA2 folder from your Daggerfall install, or the install folder that contains it.
               You can also drop the folder here.
             </p>
+            <label class="drop-cache" id="data-cache-field">
+              <input id="data-cache" type="checkbox">
+              Keep a copy in this browser so the next visit loads without choosing the folder again
+            </label>
+            <p id="data-cache-status" class="note fine" aria-live="polite"></p>
           </div>
           <input id="data-input" type="file" webkitdirectory directory multiple hidden>
-          <p class="note fine">Files are read locally in this browser. Nothing is uploaded.</p>
+          <p class="note fine">Files are read and stored locally in this browser. Nothing is uploaded.</p>
         </div>
 
         <button id="enter-btn" type="submit" class="btn btn-primary" disabled>Enter the world</button>
