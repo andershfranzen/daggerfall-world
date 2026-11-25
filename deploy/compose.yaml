@@ -1,6 +1,8 @@
 # Public deployment: one game service + Caddy for automatic TLS. See docs/public-hosting.md.
 #   cp deploy/env.example deploy/.env   # set DFW_DOMAIN and ARENA2_HOST_DIR
 #   docker compose -f deploy/compose.yaml --env-file deploy/.env up -d --build
+# Optional PostgreSQL backend (see docs/postgresql-migration.md):
+#   docker compose -f deploy/compose.yaml --env-file deploy/.env --profile postgres up -d --build
 name: daggerfallworld
 
 services:
@@ -12,6 +14,8 @@ services:
     environment:
       PUBLIC_ORIGIN: https://${DFW_DOMAIN:?set DFW_DOMAIN in deploy/.env}
       MAX_PLAYERS: ${MAX_PLAYERS:-64}
+      DATABASE_URL: ${DATABASE_URL:-}
+      ACCOUNTS_DATABASE_URL: ${ACCOUNTS_DATABASE_URL:-}
     volumes:
       - dfw-data:/data
       - ${ARENA2_HOST_DIR:?set ARENA2_HOST_DIR in deploy/.env}:/gamedata/arena2:ro
@@ -25,6 +29,24 @@ services:
       - no-new-privileges:true
     cap_drop: [ALL]
     stop_grace_period: 20s
+
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-daggerfallworld}
+      POSTGRES_USER: ${POSTGRES_USER:-dfw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dfw} -d ${POSTGRES_DB:-daggerfallworld}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
 
   caddy:
     image: caddy:2
@@ -44,5 +66,6 @@ services:
 
 volumes:
   dfw-data:
+  pg-data:
   caddy-data:
   caddy-config:
