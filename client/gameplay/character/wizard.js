@@ -331,8 +331,8 @@ function biographyView(d, ctl) {
     return h('div', { class: 'cc-wait' },
       h('p', null, 'The classic biography is read from your own game files (BIOG files and TEXT.RSC in ARENA2).'),
       h('p', { class: 'cc-note' }, d.serverBiography
-        ? 'This world will choose your biography at random when you begin, since your files are not loaded here.'
-        : 'This world has no biography data, so your character starts without one.'));
+        ? 'Fate will choose your biography at random when you begin, since your local files are not loaded here.'
+        : 'This world has no biography files loaded, so your character will begin with a standard background (fate default). Continue to name your character.'));
   }
   if (!d.serverBiography) {
     return h('div', { class: 'cc-wait' },

@@ -434,6 +434,11 @@ export class CharacterDraft {
   }
 
   createRequest() {
+    const biography = this.bioAvailable() && this.bioDigest()
+      ? { biography: { answers: [...this.bioAnswers] } }
+      : this.serverBiography && !this.biog()
+        ? { biography: { random: true } }
+        : {};
     return {
       name: R.cleanCharacterName(this.name),
       race: this.race,
@@ -442,7 +447,7 @@ export class CharacterDraft {
       reflexes: this.reflexes,
       attributes: { ...this.attributes },
       skills: { ...this.skills },
-      ...(this.bioAvailable() && this.bioDigest() ? { biography: { answers: [...this.bioAnswers] } } : {}),
+      ...biography,
     };
   }
 
@@ -464,7 +469,11 @@ export class LevelUpDraft {
     this.attributes = { ...attributes };
     this.pool = pool;
   }
-  left() { return this.pool - R.ATTRIBUTES.reduce((n, a) => n + this.attributes[a] - this.start[a], 0); }
+  left() {
+    const headroom = R.ATTRIBUTES.reduce((n, a) => n + Math.max(0, R.MAX_STAT - this.start[a]), 0);
+    const target = Math.min(this.pool, headroom);
+    return target - R.ATTRIBUTES.reduce((n, a) => n + this.attributes[a] - this.start[a], 0);
+  }
   up(a) { if (this.left() > 0 && this.attributes[a] < R.MAX_STAT) { this.attributes[a]++; return true; } return false; }
   down(a) { if (this.attributes[a] > this.start[a]) { this.attributes[a]--; return true; } return false; }
   problem() {

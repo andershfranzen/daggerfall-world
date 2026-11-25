@@ -38,6 +38,7 @@ function restoreFocus(key, root) {
 export function install(api) {
   const ui = {
     mode: 'sheet', // sheet | wizard
+    dismissedWizard: false,
     draft: null,
     levelDraft: null,
     levelKey: '',
@@ -112,6 +113,7 @@ export function install(api) {
     },
     cancel: () => {
       if (character()?.draft) send('character.cancel');
+      ui.dismissedWizard = true;
       ui.mode = 'sheet';
       ui.draft = null;
       ui.error = null;
@@ -129,6 +131,7 @@ export function install(api) {
   function startWizard() {
     const ch = character();
     if (ch?.created) return;
+    ui.dismissedWizard = false;
     ui.mode = 'wizard';
     ui.draft ??= new CharacterDraft(ch?.name ?? '');
     ui.draft.localCareers ??= ui.localCareers ?? null;
@@ -158,6 +161,7 @@ export function install(api) {
       container.replaceChildren(h('p', { class: 'cc-note' }, 'Connecting to the world…'));
       return;
     }
+    if (!ch.created && !ui.dismissedWizard) ui.mode = 'wizard';
     if (ui.mode === 'wizard' && !ch.created) {
       ui.draft ??= new CharacterDraft(ch.name);
       ui.draft.localCareers ??= ui.localCareers ?? null;
@@ -215,7 +219,9 @@ export function install(api) {
     ui.busy = false;
     if (ch.created && ui.mode === 'wizard') {
       ui.mode = 'sheet';
+      ui.dismissedWizard = false;
       ui.draft = null;
+      try { sessionStorage.removeItem(promptKeyFor(ch)); } catch {}
     }
     const rollBefore = ui.draft?.rollKey;
     if (ui.draft && ch.draft) ui.draft.syncRoll(ch.draft);
@@ -247,13 +253,16 @@ export function install(api) {
     }
   });
 
+  const promptKeyFor = (ch) => `${PROMPT_KEY}:${ch?.name ?? ''}`;
+
   /** Seamless first-run creation: open the wizard once per browser session for an uncreated character. */
   function maybePrompt(ch) {
-    if (!ch || ch.created) return;
+    if (!ch || ch.created || ui.dismissedWizard) return;
+    const key = promptKeyFor(ch);
     let prompted = false;
-    try { prompted = sessionStorage.getItem(PROMPT_KEY) === '1'; } catch {}
+    try { prompted = sessionStorage.getItem(key) === '1'; } catch {}
     if (prompted) return;
-    try { sessionStorage.setItem(PROMPT_KEY, '1'); } catch {}
+    try { sessionStorage.setItem(key, '1'); } catch {}
     startWizard();
   }
 

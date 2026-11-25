@@ -20,7 +20,8 @@ import * as R from '../../client/gameplay/character/rules.js';
 import { parseClassCfg, CLASS_FILE_RE } from '../../client/gameplay/character/cfg.js';
 import * as K from '../../client/gameplay/character/classic.js';
 import { isIndoors, recoveryPerHour } from '../../client/gameplay/atmosphere/calendar.js';
-import { BASES, MATERIALS, isTemplate, maxEncumbrance } from './inventory.js';
+import { BASES, MATERIALS, isTemplate, maxEncumbrance, templateForClassic } from './inventory.js';
+import { loadCatalogue, STARTING_SPELLS, FALLBACK_STARTING } from './magic/catalogue.js';
 
 const OGHMA_BONUS_POOL = 30; // DaggerfallCharacterSheetWindow.oghmaBonusPool
 
@@ -140,8 +141,52 @@ export function biogItemTemplate({ group, index, material }) {
     else if (b && MATERIALS.weapon[material]) key = `${MATERIALS.weapon[material]}-${b}`; // WeaponToArmorMaterialType
   } else if (group === 14) { // ItemGroups.Gems
     key = base(index, 'gem') ?? null;
+  } else if (group === 9 || group === 18 || group === 19) { // ReligiousItems, Jewellery, MiscItems (incl. lights)
+    key = templateForClassic(group, index);
   }
   return key && isTemplate(key) ? key : null;
+}
+
+const CUSTOM_SCHOOL_STARTER_SPELLS = Object.freeze({
+  Destruction: [8],
+  Restoration: [97],
+  Illusion: [37, 44],
+  Alteration: [1, 2],
+  Thaumaturgy: [2],
+  Mysticism: [1],
+});
+const ROBE_CLASSES = new Set(['Mage', 'Sorcerer', 'Healer']);
+const STAFF_CLASSES = new Set(['Mage', 'Sorcerer', 'Healer', 'Monk']);
+
+/** True when a standard or custom career starts with spellcasting capability. */
+export function isSpellcastingCareer(career) {
+  if (!career) return false;
+  if (!career.custom && Object.hasOwn(STARTING_SPELLS, career.name)) return true;
+  if ((career.spellPointMultiplier ?? 0) >= 1) return true;
+  const core = [...(career.primarySkills ?? []), ...(career.majorSkills ?? [])];
+  return core.some((s) => R.MAGIC_SKILLS.includes(s));
+}
+
+/** Starting spell ids for any standard or custom career against the active spell catalogue. */
+export function startingSpellIdsForCareer(catalogue, career) {
+  if (!catalogue?.spells || !career) return [];
+  if (!career.custom) {
+    const std = STARTING_SPELLS[career.name];
+    if (!std?.length) return [];
+    if (catalogue.source !== 'SPELLS.STD') return FALLBACK_STARTING.filter((id) => catalogue.spells.has(id));
+    return std.map((i) => `std:${i}`).filter((id) => catalogue.spells.has(id));
+  }
+  if (!isSpellcastingCareer(career)) return [];
+  if (catalogue.source !== 'SPELLS.STD') return FALLBACK_STARTING.filter((id) => catalogue.spells.has(id));
+  const indices = new Set();
+  for (const skill of [...(career.primarySkills ?? []), ...(career.majorSkills ?? [])]) {
+    for (const idx of CUSTOM_SCHOOL_STARTER_SPELLS[skill] ?? []) indices.add(idx);
+  }
+  if (!indices.size) {
+    indices.add(37); // Light
+    indices.add(8); // Shock
+  }
+  return [...indices].map((i) => `std:${i}`).filter((id) => catalogue.spells.has(id));
 }
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -850,11 +895,80 @@ export function install(ctx) {
     }
     p.rpg.character = freshRecord(p, career, { attributes, skills, name, race: args.race, gender: args.gender, faceIndex, reflexes, created: true });
     if (bio) p.rpg.character.biography = applyBiography(p, bio);
+    grantStartingEquipment(p, career);
+    grantStartingSpells(p, career);
     recomputeMaxima(p);
     ctx.notify(p, { kind: 'characterCreated', text: `${name} the ${args.race} ${career.name} begins a new life.` });
     ctx.emit('characterCreated', { player: p, character: p.rpg.character });
     return { created: true };
   });
+
+  let spellCatalogue = null;
+  function getSpellCatalogue() {
+    if (!spellCatalogue) {
+      spellCatalogue = ctx.spellCatalogue ?? ctx.catalogue ?? loadCatalogue({
+        arena2Dir: ctx.dataPath ?? ctx.config?.arena2Dir ?? process.env.DFW_ARENA2 ?? null,
+        spellsStd: ctx.spellsStd ?? null,
+      });
+    }
+    return spellCatalogue;
+  }
+
+  /**
+   * Classic starting supplies on creation (when inventory is installed): a torch for Privateer's Hold,
+   * magicka potions/robes/staff for casters, and a legal fallback weapon when class restrictions forbid
+   * the default starter weaponry.
+   */
+  function grantStartingEquipment(p, career) {
+    const S = ctx.services;
+    if (!Array.isArray(p.rpg?.inventory) || typeof S.giveItem !== 'function') return;
+    const inv = p.rpg.inventory;
+    const has = (pred) => inv.some(pred);
+    const giveSafe = (template, qty = 1) => {
+      if (!isTemplate(template)) return;
+      try {
+        S.giveItem(p, template, qty);
+      } catch (err) {
+        ctx.log?.warn?.(`[character] starter item ${template} not given: ${err.message}`);
+      }
+    };
+    if (!has((i) => i.group === 'light')) giveSafe('torch', 1);
+    if (isSpellcastingCareer(career)) {
+      if (!has((i) => i.template === 'potion-of-magicka')) giveSafe('potion-of-magicka', 2);
+      if (ROBE_CLASSES.has(career.name) && !has((i) => i.base === 'plain-robes')) giveSafe('plain-robes', 1);
+    }
+    const wantsStaff = STAFF_CLASSES.has(career.name)
+      || career.primarySkills.includes('Blunt Weapon')
+      || career.majorSkills.includes('Blunt Weapon');
+    if (wantsStaff && !has((i) => i.base === 'staff')
+      && !equipmentRestriction(p, { group: 'weapon', material: 'iron', skill: 'Blunt Weapon' })) {
+      giveSafe('iron-staff', 1);
+    }
+    const hasLegalWeapon = has((i) => i.group === 'weapon' && !equipmentRestriction(p, i));
+    if (!hasLegalWeapon) {
+      for (const [template, skill] of [['iron-dagger', 'Short Blade'], ['iron-staff', 'Blunt Weapon'], ['iron-mace', 'Blunt Weapon'], ['iron-longsword', 'Long Blade']]) {
+        if (!equipmentRestriction(p, { group: 'weapon', material: 'iron', skill })) {
+          giveSafe(template, 1);
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * Grant class starting spells on character creation (magic.js runs grantStarting on join while the
+   * player is still the default uncreated Warrior, so spellcasters would otherwise start with none).
+   */
+  function grantStartingSpells(p, career) {
+    const m = p.rpg?.magic;
+    if (!m || !Array.isArray(m.known)) return;
+    const cat = getSpellCatalogue();
+    const ids = startingSpellIdsForCareer(cat, career);
+    m.known = [...new Set(ids)];
+    m.granted = true;
+    m.selected = m.known.find((id) => cat.spells.get(id)?.support !== 'unsupported') ?? null;
+    ctx.dirty(p);
+  }
 
   /** Gold, items and faction standing go through their owning features; the rest is kept on the sheet. */
   function applyBiography(p, bio) {
@@ -870,7 +984,7 @@ export function install(ctx) {
       let given = null;
       if (template && typeof S.giveItem === 'function') {
         try {
-          S.giveItem(p, template, 1);
+          S.giveItem(p, template, template === 'arrow' ? 20 : 1);
           given = template;
         } catch (err) {
           ctx.log?.warn?.(`[character] biography item ${template} not given: ${err.message}`);
