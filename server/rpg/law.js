@@ -34,9 +34,12 @@
 //   crimeSentenced {player, crime, region, verdict, fine, days}, legalRepChanged {player, region, delta, value, reason}
 // Game events (private): law.case {case, rep}, law.halt {chargeId, guardId, crime}, law.shelf {...}, law.court {...}
 
+import { readFileSync } from 'node:fs';
 import { parseLocation, exteriorOf } from '../../client/world/interiors/index.js';
+import { REGION_NAMES } from '../../client/world/maps.js';
 import { regionOf as climateRegionOf } from '../../client/gameplay/atmosphere/calendar.js';
-import { BUILDING, buildingHours, isBuildingOpen, isShop } from './npcs/people.js';
+import { parseFactionText } from '../../client/gameplay/npcs/factionFile.js';
+import { BUILDING, buildingHours, isBuildingOpen, isShop, regionFactions } from './npcs/people.js';
 import {
   CONSPIRACY_REP, CRIME_LABELS, THIEVING, VIOLENT, buildingLockValue, clampLegalRep, exteriorLockpickChance,
   goesToCourt, guildRescues, guiltyPlea, isCrime, pickpocketChance, pickpocketLoot, repLossFor, sentenceFor,
@@ -46,9 +49,10 @@ import {
 export const name = 'law';
 
 export const CITY_WATCH = 146;
-const REGION_FACTION = 201; // npcs' only regional people faction (the Daggerfall court)
+const REGION_FACTION = 201; // fallback Daggerfall court faction when FACTION.TXT / guilds are unavailable
 const PEOPLE_REGION = 'Daggerfall';
 const HISTORY_CAP = 50;
+const PICKPOCKET_CAP = 200;
 const ID_RE = /^[\w:,.#-]{1,120}$/;
 
 export const DEFAULTS = Object.freeze({
@@ -74,6 +78,8 @@ export const DEFAULTS = Object.freeze({
   patrolMs: 5_000,
   /** An opened exterior door stays open at most this long (game minutes). */
   doorOpenMinutes: 24 * 60,
+  /** Recent pickpocket attempts per character survive NPC population rebuilds for this long (real ms). */
+  pickpocketMemoryMs: 24 * 60 * 60_000,
 });
 
 const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.trunc(Number(v) || 0)));
@@ -86,11 +92,16 @@ export function install(ctx, options = {}) {
   const log = ctx.log ?? console;
 
   const guards = new Map(); // entity id -> {suspectId, chargeId, region, spawnedAt, halted, haltAt}
-  const pickpocketed = new WeakMap(); // one attempt per live person's instance and character
   const doors = new Map(); // `${from}#${id}` -> {openedBy, how, at, until}
   const lastPatrol = new Map(); // player id -> ms
   const lastDispatch = new Map();
   const chargeSeq = { n: 0 };
+
+  let parsedFactions = options.factions ?? null;
+  if (!parsedFactions && typeof ctx.dataFile === 'function') {
+    try { parsedFactions = parseFactionText(readFileSync(ctx.dataFile('FACTION.TXT'), 'latin1')); } catch { parsedFactions = null; }
+  }
+  const courtCache = new Map(); // region name -> faction id | null
 
   // ------------------------------------------------------------------ state
 
@@ -106,6 +117,10 @@ export function install(ctx, options = {}) {
     if (!Array.isArray(l.history)) l.history = [];
     if (!l.banished || typeof l.banished !== 'object' || Array.isArray(l.banished)) l.banished = {};
     if (!l.picks || typeof l.picks !== 'object' || Array.isArray(l.picks)) l.picks = {};
+    if (!l.pickpockets || typeof l.pickpockets !== 'object' || Array.isArray(l.pickpockets)) l.pickpockets = {};
+    for (const [k, v] of Object.entries(l.pickpockets)) {
+      if (typeof k !== 'string' || k.length > 120 || !Number.isFinite(v)) delete l.pickpockets[k];
+    }
     if (!l.tally || typeof l.tally !== 'object') l.tally = { thefts: 0, violent: 0 };
     if (l.charge && (typeof l.charge !== 'object' || !isCrime(l.charge.crime) || typeof l.charge.region !== 'string')) l.charge = null;
     if (l.charge === undefined) l.charge = null;
@@ -147,10 +162,62 @@ export function install(ctx, options = {}) {
     return value;
   }
 
-  /** Classic also moves the region's people faction; npcs only models Daggerfall's (201). */
+  function regionIndexFromName(region) {
+    if (typeof region !== 'string' || !region) return -1;
+    const want = region.toLowerCase();
+    return REGION_NAMES.findIndex((n) => n.toLowerCase() === want);
+  }
+
+  /** Resolves the regional noble court (or people) faction id for any Iliac Bay region. */
+  function courtFactionFor(region) {
+    if (typeof region !== 'string' || !region) return null;
+    const idx = regionIndexFromName(region);
+    if (options.regionCourtFactions) {
+      const explicit = options.regionCourtFactions[region] ?? (idx >= 0 ? options.regionCourtFactions[idx] : null);
+      if (Number.isInteger(explicit)) return explicit;
+    }
+    if (idx >= 0) {
+      const fromGuilds = S.regionCourt?.(idx) ?? S.regionFaction?.(idx);
+      if (Number.isInteger(fromGuilds)) return fromGuilds;
+    }
+    if (courtCache.has(region)) return courtCache.get(region);
+    let resolved = null;
+    if (idx >= 0 && parsedFactions) {
+      const rf = regionFactions(parsedFactions, idx);
+      resolved = rf.court ?? rf.people ?? null;
+    }
+    if (resolved == null && region === PEOPLE_REGION) resolved = REGION_FACTION;
+    courtCache.set(region, resolved);
+    return resolved;
+  }
+
+  /** Classic also moves the region's court/people faction across every Iliac Bay region. */
   function peopleRep(p, region, delta) {
-    if (region !== PEOPLE_REGION || !delta || typeof S.adjustReputation !== 'function') return;
-    S.adjustReputation(p, REGION_FACTION, delta);
+    if (!delta || typeof S.adjustReputation !== 'function') return;
+    const fid = courtFactionFor(region);
+    if (fid == null) return;
+    S.adjustReputation(p, fid, delta);
+  }
+
+  function prunePickpockets(l, now) {
+    const ttl = cfg.pickpocketMemoryMs;
+    const entries = Object.entries(l.pickpockets);
+    let changed = false;
+    for (const [k, ts] of entries) {
+      if (!Number.isFinite(ts) || (ttl > 0 && now - ts >= ttl)) {
+        delete l.pickpockets[k];
+        changed = true;
+      }
+    }
+    const remaining = Object.entries(l.pickpockets);
+    if (remaining.length > PICKPOCKET_CAP) {
+      remaining.sort((a, b) => a[1] - b[1]);
+      for (const [k] of remaining.slice(0, remaining.length - PICKPOCKET_CAP)) {
+        delete l.pickpockets[k];
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   const wanted = (p, region) => {
@@ -667,11 +734,18 @@ export function install(ctx, options = {}) {
     if (!ch) throw new Error('Create a character first.');
     const e = npcTarget(p, args.targetId, cfg.pickpocketReach);
     if (e.role === 'guard') throw new Error(`${e.name} keeps a hand on his purse.`);
-    const tried = pickpocketed.get(e) ?? new Set();
-    if (tried.has(p.id)) throw new Error(`${e.name} is watching you closely now.`);
-    tried.add(p.id);
-    pickpocketed.set(e, tried);
-    ctx.onRollback?.(() => tried.delete(p.id));
+    const l = state(p);
+    const now = ctx.now();
+    prunePickpockets(l, now);
+    const key = String(e.id);
+    if (Object.hasOwn(l.pickpockets, key)) throw new Error(`${e.name} is watching you closely now.`);
+    const prev = l.pickpockets[key];
+    l.pickpockets[key] = now;
+    prunePickpockets(l, now);
+    ctx.onRollback?.(() => {
+      if (prev === undefined) delete l.pickpockets[key];
+      else l.pickpockets[key] = prev;
+    });
     ctx.dirty(p);
     S.advanceSkill?.(p, 'Pickpocket', 1);
     const chance = pickpocketChance(skillOf(p, 'Pickpocket'));
@@ -779,7 +853,7 @@ export function install(ctx, options = {}) {
   // ------------------------------------------------------------------ services
 
   S.law = {
-    regionOf, legalRep, changeLegalRep, wanted, jailed, custody, commit, openDoor, bashDoor, doorOpen: (id, from) => {
+    regionOf, courtFactionFor, legalRep, changeLegalRep, wanted, jailed, custody, commit, openDoor, bashDoor, doorOpen: (id, from) => {
       if (id && typeof id === 'object') return doorOpen(id);
       return !!(from && doors.has(`${from}#${id}`) && doorRecord({ from, id }));
     },

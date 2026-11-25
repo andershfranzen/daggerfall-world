@@ -103,6 +103,8 @@ export const DEFAULTS = Object.freeze({
   meleeArc: 60,
   /** Half-angle (degrees) of the aimed bow cone. */
   bowArc: 12,
+  /** Classic arrow recovery: fraction of non-conjured player arrows hitting an enemy that remain recoverable on its corpse. */
+  arrowRecoveryChance: 1,
   /** Accept a swing this much earlier than the classic animation time (ms) for jitter. */
   swingTolerance: 120,
   /** Sight limit. Geometry and the forward half-plane constrain awareness inside it. */
@@ -821,6 +823,17 @@ export function install(ctx, options = {}) {
     e._pending = [];
     e._diedAt = ctx.now();
     e._loot = e._ally == null ? rollLoot(e, killer) : [];
+    if (e._ally == null && Array.isArray(e._stuckArrows) && e._stuckArrows.length) {
+      const stacks = new Map();
+      for (const a of e._stuckArrows) {
+        const key = `${a.template}|${a.variant ?? ''}`;
+        const cur = stacks.get(key);
+        if (cur) cur.quantity += 1;
+        else stacks.set(key, { template: a.template, quantity: 1, ...(a.variant != null ? { variant: a.variant } : {}) });
+      }
+      for (const entry of stacks.values()) e._loot.push(entry);
+      e._stuckArrows = [];
+    }
     e.lootable = e._loot.length > 0;
     setAnim(e, 'dead');
     if (floats(e) && Number.isFinite(e.y)) {
@@ -1666,9 +1679,11 @@ export function install(ctx, options = {}) {
     const owed = (p.rpg.combatFatigue ?? 0) + SWING_FATIGUE;
     const whole = Math.floor(owed);
     if ((c.fatigue ?? 0) < Math.max(1, whole)) throw new Error('You are too exhausted to attack.');
+    let firedArrow = null;
     if (weapon?.bow) {
       const arrow = S.findArrow ? S.findArrow(p) : S.findItem?.(p, 'arrow');
       if (!arrow) throw new Error('You have no arrows.');
+      firedArrow = { template: arrow.template ?? 'arrow', variant: arrow.variant ?? null, conjured: arrow.conjuredUntil != null };
       S.takeItem(p, arrow.id, 1, { consumeConjured: true });
     }
     const prevSwing = nextSwing.get(p.id);
@@ -1696,14 +1711,14 @@ export function install(ctx, options = {}) {
       return;
     }
     if (weapon?.bow) {
-      fireArrow(p, target, { weapon, item: weaponItem, direction });
+      fireArrow(p, target, { weapon, item: weaponItem, direction, arrow: firedArrow });
       return;
     }
     if (!target) return;
     resolvePlayerHit(p, target, { weapon, item: weaponItem, direction });
   });
 
-  function resolvePlayerHit(p, target, { weapon, item, direction }) {
+  function resolvePlayerHit(p, target, { weapon, item, direction, arrow = null }) {
     if (target.kind === 'npc') {
       S.law?.strikeTownsperson?.(p, target, { weapon: item?.template ?? 'unarmed' });
       return;
@@ -1759,6 +1774,13 @@ export function install(ctx, options = {}) {
       try {
         S.damageItem?.(p, item?.id ?? 'weapon', 1);
       } catch {}
+    }
+    if (weapon?.bow && arrow && !arrow.conjured && target._ally == null
+      && (cfg.arrowRecoveryChance >= 1 || (cfg.arrowRecoveryChance > 0 && random() < cfg.arrowRecoveryChance))) {
+      (target._stuckArrows ??= []).push({
+        template: arrow.template ?? 'arrow',
+        ...(arrow.variant != null ? { variant: arrow.variant } : {}),
+      });
     }
     const result = applyMonsterDamage(target, damage, p, weapon?.bow ? 'arrow' : weapon ? 'weapon' : 'hand');
     if (result.damage > 0) S.conditionPlayerHit?.(p, target, result.damage);

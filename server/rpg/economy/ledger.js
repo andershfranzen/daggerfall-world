@@ -5,8 +5,9 @@
 
 import { dateFromMinutes } from '../../../client/gameplay/atmosphere/calendar.js';
 import {
-  DEFAULT_QUALITY, STORE_BUYS, buyPrice, itemGroupOf, priceContext, regionIndexOf, sellPrice, storeRefusal,
+  DEFAULT_QUALITY, STORE_BUYS, itemGroupOf, priceContext, regionIndexOf, sellPrice, storeRefusal,
 } from '../../../client/gameplay/economy/rules.js';
+import { adjustedBuyPrice } from './dynamic.js';
 import { stockShelf, stockedDate, TEMPLATE_GROUP } from './stock.js';
 
 const ROSTER_QUALITY = DEFAULT_QUALITY;
@@ -62,7 +63,7 @@ export function createShopEconomy(ctx, { describe }) {
   const groupOf = (item) => itemGroupOf(item, groupByIndex);
 
   /** Unit price the player pays. */
-  const buyUnit = (p, e, it, shop) => buyPrice(it.value, 1, context(p, e, shop), it.group ?? null);
+  const buyUnit = (p, e, it, shop) => adjustedBuyPrice(it.value, 1, context(p, e, shop), it.group ?? null);
   /** Unit price the player is paid. */
   const sellUnit = (p, e, value, shop) => sellPrice(value, 1, context(p, e, shop));
 

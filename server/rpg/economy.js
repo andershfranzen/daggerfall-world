@@ -31,11 +31,15 @@
 //                                 minds the shop p stands in (the shopkeeper's dialogue view offers the checkout)
 
 import { readFileSync } from 'node:fs';
+import { dateFromMinutes } from '../../client/gameplay/atmosphere/calendar.js';
 import {
-  applyRegional, basketLine, marketNote, priceAdjust, priceContext, regionIndexOf, setFactionPowers, tradePrice,
+  MERCHANTS_FACTION, applyRegional, marketNote, priceAdjust, priceContext, regionIndexOf, setFactionPowers, tradePrice,
 } from '../../client/gameplay/economy/rules.js';
 import { parseFactionText } from '../../client/gameplay/npcs/factionFile.js';
 import { basketOf, pick, returnAll, settle, unpick } from './economy/basket.js';
+import {
+  adjustedBasketLine, merchantsMonthlyDelta, monthlyPriceCounts, regionalHolidayPrice,
+} from './economy/dynamic.js';
 
 export const name = 'economy';
 export const SHELF_REACH = 1.75; // metres beyond the shelf's own half-width
@@ -65,10 +69,91 @@ export function install(ctx) {
     const m = services.worldClock?.()?.minutes;
     return Number.isFinite(m) ? m : null;
   };
-  // FormulaHelper.UpdateRegionalPrices: The Merchants' power against each province's, from the operator's FACTION.TXT.
+  // FormulaHelper.UpdateRegionalPrices: The Merchants' power against each province's, from the operator's FACTION.TXT
+  // plus live runtime overrides and the monthly Merchants' power step persisted in shared world state (`economy:state`).
+  const liveFactions = new Map();
+  const persistedPowers = {};
+  let lastMonthKey = null;
+
   try {
-    if (typeof ctx.dataFile === 'function') setFactionPowers(parseFactionText(readFileSync(ctx.dataFile('FACTION.TXT'), 'latin1')));
-  } catch { /* no game data: the power term stays 0 */ }
+    if (typeof ctx.dataFile === 'function') {
+      const parsed = parseFactionText(readFileSync(ctx.dataFile('FACTION.TXT'), 'latin1'));
+      for (const [id, f] of parsed) liveFactions.set(id, { ...f });
+    }
+  } catch { /* no game data: start empty until live powers are set */ }
+
+  for (const [key, val] of ctx.loadWorld?.('economy:') ?? []) {
+    if (key !== 'economy:state' || !val || typeof val !== 'object') continue;
+    if (Number.isInteger(val.monthKey)) lastMonthKey = val.monthKey;
+    if (val.powers && typeof val.powers === 'object') {
+      for (const [k, v] of Object.entries(val.powers)) {
+        const id = Number(k);
+        if (!Number.isInteger(id) || !Number.isFinite(v)) continue;
+        const pwr = Math.max(0, Math.min(1000, Math.trunc(v)));
+        persistedPowers[id] = pwr;
+        const existing = liveFactions.get(id);
+        if (existing) existing.power = pwr;
+        else liveFactions.set(id, { id, type: id === MERCHANTS_FACTION ? 2 : 7, region: -1, power: pwr });
+      }
+    }
+  }
+  if (liveFactions.size) setFactionPowers(liveFactions);
+
+  function persistEconomyState() {
+    ctx.dirtyWorld?.('economy:state', { monthKey: lastMonthKey, powers: { ...persistedPowers } });
+  }
+
+  function setFactionPower(factionId, value, { delta = false, type = null, region = null } = {}) {
+    const id = Number(factionId);
+    if (!Number.isInteger(id) || !Number.isFinite(value)) return null;
+    let entry = liveFactions.get(id);
+    if (!entry) {
+      entry = {
+        id,
+        type: Number.isInteger(type) ? type : id === MERCHANTS_FACTION ? 2 : 7,
+        region: Number.isInteger(region) ? region : -1,
+        power: 50,
+      };
+      liveFactions.set(id, entry);
+    } else {
+      if (Number.isInteger(type)) entry.type = type;
+      if (Number.isInteger(region)) entry.region = region;
+    }
+    const base = Number.isFinite(entry.power) ? entry.power : 50;
+    const next = Math.max(0, Math.min(1000, Math.trunc(delta ? base + value : value)));
+    entry.power = next;
+    persistedPowers[id] = next;
+    setFactionPowers(liveFactions);
+    persistEconomyState();
+    return next;
+  }
+
+  function updateMonthlyEconomy(classicMinutes = minutes(), { counts = null } = {}) {
+    if (!Number.isFinite(classicMinutes)) return { stepped: false, monthKey: lastMonthKey };
+    const d = dateFromMinutes(classicMinutes);
+    const monthKey = d.year * 12 + d.month;
+    if (lastMonthKey === monthKey) return { stepped: false, monthKey };
+    const tallied = counts ?? monthlyPriceCounts(classicMinutes);
+    const delta = merchantsMonthlyDelta(tallied);
+    lastMonthKey = monthKey;
+    let merchantsPower = liveFactions.get(MERCHANTS_FACTION)?.power ?? null;
+    if (delta !== 0) {
+      // Ensure a fallback province exists if running without FACTION.TXT so the Merchants' step affects regional prices.
+      const hasProvince = [...liveFactions.values()].some((f) => f.type === 7 && Number.isFinite(f.power));
+      if (!hasProvince) liveFactions.set(852, { id: 852, type: 7, region: -1, power: 50 });
+      merchantsPower = setFactionPower(MERCHANTS_FACTION, delta, { delta: true });
+    } else {
+      persistEconomyState();
+    }
+    const out = { stepped: true, monthKey, ...tallied, delta, merchantsPower };
+    ctx.emit?.('economyMonthly', out);
+    return out;
+  }
+
+  ctx.on?.('factionPowerChanged', ({ factionId, power, delta, type, region } = {}) => {
+    if (Number.isFinite(delta)) setFactionPower(factionId, delta, { delta: true, type, region });
+    else if (Number.isFinite(power)) setFactionPower(factionId, power, { type, region });
+  });
   const browsing = new Map(); // player id -> {location, shelf}
   const announced = new Map(); // player id -> location last announced
 
@@ -89,6 +174,12 @@ export function install(ctx) {
 
   services.regionPriceAdjust = (regionIndex) => priceAdjust(regionIndex, minutes());
   services.regionalPrice = (p, cost) => applyRegional(cost, priceAdjust(regionIndexOf(ctx.location(p)), minutes()));
+  services.setFactionPower = setFactionPower;
+  services.adjustFactionPower = (factionId, delta, opts = {}) => setFactionPower(factionId, delta, { ...opts, delta: true });
+  services.factionPower = (factionId) => liveFactions.get(Number(factionId))?.power ?? null;
+  services.updateMonthlyEconomy = updateMonthlyEconomy;
+  services.regionalHolidayPrice = regionalHolidayPrice;
+  services.economyState = () => ({ monthKey: lastMonthKey, powers: { ...persistedPowers } });
   /**
    * CalculateTradePrice's player inputs: live Mercantile (GetLiveSkillValue: conditions, blessings, EnhancesSkill) and
    * live Personality (LivePersonality: magic, condition penalties, blessings), from the character feature. Null fields
@@ -182,7 +273,7 @@ export function install(ctx) {
     if (!h?.lines.size) return 0;
     const pc = ledger().economy.context(p, keeper, shop);
     let cost = 0;
-    for (const l of h.lines.values()) cost += basketLine(l.value, l.quantity, pc, l.group ?? null);
+    for (const l of h.lines.values()) cost += adjustedBasketLine(l.value, l.quantity, pc, l.group ?? null);
     return Math.max(1, tradePrice(cost, pc.quality, false, pc));
   }
   /** DaggerfallTradeWindow.DoSteal: basket weight (kg, truncated) + the number of item entries (a stack counts once). */
@@ -205,7 +296,7 @@ export function install(ctx) {
     const pc = keeper && shop ? L.economy.context(p, keeper, shop) : null;
     const lines = h ? [...h.lines].map(([key, l]) => ({
       key, name: l.name, quantity: l.quantity, icon: l.icon, variant: l.variant, shelf: l.shelf ?? null,
-      price: pc ? Math.max(1, tradePrice(basketLine(l.value, l.quantity, pc, l.group ?? null), pc.quality, false, pc)) : null,
+      price: pc ? Math.max(1, tradePrice(adjustedBasketLine(l.value, l.quantity, pc, l.group ?? null), pc.quality, false, pc)) : null,
     })) : [];
     return {
       kind: 'shop.basket', location, basket: h?.id ?? null, seq: h?.seq ?? 0,
@@ -513,6 +604,8 @@ export function install(ctx) {
     }
   });
   ctx.onTick?.(() => {
+    const m = minutes();
+    if (m != null) updateMonthlyEconomy(m);
     for (const p of ctx.players.values()) {
       if (announced.get(p.id) !== ctx.location(p)) announce(p);
     }
