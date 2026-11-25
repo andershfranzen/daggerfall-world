@@ -220,7 +220,7 @@ export function eligibility(character, group, variant, rep) {
   return { ok: true, reason: null };
 }
 
-/** Guild.CalculateNewRank: -1 = expelled (Thieves Guild and Dark Brotherhood never expel: 0). */
+/** Guild.CalculateNewRank: -1 = expelled when rep < 0 (Thieves Guild and Dark Brotherhood never expel: 0). */
 export function newRank(character, group, variant, rep) {
   if (rep < 0) return GROUPS[group]?.noExpulsion ? 0 : -1;
   const list = guildSkills(group, variant);
@@ -229,7 +229,7 @@ export function newRank(character, group, variant, rep) {
     const { high, low } = highLow(character, list, r);
     if (rep < RANK_REQ_REPUTATION[r] || high < 1 || low + high < 2) break;
   }
-  return Math.max(GROUPS[group]?.noExpulsion ? 0 : -1, r - 1);
+  return Math.max(0, r - 1);
 }
 
 /**
@@ -324,6 +324,7 @@ export function privileges(group, variant, rank) {
   if (freeHealing(group, variant, rank)) out.push('freeHealing');
   if (group === 'knights' && rank >= 4) out.push('freeRooms');
   if (group === 'knights' && freeShipTravel(rank)) out.push('freeShips');
+  if (group === 'knights' && rank >= 9) out.push('house');
   return [...new Set(out)];
 }
 

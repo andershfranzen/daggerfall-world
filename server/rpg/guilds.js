@@ -449,9 +449,17 @@ export function install(ctx, options = {}) {
 
   /** Guild.HallAccessAnytime for exactly this hall (temples/orders must match). */
   function guildHallAccess(p, portal) {
+    if (!p) return false;
     const hall = hallOfBuilding(portal);
     if (!hall) return false;
     return hallAccessAnytime(hall.group, rankAt(p, hall) ?? -1);
+  }
+  /** Whether `p` is a member of `target` (guild group string, hall, NPC entity, or building/portal). */
+  function isMember(p, target, opts = {}) {
+    if (!p || !target) return false;
+    if (typeof target === 'string') return guildRank(p, target, opts) !== null;
+    const hall = isGroup(target.group) ? target : (hallOfBuilding(target) ?? hallOf(target));
+    return !!memberOf(p, hall);
   }
   /** Guild.CanRest for exactly this hall; never in taverns (they carry the Fighters Guild faction). */
   function guildCanRest(p, where) {
@@ -647,7 +655,7 @@ export function install(ctx, options = {}) {
   };
 
   const api = {
-    joinOffered, freeHealingAt, table, hallOf, hallOfBuilding, memberOf, rankAt, describe, access, join, greet, donate, cureQuote, receiveArmor,
+    joinOffered, freeHealingAt, table, hallOf, hallOfBuilding, memberOf, isMember, rankAt, describe, access, join, greet, donate, cureQuote, receiveArmor,
     tutor, updateRank, addMembership, changeReputation, normalize,
     reputation, rankFor, privileges: (p) => Object.entries(stateOf(p).guilds).map(([g, m]) => ({
       group: g, variant: m.variant ?? null, name: groupName(table, g, m.variant), rank: m.rank, title: rankTitle(g, m.rank),
@@ -674,6 +682,7 @@ export function install(ctx, options = {}) {
     avoidDeath,
     guildBreathScale: (p) => breathScale(p?.rpg?.guilds),
     guildHallAccess,
+    guildIsMember: isMember,
     guildCanRest,
     guildRank,
     templeRank: (p, deityId) => guildRank(p, 'temple', { factionId: deityId }),
