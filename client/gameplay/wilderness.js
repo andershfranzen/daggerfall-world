@@ -35,7 +35,7 @@ import * as M from '../lib/mat.js';
 import { SceneryPass } from './scenery/pass.js';
 import { locationOf } from './api.js';
 import { sceneLocationId } from './travel.js';
-import { lookFor, lookOf, sameLook, reskinMesh, skyIndexFor, sceneClimate } from '../world/exterior/season.js';
+import { lookFor, lookOf, sameLook, reskinMesh, skyIndexFor, sceneClimate, hasWinterSwap } from '../world/exterior/season.js';
 import { readDaySky, skyFileName, DEFAULT_SKY_FRAME } from '../world/scenery/sky.js';
 import { readBlob } from '../world/bsa.js';
 import { WEATHER_PERIOD_HOURS, regionOf } from './atmosphere/calendar.js';
@@ -138,7 +138,7 @@ export function install(api, {
     clockKnown: false, // the server's clock event arrived: the season is the shared one, not a guess
     look: null, // {winter} every drawn scene should have
     lookCandidate: null, // {look, since} while a new look settles
-    lastLook: 0,
+    lastLook: -Infinity,
     reskin: null, // {mesh, key, ctrl, look} the one background build in flight
     reskinFailed: new WeakMap(), // mesh -> time of its last failed rebuild
     skies: new Map(), // SKY index -> promise of sky data
@@ -372,13 +372,13 @@ export function install(api, {
   function lookTick(t) {
     const want = settledLook(t);
     if (!want) return;
+    const drawn = drawnMeshes();
     const job = S.reskin;
-    if (job && (!sameLook(job.look, want) || !resident(job.mesh))) {
-      job.ctrl.aborted = true; // the season turned back, or the place is gone
+    if (job && (!sameLook(job.look, want) || !resident(job.mesh) || !drawn.has(job.mesh))) {
+      job.ctrl.aborted = true; // the season turned back, or the place is no longer drawn
       S.reskin = null;
       S.seasonCounters.discarded++;
     }
-    const drawn = drawnMeshes();
     // Cached scenes nobody draws are rebuilt on demand rather than now.
     for (const [key, e] of [...stream.entries]) {
       if (e.state !== 'ready' || drawn.has(e.mesh) || sameLook(lookOf(e.mesh), want)) continue;
@@ -395,7 +395,15 @@ export function install(api, {
 
   function reskin(mesh, look) {
     const key = keyOfMesh(mesh);
-    if (!key || !filesNow().length) return;
+    if (!key) return;
+    // Desert-based towns (climateBase === 0) keep identical ground, buildings and nature year-round:
+    // mark the look in place without rebuilding the scene or re-uploading unchanged textures.
+    if (!hasWinterSwap(mesh)) {
+      mesh.look = { winter: !!look.winter };
+      api.emit('exteriorLook', { key, look: lookOf(mesh), changed: { uv: false, atlas: false, flats: false, mechanisms: 0 } });
+      return;
+    }
+    if (!filesNow().length) return;
     const ctrl = { aborted: false };
     const job = { mesh, key, ctrl, look };
     S.reskin = job;
@@ -406,7 +414,7 @@ export function install(api, {
     fresh.then((built) => {
       if (S.reskin !== job) return; // replaced or abandoned: a stale result is never shown
       S.reskin = null;
-      if (ctrl.aborted || !sameLook(S.look, look) || !resident(mesh)) { S.seasonCounters.discarded++; return; }
+      if (ctrl.aborted || !sameLook(S.look, look) || !resident(mesh) || !drawnMeshes().has(mesh)) { S.seasonCounters.discarded++; return; }
       const changed = reskinMesh(mesh, built);
       if (!changed) {
         S.seasonCounters.failed++;
@@ -538,6 +546,7 @@ export function install(api, {
     S.view = null;
     S.rebased = null;
     S.draws = [];
+    if (S.reskin) { S.reskin.ctrl.aborted = true; S.reskin = null; S.seasonCounters.discarded++; }
     setSky(null);
     rendererNow()?.setLayers([]);
     stream.pin([]);
@@ -663,6 +672,11 @@ export function install(api, {
       if (S.view) for (const k of stream.plan(S.view).need.keys()) keep.add(k);
       if (S.view && !isExterior(loc)) keep.clear();
       stream.cancelExcept(keep);
+      if (S.reskin && !drawnMeshes().has(S.reskin.mesh)) {
+        S.reskin.ctrl.aborted = true;
+        S.reskin = null;
+        S.seasonCounters.discarded++;
+      }
     }
     if (parseWildernessLocation(loc)) {
       loadWild(loc);
@@ -760,7 +774,7 @@ export function install(api, {
     }),
     api.on('event', (ev) => {
       // The shared clock: from now on the season is the server's, not the local estimate.
-      if (ev?.kind === 'clock') { S.clockKnown = true; S.lastLook = 0; }
+      if (ev?.kind === 'clock') { S.clockKnown = true; S.lastLook = -Infinity; }
       // Sent before the new-frame position and the location change (server/rpg/overland.js).
       onOverlandEvent(ev);
     }),

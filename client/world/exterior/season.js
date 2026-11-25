@@ -54,11 +54,32 @@ export function skyIndexFor(climateValue, season, weather = 'sunny', variant = 0
   return base + (SEASONS[String(season ?? 'summer').toLowerCase()] ?? SEASONS.summer);
 }
 
+/** Climate values whose base is desert (0): Desert (224), Desert2 (225), Subtropical (229). */
+export function isDesertClimate(climateValue) {
+  return climateValue === 224 || climateValue === 225 || climateValue === 229;
+}
+
 /** Climate value whose sky the player sees in an exterior scene (town or wilderness centre pixel). */
 export function sceneClimate(mesh) {
   if (!mesh) return null;
   const v = mesh.kind === 'wilderness' ? mesh.wilderness?.climate?.value : mesh.source?.climate?.value;
   return Number.isInteger(v) ? v : null;
+}
+
+/**
+ * Whether a scene's ground/building/nature textures change between summer and winter.
+ * Towns in desert-based climates (climateBase === 0) keep dry ground, buildings and nature year-round
+ * (TerrainMaterialProvider skips ClimateBaseType.Desert; ClimateSwaps has no snow set for base 0).
+ */
+export function hasWinterSwap(mesh) {
+  if (!mesh) return false;
+  if (mesh.kind !== 'wilderness') {
+    const base = mesh.source?.climate?.climateBase;
+    if (Number.isInteger(base)) return base !== 0;
+    const v = sceneClimate(mesh);
+    if (v !== null) return !isDesertClimate(v);
+  }
+  return true;
 }
 
 const same = (a, b) => {
@@ -78,7 +99,7 @@ export function reskinMesh(target, fresh) {
   if (!target || !fresh || !same(target.positions, fresh.positions)) return null;
   const changed = { uv: false, atlas: false, flats: false, mechanisms: 0 };
   if (!same(target.uv, fresh.uv)) { target.uv = fresh.uv; changed.uv = true; }
-  if (fresh.atlas && !(target.atlas && same(target.atlas.pixels, fresh.atlas.pixels) && target.atlas.width === fresh.atlas.width)) {
+  if (fresh.atlas && !(target.atlas && same(target.atlas.pixels, fresh.atlas.pixels) && target.atlas.width === fresh.atlas.width && target.atlas.height === fresh.atlas.height)) {
     target.atlas = fresh.atlas;
     changed.atlas = true;
   }

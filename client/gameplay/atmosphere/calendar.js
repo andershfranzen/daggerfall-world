@@ -9,7 +9,9 @@
 // epoch, and the new-game start of 13:30 on the 4th of Morning Star, 3E405.
 // Notices: client/gameplay/atmosphere/NOTICES.txt.
 //
-// The weather schedule and the light curve are this project's own.
+// The weather probability table follows the Daggerfall Chronicles (pg. 47) by way of
+// Daggerfall Unity's Assets/Resources/WeatherTable.json (MIT, (c) 2009-2023 Daggerfall
+// Workshop). The six-hour forecast period and the light curve are this project's own.
 
 import { regionNameOf } from '../travel/identity.js';
 import { CLIMATE } from '../travel/catalog.js';
@@ -142,13 +144,82 @@ export function hash32(str) {
   return h >>> 0;
 }
 
-/** Weights per season: [sunny, cloudy, overcast, fog, rain, thunder, snow]. */
-const WEATHER_WEIGHTS = Object.freeze({
-  Winter: [22, 20, 18, 8, 4, 0, 28],
-  Spring: [34, 24, 12, 8, 16, 6, 0],
-  Summer: [50, 22, 8, 3, 9, 8, 0],
-  Fall: [30, 24, 16, 10, 16, 4, 0],
+/**
+ * Classic Daggerfall Chronicles (pg. 47) / DFU WeatherTable.json climate × season weather
+ * probability tables (percentages summing to 100): [sunny, cloudy, overcast, fog, rain, thunder, snow].
+ */
+export const WEATHER_TABLE = Object.freeze({
+  Desert: Object.freeze({
+    Winter: Object.freeze([75, 15, 0, 3, 5, 2, 0]),
+    Spring: Object.freeze([75, 15, 0, 0, 5, 5, 0]),
+    Summer: Object.freeze([85, 15, 0, 0, 0, 0, 0]),
+    Fall: Object.freeze([80, 15, 0, 0, 3, 2, 0]),
+  }),
+  Mountains: Object.freeze({
+    Winter: Object.freeze([18, 20, 25, 2, 0, 0, 35]),
+    Spring: Object.freeze([30, 23, 15, 2, 20, 10, 0]),
+    Summer: Object.freeze([45, 25, 15, 0, 10, 5, 0]),
+    Fall: Object.freeze([30, 18, 20, 2, 20, 10, 0]),
+  }),
+  Rainforest: Object.freeze({
+    Winter: Object.freeze([15, 20, 25, 3, 25, 12, 0]),
+    Spring: Object.freeze([20, 15, 10, 3, 37, 15, 0]),
+    Summer: Object.freeze([35, 20, 10, 0, 25, 10, 0]),
+    Fall: Object.freeze([20, 20, 20, 0, 25, 15, 0]),
+  }),
+  Swamp: Object.freeze({
+    Winter: Object.freeze([15, 20, 25, 25, 0, 0, 15]),
+    Spring: Object.freeze([10, 10, 20, 20, 25, 15, 0]),
+    Summer: Object.freeze([25, 15, 15, 15, 20, 10, 0]),
+    Fall: Object.freeze([15, 15, 15, 20, 20, 15, 0]),
+  }),
+  Subtropical: Object.freeze({
+    Winter: Object.freeze([20, 20, 20, 5, 25, 10, 0]),
+    Spring: Object.freeze([30, 15, 10, 3, 27, 15, 0]),
+    Summer: Object.freeze([40, 15, 10, 0, 20, 15, 0]),
+    Fall: Object.freeze([25, 20, 15, 0, 25, 15, 0]),
+  }),
+  Woodlands: Object.freeze({
+    Winter: Object.freeze([25, 15, 20, 5, 10, 0, 25]),
+    Spring: Object.freeze([35, 15, 10, 5, 25, 10, 0]),
+    Summer: Object.freeze([60, 20, 5, 0, 10, 5, 0]),
+    Fall: Object.freeze([25, 15, 20, 10, 20, 10, 0]),
+  }),
 });
+
+/**
+ * Map a CLIMATE.PAK value (223–232) to its WeatherTable climate group, matching DFU's
+ * WeatherManager.SetClimateWeathers + TravelTimeCalculator.climateIndices (MountainWoods,
+ * Woodlands and HauntedWoodlands share Woodlands; Desert and Desert2 share Desert; Ocean
+ * and unknown climates fall back to Woodlands).
+ */
+export function climateWeatherGroup(climate) {
+  switch (climate) {
+    case CLIMATE.DESERT:
+    case CLIMATE.DESERT2:
+      return 'Desert';
+    case CLIMATE.MOUNTAIN:
+      return 'Mountains';
+    case CLIMATE.RAINFOREST:
+      return 'Rainforest';
+    case CLIMATE.SWAMP:
+      return 'Swamp';
+    case CLIMATE.SUBTROPICAL:
+      return 'Subtropical';
+    case CLIMATE.MOUNTAIN_WOODS:
+    case CLIMATE.WOODLANDS:
+    case CLIMATE.HAUNTED_WOODLANDS:
+    case CLIMATE.OCEAN:
+    default:
+      return 'Woodlands';
+  }
+}
+
+/** Weather weights [sunny, cloudy, overcast, fog, rain, thunder, snow] for a climate and season. */
+export function weatherWeightsFor(climate, season) {
+  const table = WEATHER_TABLE[climateWeatherGroup(climate)] ?? WEATHER_TABLE.Woodlands;
+  return table[season] ?? table.Summer;
+}
 
 // Daggerfall Unity WeatherManager.IsSnowFreeClimate, using the CLIMATE.PAK values.
 export function isSnowFreeClimate(climate) {
@@ -169,8 +240,9 @@ export function isIndoors(location) {
 }
 
 /**
- * Deterministic forecast for a region at a world time. Each region rolls every
- * WEATHER_PERIOD_HOURS. Snow-free climates turn that region's snow into clear weather.
+ * Deterministic forecast for a region and climate at a world time. Each region rolls every
+ * WEATHER_PERIOD_HOURS using the classic Daggerfall Chronicles / DFU climate × season table.
+ * Snow-free climates have 0 snow weight (and also suppress snow as a safeguard).
  * @returns {{type:string,label:string,period:number,nextChangeMinutes:number,intensity:number}}
  */
 export function weatherAt(region, classicMinutes, location, climate) {
@@ -181,7 +253,7 @@ export function weatherAt(region, classicMinutes, location, climate) {
     return { type: 'indoors', label: WEATHER_LABEL.indoors, period, nextChangeMinutes, intensity: 0 };
   }
   const season = dateFromMinutes(period * periodLen).season;
-  const weights = WEATHER_WEIGHTS[season];
+  const weights = weatherWeightsFor(climate, season);
   const roll = hash32(`${String(region).toLowerCase()}#${period}`);
   const total = weights.reduce((a, b) => a + b, 0);
   let pick = roll % total;
