@@ -319,7 +319,7 @@ export class Catalog {
       else continue;
       scored.push([s, l]);
     }
-    scored.sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name));
+    scored.sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name) || a[1].regionIndex - b[1].regionIndex || a[1].index - b[1].index);
     return scored.slice(0, limit).map(([, l]) => l);
   }
 }

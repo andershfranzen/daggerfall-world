@@ -42,7 +42,10 @@ export function install(ctx) {
     const name = s.travel?.regionOf?.(location) ?? regionOfPlace(location);
     if (!name) return null;
     const i = REGION_NAMES.indexOf(name);
-    return i >= 0 ? i : null;
+    if (i >= 0) return i;
+    const lower = name.toLowerCase();
+    const ci = REGION_NAMES.findIndex((r) => r.toLowerCase() === lower);
+    return ci >= 0 ? ci : null;
   }
 
   /** Is this place a town in the classic sense (city, village, farm, manor, tavern, temple)? */
@@ -154,6 +157,10 @@ export function install(ctx) {
     });
     ctx.emit('holiday', { player: p, holiday: h });
   }
+
+  ctx.on('travel', ({ player }) => {
+    if (player) announce(player);
+  });
 
   ctx.onTick(() => {
     for (const p of ctx.players.values()) announce(p);
