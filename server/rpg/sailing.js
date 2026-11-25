@@ -774,10 +774,20 @@ export function install(ctx, options = {}) {
   /** Outside any action (join): move without the transfer service. */
   function putAshoreQuietly(p, portId) {
     const st = stateOf(p);
+    const v = st.vesselId ? vessels.get(st.vesselId) : null;
     const port = portId ? portById(portId) : null;
-    const landing = st.shore ?? (port ? quayLanding(port) : null);
+    const landing = st.shore
+      ?? (port ? quayLanding(port) : null)
+      ?? (portId ? { location: portId, x: 0, z: 0, yaw: 0 } : { location: ctx.defaultLocation, x: 0, z: 0, yaw: 0 });
     st.vesselId = null;
     st.shore = null;
+    if (v) {
+      if (v.helmId === p.id) v.helmId = null;
+      if (v.crewIds.includes(p.id)) {
+        v.crewIds = v.crewIds.filter((id) => id !== p.id);
+        save(v);
+      }
+    }
     if (landing) {
       p.rpg.location = landing.location;
       delete p.rpg.portal;
