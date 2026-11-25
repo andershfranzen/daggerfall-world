@@ -13,13 +13,17 @@
 //                                         banned or its sessions are revoked, including changes made
 //                                         by the operator CLI in another process. The runtime should
 //                                         disconnect that account's live sockets.
-//   accounts.onSessionEnd(fn)          -> unsubscribe; fn({ accountId, sessionKey, reason: 'logout' }) when
-//                                         one session is signed out. resolveUpgrade also returns an opaque
-//                                         `sessionKey`; the runtime should close only connections opened
-//                                         with that key, leaving the account's other sessions connected.
+//   accounts.onSessionEnd(fn)          -> unsubscribe; fn({ accountId, sessionKey, reason }) when
+//                                         one session is signed out or revoked (logout, password_change,
+//                                         logout-all, recovery, account_deleted). resolveUpgrade also returns
+//                                         an opaque `sessionKey`; the runtime should close only connections
+//                                         opened with that key, leaving the account's other sessions connected.
 //                                         Fallback: while no onSessionEnd listener is registered, accounts
 //                                         closes those upgraded sockets itself with a WebSocket close frame
 //                                         (code 4004, reason "signed out"), so logout works with any runtime.
+//   accounts.onAccountDelete(fn)       -> unsubscribe; fn({ accountId, username }) when an account is
+//                                         self-deleted via POST /api/delete-account. The runtime should
+//                                         disconnect its live sockets and remove/unlink its character row.
 //   accounts.close()                   -> stops the moderation poll and closes the DB.
 //
 // Operator CLI (works while the server is running; SQLite WAL allows a second writer):
@@ -62,6 +66,9 @@ export const ACCOUNT_DEFAULTS = Object.freeze({
     login: [10, 5 * 60_000], // login attempts per IP
     loginName: [8, 15 * 60_000], // failed logins per account name (all IPs)
     register: [5, 3600_000], // accounts created per IP
+    password: [10, 15 * 60_000], // password-verified account mutations per account
+    recover: [5, 15 * 60_000], // recovery attempts per IP
+    recoverName: [5, 15 * 60_000], // failed recovery attempts per account name (all IPs)
   },
   now: () => Date.now(),
 });
@@ -125,6 +132,29 @@ export async function verifyPassword(password, stored) {
 }
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
+
+const DUMMY_RECOVERY_HASH = Buffer.alloc(32);
+
+export function generateRecoveryCode() {
+  return randomBytes(16).toString('hex').toUpperCase().match(/.{4}/g).join('-');
+}
+
+export function normalizeRecoveryCode(code) {
+  return String(code).replace(/[\s-]+/g, '').toUpperCase();
+}
+
+function hashRecoveryCode(code) {
+  return sha256(normalizeRecoveryCode(code));
+}
+
+function verifyRecoveryCode(code, storedHash) {
+  const normalized = typeof code === 'string' ? normalizeRecoveryCode(code) : '';
+  const actual = createHash('sha256').update(normalized).digest();
+  const validStored = typeof storedHash === 'string' && /^[0-9a-f]{64}$/i.test(storedHash);
+  const expected = validStored ? Buffer.from(storedHash, 'hex') : DUMMY_RECOVERY_HASH;
+  const eq = timingSafeEqual(actual, expected);
+  return validStored && normalized.length > 0 && eq;
+}
 
 // ---------------------------------------------------------------- rate limiting
 
@@ -208,9 +238,11 @@ export function openAccountStore(dbPath) {
       at INTEGER NOT NULL
     );
   `);
+  const accCols = new Set(db.prepare('PRAGMA table_info(accounts)').all().map((c) => c.name));
+  if (!accCols.has('recovery_hash')) db.exec('ALTER TABLE accounts ADD COLUMN recovery_hash TEXT');
   const q = {
     insert: db.prepare(
-      'INSERT INTO accounts (username, username_key, password_hash, created_at) VALUES (?, ?, ?, ?)'
+      'INSERT INTO accounts (username, username_key, password_hash, created_at, recovery_hash) VALUES (?, ?, ?, ?, ?)'
     ),
     byKey: db.prepare('SELECT * FROM accounts WHERE username_key = ?'),
     byId: db.prepare('SELECT * FROM accounts WHERE id = ?'),
@@ -219,6 +251,10 @@ export function openAccountStore(dbPath) {
        FROM accounts a ORDER BY a.id`
     ),
     touchLogin: db.prepare('UPDATE accounts SET last_login_at = ? WHERE id = ?'),
+    setPassword: db.prepare('UPDATE accounts SET password_hash = ? WHERE id = ?'),
+    setRecovery: db.prepare('UPDATE accounts SET recovery_hash = ? WHERE id = ?'),
+    setPasswordAndRecovery: db.prepare('UPDATE accounts SET password_hash = ?, recovery_hash = ? WHERE id = ?'),
+    deleteAccount: db.prepare('DELETE FROM accounts WHERE id = ?'),
     setMute: db.prepare('UPDATE accounts SET muted_until = ?, mute_reason = ? WHERE id = ?'),
     setBan: db.prepare('UPDATE accounts SET banned_at = ?, ban_reason = ? WHERE id = ?'),
     muteOf: db.prepare('SELECT muted_until FROM accounts WHERE id = ?'),
@@ -229,9 +265,12 @@ export function openAccountStore(dbPath) {
       `SELECT s.id AS sid, s.last_seen_at, s.expires_at, a.id, a.username, a.banned_at
        FROM sessions s JOIN accounts a ON a.id = s.account_id WHERE s.token_hash = ?`
     ),
+    sessIdsForAccount: db.prepare('SELECT id FROM sessions WHERE account_id = ?'),
+    sessIdsOther: db.prepare('SELECT id FROM sessions WHERE account_id = ? AND id != ?'),
     sessTouch: db.prepare('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?'),
     sessDelete: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
     sessDeleteId: db.prepare('DELETE FROM sessions WHERE id = ?'),
+    sessDeleteOther: db.prepare('DELETE FROM sessions WHERE account_id = ? AND id != ?'),
     sessDeleteAccount: db.prepare('DELETE FROM sessions WHERE account_id = ?'),
     sessExpire: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
     sessTrim: db.prepare(
@@ -536,9 +575,11 @@ export function createAccounts(options = {}) {
       return sendJson(res, 409, { error: 'That account name is taken.', field: 'username' });
     }
     const hash = await hashPassword(password, cfg.scrypt);
+    const recoveryCode = generateRecoveryCode();
+    const recoveryHash = hashRecoveryCode(recoveryCode);
     let id;
     try {
-      ({ lastInsertRowid: id } = store.q.insert.run(username, usernameKey(username), hash, now()));
+      ({ lastInsertRowid: id } = store.q.insert.run(username, usernameKey(username), hash, now(), recoveryHash));
     } catch (err) {
       if (/UNIQUE/i.test(err.message)) {
         return sendJson(res, 409, { error: 'That account name is taken.', field: 'username' });
@@ -548,7 +589,7 @@ export function createAccounts(options = {}) {
     limiters.register.hit(ip);
     id = Number(id);
     const setCookie = startSession(id);
-    sendJson(res, 201, { user: { id, username } }, { 'Set-Cookie': setCookie });
+    sendJson(res, 201, { user: { id, username }, recoveryCode }, { 'Set-Cookie': setCookie });
   }
 
   async function login(req, res) {
@@ -592,6 +633,159 @@ export function createAccounts(options = {}) {
     sendJson(res, 200, { user: null }, { 'Set-Cookie': cookie('', 0) });
   }
 
+  function logoutAll(req, res) {
+    const s = sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const sids = store.tx(() => {
+      const rows = store.q.sessIdsForAccount.all(s.user.id);
+      store.q.sessDeleteAccount.run(s.user.id);
+      store.q.log.run(s.user.id, 'revoke', 'self logout-all', null, 'self', now());
+      return rows.map((r) => Number(r.id));
+    });
+    drainModeration();
+    for (const sid of sids) endSession(s.user.id, sid, 'logout-all');
+    sendJson(res, 200, { user: null, revokedSessions: sids.length }, { 'Set-Cookie': cookie('', 0) });
+  }
+
+  async function verifyCurrentPassword(req, res, s, rawPassword, field = 'password') {
+    if (typeof rawPassword !== 'string' || !rawPassword) {
+      sendJson(res, 400, { error: 'Enter your current password.', field });
+      return null;
+    }
+    if (rawPassword.length > cfg.maxPasswordLength * 4) {
+      sendJson(res, 401, { error: 'Current password is incorrect.', field });
+      return null;
+    }
+    const key = String(s.user.id);
+    const wait = limiters.password.check(key);
+    if (wait) {
+      limited(res, wait);
+      return null;
+    }
+    const acc = store.get(s.user.id);
+    if (!acc || acc.banned_at != null) {
+      sendJson(res, 401, { error: 'Sign in first.' });
+      return null;
+    }
+    const ok = await verifyPassword(rawPassword, acc.password_hash);
+    if (!ok) {
+      limiters.password.hit(key);
+      sendJson(res, 401, { error: 'Current password is incorrect.', field });
+      return null;
+    }
+    limiters.password.reset(key);
+    return acc;
+  }
+
+  async function changePassword(req, res) {
+    const s = sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const body = await jsonBody(req);
+    const { currentPassword, newPassword } = body;
+    const acc = await verifyCurrentPassword(req, res, s, currentPassword, 'currentPassword');
+    if (!acc) return;
+    const pProblem = passwordProblem(newPassword, acc.username, cfg);
+    if (pProblem) return sendJson(res, 400, { error: pProblem, field: 'newPassword' });
+    const newHash = await hashPassword(newPassword, cfg.scrypt);
+    const otherSids = store.tx(() => {
+      store.q.setPassword.run(newHash, acc.id);
+      const rows = store.q.sessIdsOther.all(acc.id, s.sid);
+      store.q.sessDeleteOther.run(acc.id, s.sid);
+      return rows.map((r) => Number(r.id));
+    });
+    for (const sid of otherSids) endSession(acc.id, sid, 'password_change');
+    sendJson(res, 200, { ok: true, user: s.user, revokedSessions: otherSids.length });
+  }
+
+  async function rotateRecoveryCode(req, res) {
+    const s = sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const body = await jsonBody(req);
+    const acc = await verifyCurrentPassword(req, res, s, body.password ?? body.currentPassword, 'password');
+    if (!acc) return;
+    const recoveryCode = generateRecoveryCode();
+    store.q.setRecovery.run(hashRecoveryCode(recoveryCode), acc.id);
+    sendJson(res, 200, { recoveryCode });
+  }
+
+  async function clearRecoveryCode(req, res) {
+    const s = sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const body = await jsonBody(req);
+    const acc = await verifyCurrentPassword(req, res, s, body.password ?? body.currentPassword, 'password');
+    if (!acc) return;
+    store.q.setRecovery.run(null, acc.id);
+    sendJson(res, 200, { cleared: true });
+  }
+
+  async function deleteAccount(req, res) {
+    const s = sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const body = await jsonBody(req);
+    const acc = await verifyCurrentPassword(req, res, s, body.password ?? body.currentPassword, 'password');
+    if (!acc) return;
+    const sids = store.tx(() => {
+      const rows = store.q.sessIdsForAccount.all(acc.id);
+      store.q.deleteAccount.run(acc.id);
+      return rows.map((r) => Number(r.id));
+    });
+    notifyAccountDelete(acc.id, acc.username);
+    for (const sid of sids) endSession(acc.id, sid, 'account_deleted');
+    sendJson(res, 200, { deleted: true, user: null }, { 'Set-Cookie': cookie('', 0) });
+  }
+
+  async function recover(req, res) {
+    const ip = clientIp(req);
+    const body = await jsonBody(req);
+    const { username, recoveryCode, newPassword } = body;
+    if (
+      typeof username !== 'string' || !username ||
+      typeof recoveryCode !== 'string' || !recoveryCode ||
+      typeof newPassword !== 'string' || !newPassword
+    ) {
+      return sendJson(res, 400, { error: 'Enter your account name, recovery code, and new password.' });
+    }
+    const pProblem = passwordProblem(newPassword, username, cfg);
+    if (pProblem) return sendJson(res, 400, { error: pProblem, field: 'newPassword' });
+    if (username.length > 64 || recoveryCode.length > 128) {
+      return sendJson(res, 401, { error: 'Incorrect account name or recovery code.' });
+    }
+    const key = usernameKey(username);
+    const wait = limiters.recover.hit(ip) || limiters.recoverName.check(key);
+    if (wait) return limited(res, wait);
+    const acc = store.find(username);
+    const ok = verifyRecoveryCode(recoveryCode, acc?.recovery_hash ?? null);
+    if (!ok) {
+      limiters.recoverName.hit(key);
+      return sendJson(res, 401, { error: 'Incorrect account name or recovery code.' });
+    }
+    if (acc.banned_at != null) {
+      return sendJson(res, 403, {
+        error: acc.ban_reason ? `This account is banned: ${acc.ban_reason}` : 'This account is banned.',
+      });
+    }
+    limiters.recoverName.reset(key);
+    const newHash = await hashPassword(newPassword, cfg.scrypt);
+    const nextCode = generateRecoveryCode();
+    const nextHash = hashRecoveryCode(nextCode);
+    const oldSids = store.tx(() => {
+      const rows = store.q.sessIdsForAccount.all(acc.id);
+      store.q.setPasswordAndRecovery.run(newHash, nextHash, acc.id);
+      store.q.sessDeleteAccount.run(acc.id);
+      store.q.log.run(acc.id, 'revoke', 'password recovery', null, 'recovery', now());
+      return rows.map((r) => Number(r.id));
+    });
+    drainModeration();
+    for (const sid of oldSids) endSession(acc.id, sid, 'recovery');
+    const setCookie = startSession(acc.id);
+    sendJson(
+      res,
+      200,
+      { user: { id: acc.id, username: acc.username }, recoveryCode: nextCode },
+      { 'Set-Cookie': setCookie }
+    );
+  }
+
   function me(req, res) {
     const s = sessionFor(req);
     const headers = {};
@@ -604,6 +798,18 @@ export function createAccounts(options = {}) {
   // Live upgraded sockets per session id, for the logout fallback. Entries leave on socket close.
   const sessionSockets = new Map(); // sid -> Set<net.Socket>
   const sessionListeners = new Set();
+  const deleteListeners = new Set();
+
+  function notifyAccountDelete(accountId, username) {
+    const event = { accountId, username };
+    for (const fn of deleteListeners) {
+      try {
+        fn(event);
+      } catch (err) {
+        console.error('[accounts] account delete listener failed:', err.message);
+      }
+    }
+  }
 
   function trackSocket(sid, socket) {
     if (!socket || typeof socket.once !== 'function' || socket.destroyed) return;
@@ -660,6 +866,12 @@ export function createAccounts(options = {}) {
     '/api/register': { POST: register },
     '/api/login': { POST: login },
     '/api/logout': { POST: logout },
+    '/api/logout-all': { POST: logoutAll },
+    '/api/password': { POST: changePassword },
+    '/api/delete-account': { POST: deleteAccount },
+    '/api/recovery-code': { POST: rotateRecoveryCode },
+    '/api/clear-recovery': { POST: clearRecoveryCode },
+    '/api/recover': { POST: recover },
   };
 
   async function handleHttp(req, res) {
@@ -713,6 +925,10 @@ export function createAccounts(options = {}) {
       sessionListeners.add(fn);
       return () => sessionListeners.delete(fn);
     },
+    onAccountDelete(fn) {
+      deleteListeners.add(fn);
+      return () => deleteListeners.delete(fn);
+    },
     onModeration(fn) {
       listeners.add(fn);
       return () => listeners.delete(fn);
@@ -752,6 +968,7 @@ export function createAccounts(options = {}) {
       clearInterval(sweepTimer);
       listeners.clear();
       sessionListeners.clear();
+      deleteListeners.clear();
       sessionSockets.clear();
       store.close();
     },

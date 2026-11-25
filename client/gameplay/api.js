@@ -128,11 +128,34 @@ export function actionForCode(bindings, code) {
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 const capitalise = (t) => (t ? String(t)[0].toUpperCase() + String(t).slice(1) : t);
 
-/** Merge an incoming RPG message over the previous one: keys present replace, absent keep. */
+/** Merge an incoming RPG message over the previous one: keys present replace, absent keep, `entityDelta` patches `entities`. */
 export function mergeRpg(prev, msg) {
   if (!isObj(msg)) return prev;
   const next = { ...(prev || { character: null, entities: [], peers: [], selfId: null }) };
-  for (const [k, v] of Object.entries(msg)) if (k !== 'type') next[k] = v;
+  for (const [k, v] of Object.entries(msg)) {
+    if (k === 'type' || k === 'entityDelta') continue;
+    next[k] = v;
+  }
+  if (isObj(msg.entityDelta) && !('entities' in msg)) {
+    const remove = new Set((Array.isArray(msg.entityDelta.remove) ? msg.entityDelta.remove : []).map(String));
+    const upsert = Array.isArray(msg.entityDelta.upsert) ? msg.entityDelta.upsert : [];
+    const byId = new Map();
+    for (const u of upsert) if (isObj(u) && u.id !== undefined && u.id !== null) byId.set(String(u.id), u);
+    const out = [];
+    for (const e of Array.isArray(next.entities) ? next.entities : []) {
+      if (!isObj(e)) continue;
+      const id = e.id !== undefined && e.id !== null ? String(e.id) : null;
+      if (id !== null && remove.has(id)) continue;
+      if (id !== null && byId.has(id)) {
+        out.push(byId.get(id));
+        byId.delete(id);
+      } else {
+        out.push(e);
+      }
+    }
+    for (const u of byId.values()) out.push(u);
+    next.entities = out;
+  }
   return next;
 }
 

@@ -66,10 +66,15 @@ The standalone server opens the launcher at `/play.html` when visiting `/`. The 
 The browser never sees a session token. [client/auth/account.js](../client/auth/account.js) mounts the sign-in panel on `/play.html` and talks to the same origin only:
 
 1. `GET /api/me` at startup returns `{user: {id, username} | null, muted?}`.
-2. `POST /api/register` or `POST /api/login` with `{username, password}` as `application/json`. Success sets the `HttpOnly` session cookie (`__Host-dfw_session`). Errors are `{error, field?}`: `400` invalid input, `401` wrong name or password, `403` banned (with the reason), `409` name taken, `429` rate limited with `Retry-After`.
+2. `POST /api/register` with `{username, password}` creates the account, sets the `HttpOnly` session cookie (`__Host-dfw_session`), and returns `{user: {id, username}, recoveryCode}` (the one-time recovery code is shown once and stored only as a SHA-256 hash). `POST /api/login` with `{username, password}` sets the session cookie and returns `{user: {id, username}}`. Errors are `{error, field?}`: `400` invalid input, `401` wrong name or password, `403` banned (with the reason), `409` name taken, `429` rate limited with `Retry-After`.
 3. The client opens `/ws`. The upgrade carries the cookie, and the server resolves it to an account that is not banned, or refuses with 401.
 4. `{type:'join'}` loads or creates the account's character. The display name is the account username.
-5. `POST /api/logout` deletes the session on the server and clears the cookie.
+5. `POST /api/logout` deletes the current session on the server, closes its live `/ws` sockets, and clears the cookie.
+6. `POST /api/logout-all` (authenticated) revokes every session for the account, closes all live `/ws` sockets immediately, and clears the cookie.
+7. `POST /api/password` (authenticated) with `{currentPassword, newPassword}` verifies the current password, updates the scrypt hash, and revokes all other sessions (closing their live `/ws` sockets while keeping the current session).
+8. `POST /api/recovery-code` (authenticated) with `{password}` rotates the account's recovery code and returns `{recoveryCode}` once; `POST /api/clear-recovery` with `{password}` clears it.
+9. `POST /api/recover` with `{username, recoveryCode, newPassword}` (rate-limited per IP and per account name, constant-time generic failure) resets a forgotten password without email, consumes the old code, revokes all prior sessions (closing live `/ws` sockets), starts a fresh session, and returns `{user, recoveryCode}`.
+10. `POST /api/delete-account` (authenticated) with `{password}` permanently deletes the account and its sessions, disconnects all live `/ws` sockets, removes/unlinks the account's character row, and clears the cookie.
 
 Account and password rules, session lifetime, CSRF checks, rate limits and the moderation CLI (`node server/accounts.js list|show|mute|unmute|ban|unban|revoke`) are documented in [docs/public-hosting.md](../docs/public-hosting.md#accounts-and-sessions). Bans and revocations close live sockets with code 4004 within about two seconds; mutes refuse chat.
 
@@ -79,10 +84,10 @@ Client → server:
 
 | Message | Notes |
 | --- | --- |
-| `{type:'join', claimToken?}` | Must be the first message, sent within 10 s. For an account, the server finds its character or creates one. `claimToken` optionally links an existing dev guest character to the account once. Dev guests (`ALLOW_GUESTS=1`) send `{type:'join', name, token?}` instead. |
+| `{type:'join', claimToken?, arrival?, delta?}` | Must be the first message, sent within 10 s. For an account, the server finds its character or creates one. `claimToken` optionally links an existing dev guest character to the account once. `delta: true` opts into `stateDelta` frames and partial `rpg` snapshots with per-entity `entityDelta`. Dev guests (`ALLOW_GUESTS=1`) send `{type:'join', name, token?}` instead. |
 | `{type:'input', forward, strafe, yaw}` | `forward`/`strafe` are clamped to -1..1, and the combined vector is normalised to length ≤ 1. Speed is at most 4 m/s. `yaw` is in radians: 0 looks down -z, positive turns right (toward +x). Send about every 100 ms while a key is held; input older than 400 ms counts as idle. Optional traversal fields: `run`, `slow` (walk slowly), `crouch` (booleans; crouch persists), `rise` (-1..1, swim or levitate up/down) and `jump` (a press counter: a changed value is one jump; the first value seen is adopted silently). With the collision feature the server steps the body with the shared rule in `client/lib/locomotion.js` (gravity, jumping, falling damage, crouching, climbing, swimming, breath, levitation). |
 | `{type:'chat', text}` | Trimmed, control characters stripped, 1–200 chars, at most 1/s with a burst of 5. Reaches players in the speaker's location. Refused while the account is muted. |
-| `{type:'action', verb, args, seq?}` | Gameplay intent such as `inventory.equip` or `npc.talk`, at most 10/s with a burst of 20. With `seq`, the server replies `{type:'actionResult', seq, verb, ok, error?}`. See [docs/gameplay-protocol.md](../docs/gameplay-protocol.md). |
+| `{type:'action', verb, args, seq?}` | Gameplay intent such as `inventory.equip` or `npc.talk`, at most 10/s with a burst of 20 (enforced per connection and per account). With `seq`, the server replies `{type:'actionResult', seq, verb, ok, error?}`. See [docs/gameplay-protocol.md](../docs/gameplay-protocol.md). |
 
 Server → client:
 
@@ -90,7 +95,8 @@ Server → client:
 | --- | --- |
 | `{type:'welcome', id, token, account?, player}` | `token` is `null` for accounts; guests store theirs to rejoin. |
 | `{type:'state', location, players:[{id,name,x,z,yaw,moving,across?,y?,stance?,speed?}]}` | Positions in the viewer’s `location` coordinate system, including visible players across an outdoor boundary. Sent at 12.5 Hz when positions change and at least once a second. Metres, rounded to mm. `y` is the foot height; `stance` is `run`, `slow`, `crouch`, `air`, `climb`, `swim` or `levitate` (absent while walking); `speed` is the horizontal m/s actually covered while moving. |
-| `{type:'rpg', selfId, character, entities, peers}` | Your private character state plus the public entities and peers in your location, sent on change. |
+| `{type:'stateDelta', location, players, gone?}` | Sent to `delta: true` clients when positions change within the same location. `players` carries new entries in full and changed fields for known ids; `gone` lists ids that left (or whose fields disappeared and are replaced in `players`). |
+| `{type:'rpg', selfId, character?, entities?, entityDelta?, peers?, readiness?, locomotion?}` | Your private character state plus the public entities and peers in your location, sent on change. Legacy clients receive all fields; `delta: true` clients receive only changed top-level fields and compact `entityDelta: {upsert?, remove?}` within the same location (full `entities` on join, location change, `force`, or `resetSync`). |
 | `{type:'gameEvent', event}` | A private or nearby gameplay event. |
 | `{type:'chat', name, text}` | Location chat, the sender included. |
 | `{type:'error', message}` | Non-fatal (bad JSON, bad input, chat too long or fast, muted…). Also sent right before a fatal close. |
@@ -133,6 +139,6 @@ Other guards:
 
 - A single process with in-memory sessions and world state. No horizontal scaling; updates are scoped by location rather than by distance.
 - The client is trusted for `yaw`. Parity with the original game is incomplete in every feature; see the coverage document for what is verified.
-- No password reset, because no e-mail is collected. Operators can only revoke sessions or ban.
-- Rate limits on `/ws` are per connection; account API limits are per client IP and per account name.
+- No e-mail is collected; password recovery relies on the one-time recovery code issued on registration (or rotated via `/api/recovery-code`). Operators can revoke sessions or ban.
+- Action rate limits on `/ws` are enforced both per connection and per account; message and chat limits are per connection; account API limits are per client IP and per account name.
 - Static files are read fully into memory per request (64 MB cap), with no caching or compression.

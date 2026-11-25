@@ -54,23 +54,70 @@ test('runtime.sync: delta players get only changed fields, merged state always e
   step(() => {}, []); // idle: nothing resent
   step(() => { a.x = 9; b.yaw = 1; }, []); // peer positions stream through `state`
   step(() => { rt.entities.get('rat').x = 4; }, [1, 2, 3]);
-  assert.deepEqual(Object.keys(sent.find(([id]) => id === 1)[1]).sort(), ['entities', 'selfId', 'type'], 'only the entities changed');
+  assert.deepEqual(Object.keys(sent.find(([id]) => id === 1)[1]).sort(), ['entityDelta', 'selfId', 'type'], 'only the moved entity is sent as entityDelta');
+  assert.deepEqual(sent.find(([id]) => id === 1)[1].entityDelta, { upsert: [{ id: 'rat', location: DEFAULT_LOCATION, x: 4, z: 2, hp: 3 }] });
   step(() => { a.rpg.gold = 5; }, [1]); // a private sheet change reaches only its owner
   assert.deepEqual(Object.keys(sent.find(([id]) => id === 1)[1]).sort(), ['character', 'selfId', 'type']);
   step(() => { a.rpg.readied = true; }, [1, 2, 3]); // public peer field: others get `peers`
   assert.deepEqual(Object.keys(sent.find(([id]) => id === 2)[1]).sort(), ['peers', 'selfId', 'type']);
   step(() => { rt.entities.get('key').visibleTo = [1]; }, [1, 2]);
+  assert.deepEqual(sent.find(([id]) => id === 1)[1].entityDelta, { upsert: [{ id: 'key', location: DEFAULT_LOCATION, x: 0, z: 0 }] });
+  assert.deepEqual(sent.find(([id]) => id === 2)[1].entityDelta, { remove: ['key'] });
   step(() => { ready = { status: 'ready' }; }, [1, 2, 3]);
   step(() => { mods = { swim: 1 }; }, [1, 2, 3]);
   step(() => { a.rpg.location = 'dungeon:Crypt'; }, [1, 2, 3]);
+  // Location change sends full `entities`, never `entityDelta`.
+  assert.ok('entities' in sent.find(([id]) => id === 1)[1]);
+  assert.ok(!('entityDelta' in sent.find(([id]) => id === 1)[1]));
   // force and resetSync always send a full snapshot, also to delta players.
   sent.length = 0;
   rt.sync([a], { force: true });
   assert.ok(['character', 'entities', 'peers', 'readiness'].every((k) => k in sent[0][1]));
+  assert.ok(!('entityDelta' in sent[0][1]));
   rt.resetSync(b);
   sent.length = 0;
   rt.sync([b]);
   assert.ok(['character', 'entities', 'peers', 'readiness'].every((k) => k in sent[0][1]));
+  assert.ok(!('entityDelta' in sent[0][1]));
+});
+
+test('runtime.sync: entityDelta cuts wire bytes by >85% when 1 of 20 entities moves', () => {
+  const players = new Map();
+  const bytes = { delta: 0, legacy: 0 };
+  const merged = new Map();
+  const rt = createRpgRuntime({
+    players, save() {}, log: quiet,
+    send: (p, msg) => {
+      const wire = JSON.stringify(msg);
+      if (p.delta) bytes.delta += wire.length;
+      else bytes.legacy += wire.length;
+      merged.set(p.id, mergeRpg(merged.get(p.id), JSON.parse(wire)));
+    },
+    features: [(ctx) => {
+      for (let i = 0; i < 20; i++) {
+        ctx.entities.set(`mob-${i}`, {
+          id: `mob-${i}`, kind: 'monster', name: `Giant Rat #${i}`,
+          location: DEFAULT_LOCATION, x: i * 2, z: i * -1.5, yaw: 0,
+          hp: 24, maxHp: 24, level: 2, sprite: 'rat', state: 'wander',
+        });
+      }
+    }],
+  });
+  const d = player(1, {}, { delta: true });
+  const l = player(2, {}, { delta: false });
+  players.set(1, d); rt.join(d);
+  players.set(2, l); rt.join(l);
+  rt.sync(); // initial full snapshots
+  bytes.delta = 0;
+  bytes.legacy = 0;
+  for (let step = 1; step <= 10; step++) {
+    rt.entities.get('mob-0').x = step * 0.5;
+    rt.sync();
+  }
+  assert.ok(bytes.delta > 0 && bytes.legacy > 0);
+  const ratio = bytes.delta / bytes.legacy;
+  assert.ok(ratio < 0.15, `expected >85% savings, got delta=${bytes.delta} B vs legacy=${bytes.legacy} B (${(ratio * 100).toFixed(1)}%)`);
+  assert.deepEqual(merged.get(1).entities, merged.get(2).entities);
 });
 
 test('runtime.sync: shared per-location work is serialized once per sync, not once per viewer', () => {
