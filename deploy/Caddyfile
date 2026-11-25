@@ -1,0 +1,23 @@
+# TLS-terminating reverse proxy for daggerfallworld. The domain comes from the environment.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DFW_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		X-Frame-Options DENY
+		-Server
+	}
+
+	# Caddy replaces X-Forwarded-For/-Proto with what it saw (client-supplied values are not
+	# trusted by default), so the game's TRUST_PROXY=1 rate limits key on the real client address.
+	# WebSocket upgrades on /ws are proxied automatically.
+	reverse_proxy game:8080
+}
+
+# Plain HTTP only redirects (Caddy does this automatically for the site above).

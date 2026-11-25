@@ -1,0 +1,80 @@
+Third-party notices for client/world/interiors/, client/gameplay/interiors.js and server/rpg/interiors*
+=====================================================================================================
+
+These modules contain code adapted from the two MIT-licensed projects below. Their notices follow verbatim.
+
+- daggerfall-js-source by Lattymoy, https://github.com/Lattymoy/daggerfall-js-source
+  (commit a3eb1605ea1dc391b691fe314377458a7e63e483):
+    src/formats/blocksFile.js   RMB sub-record (interior) and RDB readers, FixRdbData   -> blocks.js
+    src/formats/mapsFile.js     LocationRecordElement and MAPDITEM dungeon reader       -> dungeonMaps.js
+    src/world/meshReader.js     door law (subMeshDoorType) and door vertex pass         -> scene.js
+    src/world/staticDoors.js    static door centre/normal/size                         -> scene.js
+    src/world/interior/interiorLayout.js  interior placement, IsBadInteriorModel table -> layout.js
+    src/world/rdbLayout.js      RDB model matrix, action-door and exit-door rules       -> layout.js
+
+- Daggerfall Unity, https://github.com/Interkarma/daggerfall-unity
+  (consulted at commit 3d85a283672a4955e32992097ea7719e896dbadb), which the files above translate:
+    API/BlocksFile.cs, API/MapsFile.cs, API/DFLocation.cs, MeshReader.cs, Utility/GameObjectHelper.cs,
+    Utility/RDBLayout.cs, Utility/RMBLayout.cs, Internal/DaggerfallInterior.cs, Internal/DaggerfallDungeon.cs,
+    Internal/DaggerfallStaticDoors.cs, Game/PlayerEnterExit.cs (landing rules). RDB action decoding and
+    linked movement also refer to API/DFBlock.cs, Internal/DaggerfallAction.cs, Internal/DaggerfallActionDoor.cs
+    and Game/Questing/Place.cs (quest markers).
+    buildingDirectory.js, buildingWords.js and nameBanks.js use GenerateBuildingName in FormulaHelper.cs,
+    RMBLayout.GetLocationBuildingData, the English name fragment lists from Internal_Strings.csv,
+    the NAMEGEN.DAT format and DFRandom. Building seeds and personal names come from the local ARENA2.
+
+No Daggerfall game data is included. The Elder Scrolls II: Daggerfall is the property of Bethesda Softworks;
+its files are read from the player's own installation in the browser, or from the server operator's own
+ARENA2 directory for validation, and are never distributed.
+
+----------------------------------------------------------------------
+
+Daggerfall Unity
+
+MIT License
+
+Copyright (c) 2009-2023 Daggerfall Workshop
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+----------------------------------------------------------------------
+
+daggerfall-js-source
+
+MIT License
+
+Copyright (c) 2026 Lattymoy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

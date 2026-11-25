@@ -1,0 +1,73 @@
+Third-party notices for client/gameplay/weapons/ and client/gameplay/weapons.js
+==============================================================================
+
+The first-person weapon view adapts code from the two MIT-licensed projects
+below. Their notices follow verbatim.
+
+- daggerfall-js-source by Lattymoy, https://github.com/Lattymoy/daggerfall-js-source
+  src/formats/cifRciFile.js, src/formats/baseImageFile.js and
+  src/formats/dfPalette.js (CIF reader, RLE decoder, palette) were adapted
+  into cifReader.js. src/combat/fpsWeapon.js (WeaponBasics animation tables,
+  weapon file names, screen placement) was adapted into animation.js.
+
+- Daggerfall Unity, https://github.com/Interkarma/daggerfall-unity
+  API/CifRciFile.cs, API/BaseImageFile.cs, API/DFPalette.cs,
+  Game/FPSWeapon.cs, Game/WeaponBasics.cs and Game/WeaponManager.cs (swing
+  gesture sectors, animation stepping), from which the files above were
+  translated.
+
+No Daggerfall game data is included. The Elder Scrolls II: Daggerfall is the
+property of Bethesda Softworks; WEAPON*.CIF and ART_PAL.COL are read from the
+player's own installation in the browser and never leave the device.
+
+----------------------------------------------------------------------
+
+daggerfall-js-source
+
+MIT License
+
+Copyright (c) 2026 Lattymoy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+----------------------------------------------------------------------
+
+Daggerfall Unity
+
+MIT License
+
+Copyright (c) 2009-2023 Daggerfall Workshop
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

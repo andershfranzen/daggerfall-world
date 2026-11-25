@@ -1,0 +1,72 @@
+/* Quest journal (client/gameplay/quests.js). Scoped to .qj-root; cool tones only so the
+   warm colour stays with the art. */
+.qj-root {
+  --qj-panel: #17202a;
+  --qj-deep: #10161d;
+  --qj-line: #33455a;
+  --qj-ink: #dde6ef;
+  --qj-dim: #8fa1b4;
+  --qj-accent: #8db6da;
+  --qj-good: #7fc0a8;
+  --qj-bad: #c98a9a;
+  color: var(--qj-ink);
+  display: grid;
+  gap: 10px;
+  /* Fill the menu page and never push it wider than the panel. */
+  min-width: 0;
+  max-width: 760px;
+}
+.qj-card {
+  background: var(--qj-panel);
+  border: 1px solid var(--qj-line);
+  border-radius: var(--radius, 3px);
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+}
+.qj-offer, .qj-prompt { border-left: 3px solid var(--qj-accent); }
+.qj-kicker { margin: 0; color: var(--qj-dim); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.qj-title { margin: 0; font-family: var(--serif, serif); font-size: 1.08rem; letter-spacing: 0.03em; }
+.qj-h4, .qj-h5 { margin: 6px 0 0; color: var(--qj-dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.qj-h5 { margin: 0; }
+.qj-text { margin: 0; font-family: var(--text, serif); line-height: 1.45; white-space: pre-line; }
+.qj-dim { color: var(--qj-dim); }
+.qj-mono { font-family: var(--mono, monospace); font-size: 0.78rem; color: var(--qj-dim); white-space: normal; word-spacing: 0.3em; }
+.qj-meta { margin: 0; color: var(--qj-dim); font-size: 0.84rem; }
+.qj-buttons, .qj-items { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.qj-buttons .btn, .qj-items .btn { width: auto; flex: 0 0 auto; min-width: 7em; }
+.qj-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.qj-quest {
+  background: var(--qj-deep);
+  border: 1px solid var(--qj-line);
+  border-radius: var(--radius, 3px);
+  padding: 8px 10px;
+  display: grid;
+  gap: 6px;
+}
+.qj-quest-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.qj-quest-title { font-family: var(--serif, serif); letter-spacing: 0.02em; }
+.qj-chip {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap;
+  padding: 1px 6px; border: 1px solid currentColor; border-radius: 2px; color: var(--qj-accent);
+}
+.qj-chip-good, .qj-chip-success { color: var(--qj-good); }
+.qj-chip-failed { color: var(--qj-bad); }
+.qj-log { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+.qj-feed { gap: 8px; }
+.qj-say { border-left: 2px solid var(--qj-line); padding-left: 8px; }
+.qj-say-accept { border-left-color: var(--qj-good); }
+.qj-say-refuse { border-left-color: var(--qj-bad); }
+.qj-say .qj-text { font-style: italic; }
+.qj-report summary { cursor: pointer; color: var(--qj-dim); font-size: 0.8rem; }
+.qj-notes { margin: 4px 0 0; padding-left: 1.2em; color: var(--qj-dim); font-size: 0.8rem; display: grid; gap: 2px; }
+.qj-foot { margin: 0; display: flex; justify-content: flex-end; }
+.qj-done .qj-quest { opacity: 0.85; }
+.qj-status, .qj-empty { border-left: 3px solid var(--qj-line); }
+.qj-stale { margin: 0; border-left: 3px solid var(--qj-bad); color: var(--qj-ink); font-size: 0.86rem; }
+.qj-due { color: var(--qj-accent); }
+.qj-givers { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+/* Long classic names and unbroken text wrap inside the card instead of widening the page. */
+.qj-root, .qj-card, .qj-quest, .qj-quest-title, .qj-text { min-width: 0; overflow-wrap: anywhere; }
+.qj-quest-head { flex-wrap: wrap; }
+.qj-empty .menu-empty { margin: 0; padding: 0; border: 0; background: none; box-shadow: none; }

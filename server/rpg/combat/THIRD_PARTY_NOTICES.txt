@@ -1,0 +1,42 @@
+Third-party notices for server/rpg/combat.js and server/rpg/combat/
+
+formulas.js, classes.js, careers.js and monsters.js adapt numbers, tables and formulas from Daggerfall Unity
+(https://github.com/Interkarma/daggerfall-unity):
+  Assets/Scripts/Utility/EnemyBasics.cs, Assets/Scripts/Utility/RandomEncounters.cs,
+  Assets/Scripts/Game/Formulas/FormulaHelper.cs, Assets/Scripts/Game/Entities/EnemyEntity.cs,
+  Assets/Scripts/Game/Items/DaggerfallUnityItem.cs, Assets/Scripts/Game/Items/LootTables.cs,
+  Assets/Scripts/Game/EnemyAttack.cs, Assets/Scripts/Game/EnemyMotor.cs, Assets/Scripts/Game/WeaponManager.cs,
+  Assets/Scripts/Game/Items/ItemHelper.cs (AssignEnemyStartingEquipment), Assets/Scripts/Game/Items/ItemBuilder.cs,
+  Assets/Scripts/Internal/DaggerfallMobileUnit.cs and Assets/Scripts/Utility/GameObjectHelper.cs (gendered textures),
+  Assets/Scripts/Utility/RDBLayout.cs (classic slot selection, water and passive rules), Assets/Scripts/API/MonsterFile.cs,
+  Assets/Scripts/API/DFCareer.cs, Assets/Scripts/Utility/DFRandom.cs, Assets/Scripts/Game/Entities/PlayerEntity.cs
+  (IntermittentEnemySpawn), Assets/Scripts/Game/DaedraSeducerMobileBehaviour.cs.
+Class careers are read at runtime from the operator's CLASS*.CFG; none ship here.
+World of Daggerfall (Nexus 249) encounter markers are read by server/rpg/wilderness.js from the
+operator's local pack; combat contains no World of Daggerfall code or data.
+No Bethesda art, text or audio is included; sprite references are archive/record
+indices resolved from the player's own ARENA2 files.
+
+----------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2009-2023 Daggerfall Workshop
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

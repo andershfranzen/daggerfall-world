@@ -1,0 +1,375 @@
+/* Daggerfall World: in-game layout. Loaded last. Visual styles stay in interface.css and shell.css.
+ *
+ * #hud is one grid laid over the 3D view, so its regions cannot overlap:
+ *
+ *   ┌ top: status (place, clock) · compass · system actions ───────────────┐
+ *   │            notices (toasts)                         popovers (people,│
+ *   │                                                       controls)      │
+ *   │                     + crosshair, prompts under it                    │
+ *   └ bottom: chat dock (conversation, log, composer) ··· dock (vitals, bar)┘
+ *
+ * The world view stays clear in the middle. Only real controls take pointer input, so drags reach
+ * the canvas. Modal layers sit above the grid. The menu is a dialog (z 40). Notices (z 45) stay
+ * readable over it, and the connection banner (z 50) outranks both.
+ * Late widgets from feature modules are moved into named slots by hud/layout.js:
+ * the clock chip goes to status, the readied spell to dock, and door and actor prompts to prompts.
+ */
+
+#hud {
+  --hud-gap: 0.5rem;
+  --chat-w: 25rem;            /* chat dock width when idle */
+  --talk-w: min(36rem, 46vw); /* chat dock width while a conversation is open */
+  --chat-log-max: min(13rem, 30dvh);
+  --chat-log-talk: 4.4em;     /* about three lines stay visible under a conversation */
+  --talk-max: min(24rem, 52dvh);
+  --vitals-w: calc(15.5rem * var(--ui-scale, 1));
+  box-sizing: border-box;
+  display: grid;
+  /* The popover column is never narrower than a readable list; notices give way first. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 30rem) minmax(min(17rem, 42vw), 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "top    top    top"
+    ".      notes  pop"
+    ".      .      pop"
+    "bottom bottom bottom";
+  gap: var(--hud-gap);
+  padding:
+    max(0.5rem, env(safe-area-inset-top)) max(0.5rem, env(safe-area-inset-right))
+    max(0.5rem, env(safe-area-inset-bottom)) max(0.5rem, env(safe-area-inset-left));
+}
+#hud > * { min-width: 0; min-height: 0; }
+#hud-breath {
+  position: absolute;
+  right: max(2.5%, env(safe-area-inset-right));
+  bottom: 46%;
+  width: clamp(6px, 1vw, 14px);
+  height: clamp(64px, 23vh, 180px);
+}
+/* The base sheet (/play.css) pins these absolutely; here they are grid and flex items. */
+#hud-top, #hud-roster, #hud-help, #hud-chat { position: static; inset: auto; }
+
+/* ---------------------------------------------------------------- top bar */
+
+#hud-top {
+  grid-area: top;
+  display: grid;
+  /* The actions never squeeze under the compass; the place name gives way first. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(auto, 1fr);
+  grid-template-areas: "status compass actions";
+  align-items: start;
+  gap: var(--hud-gap);
+}
+#hud-status {
+  grid-area: status;
+  justify-self: start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  min-width: 0;
+  max-width: 100%;
+}
+#hud-place { max-width: 100%; }
+#hud-compass { grid-area: compass; justify-self: center; width: clamp(9.5rem, 26vw, 16rem); height: 2.1rem; }
+#hud-compass.has-classic-compass { width: 138px; height: 34px; }
+#hud-actions { grid-area: actions; justify-self: end; flex-wrap: nowrap; }
+#hud-actions .btn { white-space: nowrap; }
+
+/* The clock and sound chip (gameplay/atmosphere.js) lives in the status column. */
+#hud-status > .atmo-chip { position: static; translate: none; top: auto; left: auto; z-index: auto; pointer-events: auto; }
+#hud-status > .atmo-chip button { white-space: nowrap; }
+
+/* ---------------------------------------------------------------- notices */
+
+#hud-toasts {
+  grid-area: notes;
+  position: relative;
+  z-index: 45;
+  align-self: start;
+  justify-self: center;
+  width: 100%;
+}
+/* With a page open, notices sit at the bottom edge, over the backdrop and not on the page body. */
+body[data-menu] #hud-toasts {
+  position: absolute;
+  left: 50%;
+  bottom: max(0.6rem, env(safe-area-inset-bottom));
+  translate: -50% 0;
+  width: min(30rem, calc(100vw - 2rem));
+}
+
+/* ---------------------------------------------------------------- popovers */
+
+#hud-popovers {
+  grid-area: pop;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--hud-gap);
+  min-height: 0;
+  overflow: hidden; /* each aside scrolls itself; together they share the column */
+  padding: 4px 6px 8px 4px; /* room for the frame's outer edge and drop shadow */
+  margin: -4px -6px -8px -4px;
+}
+#hud-roster, #hud-help { flex: 0 1 auto; min-height: 4rem; max-height: 100%; width: min(17rem, 100%); }
+#hud-help { width: min(20rem, 100%); flex-shrink: 4; } /* the long reference gives way before the roster */
+#hud-roster { max-height: 60%; }
+
+/* ---------------------------------------------------------------- centre */
+
+#hud-crosshair { z-index: 1; }
+#hud-prompts {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 1.1rem);
+  translate: -50% 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: max-content;
+  max-width: calc(100vw - 1rem);
+  pointer-events: none;
+}
+#hud-target { position: static; translate: none; max-width: 100%; }
+#hud-target .target-name { overflow: hidden; text-overflow: ellipsis; }
+#hud-prompts > .interiors-prompt { position: static; transform: none; translate: none; max-width: 100%; }
+#hud-prompts > #actor-target { position: static; transform: none; translate: none; max-width: 100%; }
+body[data-menu] #hud-prompts, body[data-talk] #hud-target { visibility: hidden; }
+
+/* ---------------------------------------------------------------- bottom: chat dock + dock */
+
+#hud-bottom {
+  grid-area: bottom;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--hud-gap);
+  pointer-events: none;
+}
+
+#hud-chat {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  flex: 0 1 var(--chat-w);
+  min-width: min(15rem, 100%);
+  max-width: 100%;
+}
+#chat-log { flex: 0 1 auto; max-height: var(--chat-log-max); min-height: 0; }
+#chat-form { flex: none; }
+
+/* NPC conversation host (contents: gameplay/npcs.js). It shrink-wraps and scrolls itself. */
+#hud-talk {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: var(--talk-max);
+  overflow: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--steel-1, #485262) transparent;
+}
+body[data-talk] #hud-chat, #hud-chat:has(> #hud-talk:not([hidden])) { flex-basis: var(--talk-w); }
+body[data-talk] #chat-log, #hud-chat:has(> #hud-talk:not([hidden])) #chat-log { max-height: var(--chat-log-talk); }
+
+#hud-dock {
+  flex: 0 1 auto;
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+  max-width: 100%;
+  min-width: 0;
+}
+#hud-vitals { position: static; width: var(--vitals-w); max-width: 100%; box-sizing: border-box; }
+#hud-bar {
+  position: static;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: visible;
+}
+/* The readied-spell chip (gameplay/magic.js) sits with the vitals it spends. */
+#hud-dock > .mg-chip { position: static; left: auto; bottom: auto; z-index: auto; align-self: flex-end; }
+
+/* Touch has no keyboard: drop key hints from the bar and the target readout. */
+@media (pointer: coarse) {
+  #hud-bar kbd, #hud-target kbd { display: none; }
+}
+
+/* ---------------------------------------------------------------- menu dialog */
+
+#game-menu {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding:
+    max(0.8rem, env(safe-area-inset-top)) max(0.8rem, env(safe-area-inset-right))
+    max(0.8rem, env(safe-area-inset-bottom)) max(0.8rem, env(safe-area-inset-left));
+  box-sizing: border-box;
+}
+#game-menu .menu-frame {
+  display: grid;
+  grid-template-columns: minmax(10rem, 12.5rem) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: min(64rem, 100%);
+  height: min(46rem, 100%);
+  min-height: 0;
+}
+/* A page is the whole interface while open: the HUD chrome around the frame (top bar, docks,
+   popovers) steps out instead of peeking past the edges. Toasts and the banner stay. The chat
+   dock keeps its state (a conversation resumes when the page closes). */
+body[data-menu] :is(#hud-top, #hud-popovers, #hud-bottom) { visibility: hidden; }
+
+/* Pages are grouped on the rail: You · World · People · System (shell.js sets data-group-start). */
+#menu-tabs { scroll-padding: 0.6rem; }
+.menu-tab[data-group-start]:not(:first-child) { margin-top: 1.25rem; position: relative; }
+.menu-tab[data-group-start]:not(:first-child)::after {
+  content: attr(data-group-label);
+  position: absolute;
+  left: 0.15rem;
+  bottom: calc(100% + 0.2rem);
+  font: 400 0.56rem/1 var(--caps, monospace);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-3, #7d889c);
+  pointer-events: none;
+}
+
+/* ================================================================ responsive */
+
+/* Mid widths: chat narrows before it would push the dock onto its own row. */
+@media (max-width: 1100px) {
+  #hud { --chat-w: 21rem; }
+}
+
+/* Short screens (phone landscape, heavy zoom): one slim top row, compact dock, full-bleed menu. */
+@media (max-height: 560px) {
+  #hud { --hud-gap: 0.35rem; --chat-log-max: 4.3em; --chat-log-talk: 2.9em; --talk-max: calc(100dvh - 9.5rem); --chat-w: 17rem; --talk-w: min(28rem, 50vw); }
+  /* One bottom row, always: the chat dock and the dock share the width, and the bar wraps in its
+     own column, so a conversation never pushes the vitals or the bar off the screen. */
+  #hud-bottom { flex-wrap: nowrap; }
+  #hud-chat { flex-shrink: 1; min-width: 12rem; max-height: calc(100dvh - 4rem); }
+  #hud-dock { flex: 0 1 auto; min-width: 9rem; }
+  #hud-status { flex-direction: row; align-items: center; flex-wrap: wrap; }
+  #hud-place { padding: 0.2rem 0.55rem 0.25rem; }
+  #hud-place .conn { display: none; }
+  #hud-compass { height: 1.8rem; width: clamp(8rem, 22vw, 12rem); }
+  #hud-actions .btn { min-height: 1.75rem; padding: 0 0.5rem; font-size: 0.66rem; letter-spacing: 0.06em; text-indent: 0; }
+
+  #hud-vitals { width: auto; }
+  #hud-bar .bar-btn { min-width: 3.9em; padding: 0.28rem 0.35rem 0.24rem; gap: 0.12rem; }
+  #hud-bar .bar-btn::before { height: 14px; width: 28px; }
+
+  #game-menu { padding: 0; }
+  #game-menu .menu-frame { width: 100%; height: 100%; grid-template-columns: minmax(8.5rem, 10.5rem) minmax(0, 1fr); }
+  #menu-tabs { padding: 0.4rem 0 0.4rem 0.4rem; }
+  .menu-tab { padding: 0.32rem 0.5rem; font-size: 0.72rem; }
+  .menu-tab[data-group-start]:not(:first-child) { margin-top: 0.5rem; }
+  .menu-tab[data-group-start]:not(:first-child)::after { content: none; }
+  .menu-head { padding: 0.35rem 0.7rem 0.3rem; }
+  .menu-hint { display: none; }
+  #menu-panel { padding: 0.6rem 0.8rem 0.8rem; }
+}
+
+/* Compact vitals (short or narrow): three meters in one row, numbers inside the bars. */
+@media (max-height: 560px), (max-width: 640px) {
+  #hud-vitals {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.25rem 0.45rem;
+    padding: 0.3rem 0.4rem;
+  }
+  #hud-vitals .vital[hidden] { display: none; }
+  .vital { grid-template-columns: auto minmax(0, 1fr); gap: 0.3rem; }
+  .vital-bar { grid-column: 2; grid-row: 1; height: 0.95rem; }
+  .vital-num {
+    grid-column: 2;
+    grid-row: 1;
+    z-index: 1;
+    justify-self: end;
+    min-width: 0;
+    padding: 0 0.25rem;
+    font-size: 0.8em;
+    text-shadow: 1px 1px 0 #000, -1px 0 0 #000;
+  }
+}
+
+/* Narrow (portrait phones): top in two rows, docks full width and stacked, full-screen menu. */
+@media (max-width: 640px) {
+  #hud {
+    --chat-log-max: min(5.8em, 18dvh);
+    --chat-log-talk: 2.9em;
+    --talk-max: 40dvh;
+    grid-template-columns: minmax(0, 1fr);
+    /* The popovers take the free middle row and never more, so the docks stay on screen. */
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-areas: "top" "notes" "pop" "bottom";
+  }
+  #hud-top {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "status actions" "status compass";
+    row-gap: 0.35rem;
+  }
+  #hud-compass { display: block; justify-self: end; width: min(100%, 12rem); height: 1.9rem; }
+  #hud-actions { flex-wrap: wrap; gap: 0.25rem; }
+  #hud-actions .btn { min-height: 1.85rem; padding: 0 0.5rem; font-size: 0.66rem; letter-spacing: 0.05em; text-indent: 0; }
+  .town-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 0.95rem; }
+  #hud-popovers { align-items: stretch; align-self: start; max-height: 100%; }
+  #hud-roster, #hud-help { width: 100%; }
+
+  #hud-bottom { flex-direction: column; align-items: stretch; flex-wrap: nowrap; }
+  #hud-chat, body[data-talk] #hud-chat, #hud-chat:has(> #hud-talk:not([hidden])) { flex: none; width: 100%; min-width: 0; }
+  #hud-dock { margin-left: 0; align-items: stretch; }
+  #hud-dock > .mg-chip { align-self: flex-start; }
+  #hud-vitals { width: 100%; }
+  /* Every page button stays reachable: the bar wraps into even rows instead of scrolling. */
+  #hud-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(3.9rem, 1fr)); }
+  #hud-bar .bar-sep { display: none; }
+  #hud-bar .bar-btn { min-width: 0; padding: 0.3rem 0.2rem 0.26rem; }
+  #hud-bar .bar-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 0.92em; letter-spacing: 0.02em; }
+
+  #game-menu { padding: 0; }
+  #game-menu .menu-frame { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); width: 100%; height: 100%; }
+  #menu-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0.4rem;
+    box-shadow: inset 0 -1px 0 var(--sh-steel-lo);
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
+  }
+  .menu-tab { flex: none; scroll-snap-align: start; }
+  .menu-tab[data-group-start]:not(:first-child) { margin-top: 0; margin-left: 0.6rem; }
+  .menu-tab[data-group-start]:not(:first-child)::after { content: none; }
+  .menu-tab kbd, .menu-hint { display: none; }
+}
+
+/* Short or narrow, the log is a few lines tall: fade the cut edge so a clipped line reads as "more above". */
+@media (max-height: 560px), (max-width: 640px) {
+  #chat-log { -webkit-mask-image: linear-gradient(transparent, #000 0.9em); mask-image: linear-gradient(transparent, #000 0.9em); }
+  body[data-chat-open] #chat-log, #chat-log:hover { -webkit-mask-image: none; mask-image: none; }
+}
+/* Small screens: an open People or Controls list takes the chat dock's space while it is open,
+   so it is never squeezed under the log. Esc or its button closes it and the chat returns. */
+@media (max-height: 560px), (max-width: 640px) {
+  #hud:has(#hud-popovers > aside:not([hidden])) :is(#hud-chat, #hud-toasts) { display: none; }
+}
+/* Phones by touch: the keyboard reference gives its top-bar slot to the place name. */
+@media (max-width: 640px) and (pointer: coarse) {
+  #hud-help-btn { display: none; }
+}
+
+/* Very narrow: the plaque gives way to the actions. */
+@media (max-width: 400px) {
+  #hud-place { padding: 0.25rem 0.5rem 0.3rem; }
+}

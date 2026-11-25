@@ -1,0 +1,127 @@
+#!/usr/bin/env node
+// Entry point: `npm start`. Configuration via environment variables (see server/README.md).
+import { statSync, realpathSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
+import { createGameServer, DEFAULTS } from './game.js';
+import { createAccounts, ACCOUNT_DEFAULTS } from './accounts.js';
+
+function intEnv(name, fallback, min, max) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    console.error(`${name} must be an integer in [${min}, ${max}], got ${JSON.stringify(raw)}`);
+    process.exit(2);
+  }
+  return n;
+}
+
+function boolEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  if (/^(1|true|yes|on)$/i.test(raw)) return true;
+  if (/^(0|false|no|off)$/i.test(raw)) return false;
+  console.error(`${name} must be 1/0, true/false, yes/no or on/off, got ${JSON.stringify(raw)}`);
+  process.exit(2);
+}
+
+// Operator-supplied game data (the ARENA2 folder), read-only and outside every public root.
+function arena2Dir() {
+  const raw = process.env.ARENA2_DIR;
+  if (!raw) return null;
+  let dir;
+  try {
+    dir = realpathSync(resolve(raw));
+    if (!statSync(dir).isDirectory()) throw new Error('not a directory');
+  } catch (err) {
+    console.error(`ARENA2_DIR=${JSON.stringify(raw)} is not a readable directory (${err.code ?? err.message})`);
+    process.exit(2);
+  }
+  for (const pub of [DEFAULTS.clientDir, process.env.SITE_DIR || DEFAULTS.siteDir]) {
+    let root;
+    try {
+      root = realpathSync(pub);
+    } catch {
+      continue;
+    }
+    if (dir === root || dir.startsWith(root.endsWith(sep) ? root : root + sep)) {
+      console.error(`ARENA2_DIR must not be inside a publicly served directory (${root})`);
+      process.exit(2);
+    }
+  }
+  return dir;
+}
+
+const dev = process.argv.includes('--dev');
+
+// Accounts are the normal way in. Guests exist only as an explicit development/test escape hatch.
+const allowGuests = boolEnv('ALLOW_GUESTS', false);
+if (allowGuests && !dev) {
+  console.error('ALLOW_GUESTS=1 is only accepted together with --dev (npm run dev)');
+  process.exit(2);
+}
+const secureCookies = boolEnv('COOKIE_SECURE', true);
+if (!secureCookies && !dev) {
+  console.error('COOKIE_SECURE=0 is only accepted together with --dev (npm run dev)');
+  process.exit(2);
+}
+const accounts = createAccounts({
+  dbPath: process.env.ACCOUNTS_DB_PATH ? resolve(process.env.ACCOUNTS_DB_PATH) : ACCOUNT_DEFAULTS.dbPath,
+  trustProxy: boolEnv('TRUST_PROXY', false),
+  requireHttps: boolEnv('REQUIRE_HTTPS', false),
+  publicOrigin: process.env.PUBLIC_ORIGIN ? new URL(process.env.PUBLIC_ORIGIN).origin : null,
+  secureCookies,
+});
+
+const server = createGameServer({
+  accounts,
+  allowGuests,
+  arena2Dir: arena2Dir(),
+  wodPath: process.env.WOD_PATH || null,
+  // Loopback-only dev convenience: /play.html reads the installed ARENA2 without a folder pick
+  // (server/local-assets.js). Self-disables behind a proxy, with PUBLIC_ORIGIN/REQUIRE_HTTPS,
+  // NODE_ENV=production, LOCAL_ASSETS=0, or a non-loopback HOST.
+  localAssets: {
+    trustProxy: accounts.config.trustProxy,
+    publicOrigin: accounts.config.publicOrigin,
+    requireHttps: accounts.config.requireHttps,
+    dev,
+  },
+  host: process.env.HOST || DEFAULTS.host,
+  port: intEnv('PORT', DEFAULTS.port, 0, 65535),
+  dbPath: process.env.DB_PATH ? resolve(process.env.DB_PATH) : DEFAULTS.dbPath,
+  maxPlayers: intEnv('MAX_PLAYERS', DEFAULTS.maxPlayers, 1, 1000),
+  worldHalfExtent: intEnv('WORLD_HALF_EXTENT', DEFAULTS.worldHalfExtent, 1, 100_000),
+  siteDir: process.env.SITE_DIR ? resolve(process.env.SITE_DIR) : DEFAULTS.siteDir,
+});
+
+try {
+  const addr = await server.start();
+  const host = addr.family === 'IPv6' ? `[${addr.address}]` : addr.address;
+  console.log(`daggerfallworld server listening on http://${host}:${addr.port}/ (WebSocket /ws)`);
+  console.log(`database: ${server.config.dbPath}`);
+  console.log(`accounts: ${accounts.config.dbPath}${allowGuests ? ' (guest entry enabled for development)' : ''}`);
+  if (server.config.arena2Dir) console.log(`game data: ${server.config.arena2Dir} (read-only)`);
+  if (server.localAssets?.enabled) console.log(`local game files: ${server.localAssets.dir} offered to /play.html on this loopback origin only (${server.localAssets.reason}; LOCAL_ASSETS=0 to disable)`);
+  console.log(`game: http://${host}:${addr.port}/play.html`);
+  if (!['127.0.0.1', '::1', 'localhost'].includes(server.config.host) && !accounts.config.trustProxy) {
+    console.warn('warning: bound to a non-loopback address without TRUST_PROXY; serve it behind a TLS reverse proxy (docs/public-hosting.md)');
+  }
+} catch (err) {
+  console.error(`failed to start: ${err.message}`);
+  await server.close().catch(() => {});
+  accounts.close();
+  process.exit(1);
+}
+
+let stopping = false;
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, async () => {
+    if (stopping) process.exit(1);
+    stopping = true;
+    console.log(`\n${sig} received, saving and shutting down...`);
+    await server.close();
+    accounts.close(); // after the game server: live sessions may still query mutes while closing
+    process.exit(0);
+  });
+}

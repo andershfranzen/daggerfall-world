@@ -1,0 +1,56 @@
+# Reference clones and local game data — never committed
+.ref/
+gamedata/
+
+# Browser progress captures may contain locally supplied game art.
+progress/screenshots/
+
+# Build output
+bin/
+obj/
+node_modules/
+dist/
+
+# Local state
+*.db
+*.db-*
+.env
+.env.*
+
+# Next.js website (npm run build / npm run dev)
+website/.next/
+website/out/
+*.tsbuildinfo
+
+# World audit output (counts and ids derived from local game data)
+progress/world-audit/
+
+# NPC coverage audit output (counts and record keys derived from local game data)
+progress/npc-audit/
+
+# The separately maintained private website and any local integration helpers.
+/website
+/server/signup.js
+/tools/check-patch-notes.mjs
+/tools/publish-patch-notes.mjs
+/tools/release-patch-notes.sh
+/test/patch-announcements.test.mjs
+/test/signup-cutover.test.mjs
+/deploy/signup.*
+/.github/workflows/patch-notes.yml
+/assets/daggerfall-world-discord.png
+/server/data/
+/progress/
+# Operator-provided assets, save files and credentials must stay local.
+*.bsa
+*.BSA
+*.qbn
+*.QBN
+*.qrc
+*.QRC
+*.rdb
+*.RDB
+*.dfmod
+*.sqlite*
+*.pem
+*.key

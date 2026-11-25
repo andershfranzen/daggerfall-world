@@ -1,0 +1,423 @@
+/* Base design for the game client. /hud/interface.css loads after this and may override. */
+
+:root {
+  --ink: #efe3c6;
+  --ink-dim: #bfae8a;
+  --ink-faint: #8e7f63;
+  --parchment: #e9dcbc;
+  --gold: #d6a84a;
+  --gold-hi: #f0c868;
+  --ember: #c3542f;
+  --ok: #8fb36a;
+  --stone-0: #120f0c;
+  --stone-1: #1d1914;
+  --stone-2: #2a241c;
+  --stone-3: #3b3227;
+  --edge: #6d5a3c;
+  --shadow: 0 10px 40px rgb(0 0 0 / 0.55);
+  --serif: "Cinzel", "Trajan Pro", "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", "P052", Georgia, serif;
+  --text: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", "P052", Georgia, serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --radius: 3px;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--stone-0);
+  color: var(--ink);
+  font: 16px/1.45 var(--text);
+}
+
+#view {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+  outline: none;
+}
+#view.dragging { cursor: grabbing; }
+body[data-pointer-lock] #view { cursor: none; }
+
+/* Before a town exists the canvas is blank; give the landing a warm backdrop. */
+body[data-screen="landing"] #view,
+body[data-screen="loading"] #view,
+body[data-screen="failure"] #view { filter: blur(2px) brightness(0.55) saturate(0.8); cursor: default; }
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 40%, rgb(214 168 74 / 0.10), transparent 60%),
+    radial-gradient(ellipse at 50% 120%, rgb(0 0 0 / 0.8), transparent 70%);
+  z-index: 0;
+}
+body[data-screen="game"]::before { display: none; }
+
+/* ------------------------------------------------------------ panels */
+
+.screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: auto;
+}
+
+.panel {
+  width: min(460px, 100%);
+  padding: 28px 30px 26px;
+  background:
+    linear-gradient(180deg, rgb(255 240 200 / 0.04), transparent 40%),
+    linear-gradient(180deg, var(--stone-2), var(--stone-1));
+  border: 1px solid var(--edge);
+  outline: 1px solid rgb(0 0 0 / 0.6);
+  outline-offset: 3px;
+  box-shadow: var(--shadow), inset 0 0 0 1px rgb(255 230 170 / 0.05);
+  border-radius: var(--radius);
+}
+
+.panel-head { margin-bottom: 18px; }
+.back-link {
+  color: var(--ink-faint);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+.back-link:hover, .back-link:focus-visible { color: var(--gold-hi); }
+
+h1, h2, h3 {
+  font-family: var(--serif);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--gold);
+  margin: 0;
+}
+h1 {
+  font-size: clamp(1.9rem, 5vw, 2.4rem);
+  margin-top: 10px;
+  text-shadow: 0 2px 0 #000, 0 0 18px rgb(214 168 74 / 0.25);
+}
+h2 { font-size: 1.45rem; margin-bottom: 14px; }
+h3 { font-size: 0.95rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px; }
+
+.lede { color: var(--ink-dim); margin: 8px 0 0; }
+
+.field { margin-bottom: 18px; }
+label, .label {
+  display: block;
+  font-family: var(--serif);
+  font-size: 0.82rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-bottom: 6px;
+}
+
+input[type="text"] {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--stone-0);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  box-shadow: inset 0 2px 6px rgb(0 0 0 / 0.5);
+}
+input[type="text"]:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
+
+.note { font-size: 0.88rem; color: var(--ink-dim); margin: 6px 0 0; min-height: 0; }
+.note:empty { display: none; }
+.note.fine { color: var(--ink-faint); font-size: 0.8rem; }
+.note.error, .error { color: #f0a080; }
+
+.drop {
+  padding: 14px;
+  border: 1px dashed var(--edge);
+  border-radius: var(--radius);
+  background: rgb(0 0 0 / 0.25);
+  transition: border-color 0.15s, background 0.15s;
+}
+.drop .note { margin-top: 10px; }
+.drop[data-state="ready"] { border-style: solid; border-color: var(--ok); }
+.drop[data-state="ready"] .note { color: #c7dcae; }
+.drop[data-state="warn"] { border-color: var(--gold); }
+.drop[data-state="error"] { border-color: var(--ember); }
+.drop[data-state="error"] .note { color: #f0a080; }
+.drop[data-state="dragover"] { border-color: var(--gold-hi); background: rgb(214 168 74 / 0.12); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 16px;
+  font-family: var(--serif);
+  font-size: 0.92rem;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+  background: linear-gradient(180deg, var(--stone-3), var(--stone-2));
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 0 rgb(0 0 0 / 0.6), inset 0 1px 0 rgb(255 230 170 / 0.08);
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { border-color: var(--gold); color: #fff3d6; }
+.btn:active:not(:disabled) { transform: translateY(1px); box-shadow: 0 1px 0 rgb(0 0 0 / 0.6); }
+.btn:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 2px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary {
+  width: 100%;
+  padding: 12px 18px;
+  font-size: 1.05rem;
+  color: #1b140a;
+  background: linear-gradient(180deg, var(--gold-hi), var(--gold) 60%, #a87d2c);
+  border-color: #7a5a1e;
+  text-shadow: 0 1px 0 rgb(255 240 200 / 0.4);
+}
+.btn-primary:hover:not(:disabled) { color: #000; border-color: #f7dc98; }
+.btn-small { padding: 5px 10px; font-size: 0.8rem; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.actions .btn-primary { width: auto; flex: 1 1 auto; }
+
+/* ------------------------------------------------------------ loading */
+
+.panel-status { text-align: left; }
+.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.steps li {
+  position: relative;
+  padding-left: 28px;
+  color: var(--ink-faint);
+}
+.steps li::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0.45em;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+  border: 1px solid currentColor;
+}
+.steps li[data-state="active"] { color: var(--ink); }
+.steps li[data-state="active"]::before { background: var(--gold); border-color: var(--gold); animation: pulse 1s ease-in-out infinite; }
+.steps li[data-state="done"] { color: var(--ink-dim); }
+.steps li[data-state="done"]::before { background: var(--ok); border-color: var(--ok); }
+.steps li[data-state="failed"] { color: #f0a080; }
+.steps li[data-state="failed"]::before { background: var(--ember); border-color: var(--ember); }
+@keyframes pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .steps li::before { animation: none !important; } }
+
+#failure-message { margin: 0 0 6px; }
+
+/* ------------------------------------------------------------ in-game HUD */
+
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  font-size: 15px;
+  text-shadow: 0 1px 2px #000;
+}
+#hud button, #hud input, #hud aside, #hud-banner, #chat-log { pointer-events: auto; }
+
+#hud-top {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  gap: 10px;
+}
+#hud-place {
+  justify-self: start;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 12px;
+  background: rgb(18 15 12 / 0.72);
+  border: 1px solid rgb(109 90 60 / 0.8);
+  border-radius: var(--radius);
+}
+.town-name { font-family: var(--serif); color: var(--gold); letter-spacing: 0.06em; }
+.conn { font-size: 0.8rem; color: var(--ink-dim); }
+.conn:empty { display: none; }
+.conn[data-conn="lost"], .conn[data-conn="closed"] { color: #f0a080; }
+.conn[data-conn="connecting"] { color: var(--gold-hi); }
+
+#hud-compass {
+  min-width: 64px;
+  padding: 4px 12px;
+  text-align: center;
+  font-family: var(--serif);
+  color: var(--parchment);
+  background: rgb(18 15 12 / 0.72);
+  border: 1px solid rgb(109 90 60 / 0.8);
+  border-radius: var(--radius);
+}
+#hud-actions { justify-self: end; display: flex; gap: 6px; }
+#hud-count {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.45);
+  color: var(--gold-hi);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+#hud-roster, #hud-help {
+  position: absolute;
+  top: 56px;
+  right: 10px;
+  width: 240px;
+  max-height: calc(100% - 260px);
+  overflow: auto;
+  padding: 12px 14px;
+  background: rgb(18 15 12 / 0.88);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+#hud-help { width: 290px; }
+#hud-roster:not([hidden]) + #hud-help { top: auto; bottom: 200px; }
+#roster-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+#roster-list li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#roster-list li.you { color: var(--gold-hi); }
+#roster-list small { color: var(--ink-faint); }
+#hud-help dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 0.88rem; }
+#hud-help dt { font-family: var(--mono); font-size: 0.78rem; color: var(--gold-hi); white-space: nowrap; padding-top: 2px; }
+#hud-help dd { margin: 0; color: var(--ink-dim); }
+
+#hud-chat {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  width: min(440px, calc(100% - 20px));
+}
+#chat-log {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  max-height: 32vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  mask-image: linear-gradient(to bottom, transparent, #000 24px);
+}
+.chat-line {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 8px;
+  background: rgb(18 15 12 / 0.62);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+  transition: opacity 0.6s;
+}
+.chat-name { color: var(--gold-hi); margin-right: 6px; font-weight: 600; }
+.chat-name::after { content: ":"; }
+.chat-self .chat-name { color: #c7dcae; }
+.chat-system { color: var(--ink-dim); font-style: italic; }
+.chat-old { opacity: 0.35; }
+body[data-chat-open] .chat-old, #hud-chat:hover .chat-old { opacity: 1; }
+
+#chat-input {
+  padding: 7px 10px;
+  font-size: 0.95rem;
+  background: rgb(18 15 12 / 0.55);
+  border-color: rgb(109 90 60 / 0.6);
+}
+#chat-input:focus { background: rgb(18 15 12 / 0.92); }
+#chat-input::placeholder { color: var(--ink-faint); }
+
+#hud-banner {
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100% - 20px));
+  padding: 18px 20px;
+  text-align: center;
+  background: rgb(18 15 12 / 0.92);
+  border: 1px solid var(--ember);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+#hud-banner p { margin: 0; }
+#hud-banner .actions { justify-content: center; margin-top: 14px; }
+
+#hud-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: rgb(255 244 220 / 0.7);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5);
+}
+
+/* ------------------------------------------------------------ name labels */
+
+#labels {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: hidden;
+}
+#labels .label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  will-change: transform;
+  white-space: nowrap;
+}
+.label-name {
+  padding: 1px 7px;
+  font-family: var(--serif);
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  color: var(--parchment);
+  background: rgb(18 15 12 / 0.6);
+  border-radius: var(--radius);
+  text-shadow: 0 1px 1px #000;
+}
+.label-say {
+  max-width: 240px;
+  padding: 4px 9px;
+  white-space: normal;
+  text-align: center;
+  font-size: 13px;
+  color: #1b140a;
+  background: var(--parchment);
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.45);
+}
+
+@media (max-width: 640px) {
+  #hud-top { grid-template-columns: 1fr auto; }
+  #hud-compass { display: none; }
+  .panel { padding: 22px 18px; }
+}

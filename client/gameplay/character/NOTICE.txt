@@ -1,0 +1,79 @@
+Third-party notices for client/gameplay/character/
+==================================================
+
+rules.js, cfg.js and classic.js contain rules and file-format readers adapted
+from the projects below. portraits.js follows Daggerfall Unity's head-file mapping
+(Game/Entities/RaceTemplate.cs, Game/UserInterface/FacePicker.cs,
+API/CifRciFile.cs, Utility/ImageReader.cs) and reuses the CIF reader in
+../inventory/images.js (from dfjs src/formats/cifRciFile.js). Both are MIT licensed. Their notices follow verbatim.
+
+- Daggerfall Unity, https://github.com/Interkarma/daggerfall-unity
+  Game/Formulas/FormulaHelper.cs, Game/UserInterface/StatsRollout.cs,
+  Game/UserInterface/SkillsRollout.cs, Game/Entities/DaggerfallSkills.cs,
+  Game/Entities/PlayerEntity.cs, Game/Entities/RaceTemplate.cs,
+  Game/UserInterfaceWindows/CreateCharCustomClass.cs,
+  Game/UserInterfaceWindows/CreateCharSpecialAdvantageWindow.cs,
+  API/ClassFile.cs, API/DFCareer.cs, API/TextFile.cs, API/BiogFile.cs,
+  API/BiogFileMCP.cs, Game/UserInterfaceWindows/CreateCharClassQuestions.cs
+  (including its question-to-path answer table),
+  Game/UserInterfaceWindows/DaggerfallStartNewGameWizard.cs.
+
+- daggerfall-js-source / dfjs by Lattymoy,
+  src/systems/chargen.js, src/systems/skills.js, src/formats/classFile.js.
+
+No Daggerfall game data is included. Class records (CLASS*.CFG), the class
+questionnaire (TEXT.RSC, CLASSES.DAT), biographies (BIOG*.TXT), faces and other
+art are read from the player's or operator's own installation at runtime. The
+Elder Scrolls II: Daggerfall is the property of Bethesda Softworks.
+
+----------------------------------------------------------------------
+
+Daggerfall Unity
+
+MIT License
+
+Copyright (c) 2009-2023 Daggerfall Workshop
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+----------------------------------------------------------------------
+
+daggerfall-js-source / dfjs
+
+MIT License
+
+Copyright (c) 2026 Lattymoy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

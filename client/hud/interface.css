@@ -1,0 +1,1072 @@
+/* Daggerfall World — Play screen and in-game interface.
+ * Loaded after /play.css and replaces its look. Styles the IDs and classes in client/hud-contract.md.
+ *
+ * Same system as the public website (website/app/globals.css):
+ *   Night & slate ground, bevelled steel frames lit top-left, sapphire for the one main action,
+ *   focus and state. Jacquard 12 for the wordmark only; Pixelify Sans for everything else.
+ *   Warmth belongs to the painting (Thomas Cole, The Past, 1838) behind the lobby and nothing else.
+ * Fonts and images are same-origin website assets (/fonts/, /images/), OFL and public domain.
+ */
+
+@font-face {
+  font-family: "Jacquard 12";
+  src: url("/fonts/jacquard-12-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DFW Pixel";
+  src: url("/fonts/pixelify-sans-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DFW Pixel";
+  src: url("/fonts/pixelify-sans-latin-600-normal.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+/* Pixelify Sans draws a 5 that reads as an 8; Silkscreen supplies that one digit. */
+@font-face {
+  font-family: "DFW Five";
+  src: url("/fonts/silkscreen-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0035;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DFW Caps";
+  src: url("/fonts/silkscreen-latin-400-normal.woff2") format("woff2");
+  font-display: swap;
+}
+
+:root {
+  /* Ground and steel (matches the website). */
+  --night: #0a0c11;
+  --night-2: #0e1219;
+  --slate: #131923;
+  --slate-2: #1a212d;
+  --steel-hi: #a9b4c6;
+  --steel-1: #485262;
+  --steel-2: #343c49;
+  --steel-3: #262c36;
+  --steel-lo: #161a21;
+  --edge: #030407;
+
+  --text: #dde3ec;
+  --text-2: #aab4c4;
+  --text-3: #7d889c;
+
+  --blue: #6fb6ff;
+  --blue-hi: #b6dcff;
+  --blue-1: #2e6cc0;
+  --blue-2: #1c4a8e;
+  --blue-lo: #0b2147;
+  --mint: #7ee0c3;
+  --frost: #c9d8ff;     /* caution: cold white-blue, never amber */
+  --rose: #f2a3ad;      /* error */
+
+  --pixel: "DFW Five", "DFW Pixel", "Pixelify Sans", ui-monospace, monospace;
+  --caps: "DFW Caps", "Silkscreen", "DFW Pixel", ui-monospace, monospace;
+  --display: "Jacquard 12", "DFW Pixel", serif;
+  --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --shadow-text: 2px 2px 0 #000;
+  --bevel: var(--steel-hi) var(--steel-lo) var(--steel-lo) var(--steel-hi);
+  --bevel-in: var(--steel-lo) var(--steel-hi) var(--steel-hi) var(--steel-lo);
+  --face: linear-gradient(var(--steel-1) 0 50%, var(--steel-2) 50% 100%);
+  --face-hover: linear-gradient(#556072 0 50%, var(--steel-1) 50% 100%);
+  --face-sapphire: linear-gradient(var(--blue-1) 0 50%, var(--blue-2) 50% 100%);
+  --face-sapphire-hover: linear-gradient(#3b7fd6 0 50%, var(--blue-1) 50% 100%);
+  --glass: rgba(14, 18, 25, 0.84);       /* HUD chrome over the 3D view */
+  --glass-solid: rgba(19, 25, 35, 0.95);
+  --frame:
+    0 0 0 2px var(--edge),
+    inset 0 0 0 2px var(--edge),
+    6px 6px 0 2px rgba(0, 0, 0, 0.45);
+  --frame-thin: 0 0 0 1px var(--edge), inset 0 1px 0 rgba(169, 180, 198, 0.22), 3px 3px 0 0 rgba(0, 0, 0, 0.45);
+  --focus-ring: 2px solid var(--blue);
+  --deg-px: 1.6px; /* compass scale */
+
+  /* Remap the base (/play.css) and older HUD tokens so nothing left over can turn warm.
+     Feature panels (travel.css) read these names too. */
+  --ink: var(--text);
+  --ink-dim: var(--text-2);
+  --ink-faint: var(--text-3);
+  --gold: var(--steel-hi);
+  --gold-hi: var(--blue-hi);
+  --ember: var(--rose);
+  --ok: var(--mint);
+  --stone-0: var(--night);
+  --stone-1: var(--slate);
+  --stone-2: var(--slate-2);
+  --stone-3: var(--steel-3);
+  --serif: var(--pixel);
+  --parchment: var(--text);
+  --parchment-dim: var(--text-2);
+  --parchment-mute: var(--text-3);
+  --gilt: var(--blue-hi);
+  --gilt-bright: var(--blue-hi);
+  --gilt-dim: var(--steel-1);
+  --oxblood: var(--blue-2);
+  --verdigris: var(--mint);
+  --amber: var(--frost);
+  --blood: var(--rose);
+  --rule: 2px solid var(--steel-3);
+  --radius: 0;
+  color-scheme: dark;
+}
+
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+html { background: var(--night); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--night);
+  font: 16px/1.5 var(--pixel);
+  /* Pixelify Sans's fi ligature reads as a capital A. */
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "clig" 0;
+}
+
+#view {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  display: block;
+  outline: none;
+}
+/* Before the town exists the canvas is blank: show the painting instead. */
+body:not([data-screen="game"]) #view { visibility: hidden; filter: none; }
+
+/* --------------------------------------------------------------- the painting */
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: var(--night);
+  background-image: url("/images/cole-the-past-1600.jpg");
+  background-image: image-set(url("/images/cole-the-past-2400.webp") type("image/webp") 1x, url("/images/cole-the-past-1600.jpg") type("image/jpeg") 1x);
+  background-size: cover;
+  background-position: 50% 32%;
+  background-repeat: no-repeat;
+}
+/* Localised scrim: a breath at the top, night falling under the lobby. The painting stays visible. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(10, 12, 17, 0.5), rgba(10, 12, 17, 0) 16%),
+    radial-gradient(ellipse 70% 60% at 50% 64%, rgba(10, 12, 17, 0.55), rgba(10, 12, 17, 0) 100%),
+    linear-gradient(to top, rgba(10, 12, 17, 0.9) 0, rgba(10, 12, 17, 0.35) 30%, rgba(10, 12, 17, 0) 55%);
+}
+@media (max-width: 1200px) {
+  body::before { background-image: url("/images/cole-the-past-1600.jpg"); background-image: image-set(url("/images/cole-the-past-1280.webp") type("image/webp") 1x, url("/images/cole-the-past-1600.jpg") type("image/jpeg") 1x); }
+}
+@media (max-width: 640px) {
+  /* Portrait phones: the tower is the subject, keep it in frame. */
+  body::before { background-position: 34% 30%; }
+}
+body[data-screen="game"]::before,
+body[data-screen="game"]::after { display: none; }
+
+/* ---------------------------------------------------------------- controls */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  min-height: 2.5rem;
+  padding: 0.4rem 1.1rem;
+  font: 600 0.9rem/1.2 var(--pixel);
+  text-align: center;
+  letter-spacing: 0.14em;
+  text-indent: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+  text-decoration: none;
+  text-shadow: var(--shadow-text);
+  background: var(--face);
+  border: 2px solid;
+  border-color: var(--bevel);
+  border-radius: 0;
+  box-shadow: 0 0 0 2px var(--edge), 3px 3px 0 2px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transition: none;
+}
+.btn:hover:not(:disabled) { color: var(--blue-hi); background: var(--face-hover); border-color: var(--bevel); }
+.btn:active:not(:disabled) {
+  border-color: var(--bevel-in);
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 2px var(--edge), 1px 1px 0 2px rgba(0, 0, 0, 0.5);
+}
+.btn:disabled {
+  cursor: not-allowed;
+  color: var(--text-3);
+  text-shadow: 1px 1px 0 #000;
+  background: linear-gradient(var(--steel-3) 0 50%, var(--steel-lo) 50% 100%);
+  border-color: var(--steel-2) var(--edge) var(--edge) var(--steel-2);
+  opacity: 1;
+}
+
+.btn-primary {
+  color: #fff;
+  background: var(--face-sapphire);
+  border-color: #9fd0ff var(--blue-lo) var(--blue-lo) #9fd0ff;
+}
+.btn-primary:hover:not(:disabled) { color: #fff; background: var(--face-sapphire-hover); border-color: #b8dcff var(--blue-lo) var(--blue-lo) #b8dcff; }
+.btn-primary:active:not(:disabled) { border-color: var(--blue-lo) #9fd0ff #9fd0ff var(--blue-lo); }
+
+.btn-small {
+  min-height: 2rem;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  text-indent: 0.1em;
+  box-shadow: 0 0 0 1px var(--edge), 2px 2px 0 1px rgba(0, 0, 0, 0.45);
+}
+
+:where(button, a, input, select, textarea, [tabindex]):focus { outline: none; }
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible { outline: var(--focus-ring); outline-offset: 3px; box-shadow: none; }
+.btn:focus-visible { outline: var(--focus-ring); outline-offset: 4px; }
+
+h1, h2, h3 { font-family: var(--pixel); font-weight: 600; margin: 0; text-transform: none; letter-spacing: normal; color: var(--text); }
+
+a { color: var(--blue-hi); text-decoration-color: var(--blue-2); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+a:hover { color: #fff; text-decoration-color: var(--blue); }
+
+.note { margin: 0.35rem 0 0; font-size: 0.9rem; line-height: 1.45; color: var(--text-2); }
+.note:empty { display: none; }
+.note.fine { font-size: 0.82rem; color: var(--text-3); font-style: normal; }
+.note.error, .error { color: var(--rose); }
+
+input[type="text"], input[type="password"], input[type="search"], input[type="number"], select, textarea {
+  font: 400 1rem/1.3 var(--pixel);
+  color: var(--text);
+  background: #070a0f;
+  border: 2px solid;
+  border-color: var(--edge) var(--steel-2) var(--steel-2) var(--edge);
+  border-radius: 0;
+  caret-color: var(--blue-hi);
+}
+input[type="text"]:focus-visible, input[type="password"]:focus-visible, input[type="search"]:focus-visible, select:focus-visible, textarea:focus-visible,
+input[type="text"]:focus, input[type="password"]:focus { outline: var(--focus-ring); outline-offset: 2px; }
+::placeholder { color: var(--text-3); opacity: 1; }
+
+/* -------------------------------------------------------------- lobby screens */
+
+.screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: max(1rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* A window: a slate pane in a bevelled steel frame. */
+.panel {
+  position: relative;
+  box-sizing: border-box;
+  width: min(100%, 30rem);
+  padding: 1.5rem clamp(1rem, 4vw, 1.9rem) 1.4rem;
+  background: linear-gradient(rgba(26, 33, 45, 0.94), rgba(19, 25, 35, 0.94) 8rem);
+  border: 4px solid;
+  border-color: var(--steel-1) var(--steel-3) var(--steel-3) var(--steel-1);
+  border-radius: 0;
+  outline: 0;
+  box-shadow: var(--frame);
+}
+.panel::before, .panel::after { content: none; }
+
+/* --- landing: a title screen ---------------------------------------------
+   The landing panel is not a box: the wordmark sits on the painting and the
+   account and character forms are two windows under it. */
+#screen-landing { align-items: end; }
+.panel-landing {
+  width: min(100%, 58rem);
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: "head head" "acct join";
+  gap: 1.1rem 1.6rem;
+  align-items: start;
+  padding-bottom: clamp(0.5rem, 3vh, 2.5rem);
+}
+.panel-landing > .panel-head { grid-area: head; }
+.panel-landing > .acct { grid-area: acct; }
+.panel-landing > #join-form { grid-area: join; }
+/* Before the account module mounts (or if it fails), the form stands alone and centred. */
+.panel-landing:not(:has(> .acct)) { grid-template-columns: minmax(0, 30rem); grid-template-areas: "head" "join"; justify-content: center; }
+
+.panel-head {
+  position: relative;
+  text-align: center;
+  margin: 0 0 0.4rem;
+  padding-top: 2.6rem;
+}
+.back-link {
+  position: fixed;
+  top: max(0.8rem, env(safe-area-inset-top));
+  left: max(0.9rem, env(safe-area-inset-left));
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  min-height: 2.25rem;
+  padding: 0 0.85rem;
+  font: 600 0.78rem/1 var(--pixel);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+  text-decoration: none;
+  text-shadow: var(--shadow-text);
+  background: rgba(10, 12, 17, 0.7);
+  border: 2px solid var(--steel-2);
+  box-shadow: 0 0 0 2px var(--edge);
+}
+.back-link:hover { color: var(--blue-hi); border-color: var(--steel-1); }
+
+#landing-title {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: clamp(3.4rem, 11vw, 7.25rem);
+  line-height: 0.86;
+  letter-spacing: 0.01em;
+  color: #e9eef5;
+  background: linear-gradient(#ffffff 0 30%, #d3dbe7 30% 52%, #9eabbf 52% 74%, #75839a 74% 100%);
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 4px 0 #05070c) drop-shadow(4px 0 0 #05070c) drop-shadow(0 0 22px rgba(10, 12, 17, 0.75));
+  text-shadow: none;
+  text-wrap: balance;
+}
+/* Rule with a sapphire stone, as on the website. */
+#landing-title::after { content: none; }
+.panel-head::after {
+  content: "";
+  display: block;
+  width: min(22rem, 70%);
+  height: 20px;
+  margin: 0.9rem auto 0.6rem;
+  background:
+    linear-gradient(var(--blue-hi), var(--blue-hi)) center / 4px 4px no-repeat,
+    linear-gradient(var(--blue), var(--blue)) center / 12px 4px no-repeat,
+    linear-gradient(var(--blue), var(--blue)) center / 4px 12px no-repeat,
+    linear-gradient(var(--steel-hi), var(--steel-hi)) center / 20px 4px no-repeat,
+    linear-gradient(var(--steel-hi), var(--steel-hi)) center / 4px 20px no-repeat,
+    linear-gradient(90deg, transparent, var(--steel-hi) calc(50% - 22px), transparent calc(50% - 22px), transparent calc(50% + 22px), var(--steel-hi) calc(50% + 22px), transparent) center / 100% 2px no-repeat;
+  filter: drop-shadow(2px 2px 0 #000);
+}
+.lede {
+  margin: 0.9rem auto 0;
+  max-width: 40ch;
+  font-size: 1.1rem;
+  font-style: normal;
+  line-height: 1.45;
+  color: var(--text);
+  text-shadow: var(--shadow-text);
+}
+
+/* Both lobby windows share one frame. */
+#join-form,
+.panel-landing > .acct {
+  position: relative;
+  margin: 0;
+  background: linear-gradient(rgba(26, 33, 45, 0.93), rgba(19, 25, 35, 0.93) 8rem);
+  border: 4px solid;
+  border-color: var(--steel-1) var(--steel-3) var(--steel-3) var(--steel-1);
+  box-shadow: var(--frame);
+  -webkit-backdrop-filter: blur(2px);
+          backdrop-filter: blur(2px);
+}
+#join-form {
+  display: grid;
+  gap: 1rem;
+  padding: 0 1.15rem 1.2rem;
+}
+/* Window name band, drawn without extra markup. */
+#join-form::before {
+  content: "Your traveller";
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 -1.15rem;
+  padding: 0.6rem 1rem;
+  font: 400 0.78rem/1.2 var(--caps);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+  text-shadow: var(--shadow-text);
+  background: linear-gradient(var(--steel-2) 0 50%, var(--steel-3) 50% 100%);
+  border-bottom: 2px solid var(--edge);
+  box-shadow: inset 0 2px 0 rgba(169, 180, 198, 0.35);
+}
+.panel-landing > .acct { margin: 0; min-width: 0; padding: 0 1.15rem 1.15rem; }
+
+.account-gate {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: rgba(11, 33, 71, 0.55);
+  border-left: 4px solid var(--blue);
+}
+
+.field { display: grid; gap: 0.35rem; margin: 0; }
+.field label, .field .label {
+  display: block;
+  margin: 0;
+  font: 400 0.72rem/1.2 var(--caps);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-variant: normal;
+  color: var(--steel-hi);
+}
+
+#name-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 1.1rem;
+  padding: 0.55em 0.65em;
+  box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.6);
+}
+#name-input[aria-invalid="true"] { border-color: var(--rose) #7c3b45 #7c3b45 var(--rose); }
+
+/* Game data well: an inset tray. */
+.drop {
+  display: grid;
+  gap: 0.55rem;
+  justify-items: start;
+  padding: 0.8rem 0.85rem;
+  background: rgba(7, 10, 15, 0.7);
+  border: 2px dashed var(--steel-1);
+  border-left: 4px solid var(--steel-1);
+  border-radius: 0;
+}
+.drop .note { margin: 0; }
+.drop[data-state="dragover"] { border-color: var(--blue); background: rgba(46, 108, 192, 0.16); }
+.drop[data-state="ready"] { border-style: solid; border-color: rgba(126, 224, 195, 0.45); border-left-color: var(--mint); }
+.drop[data-state="ready"] #data-status { color: var(--text); }
+.drop[data-state="ready"] #data-status::before { content: "✓ "; color: var(--mint); }
+.drop[data-state="warn"] { border-style: solid; border-color: rgba(201, 216, 255, 0.4); border-left-color: var(--frost); }
+.drop[data-state="warn"] #data-status { color: var(--frost); }
+.drop[data-state="error"] { border-style: solid; border-color: rgba(242, 163, 173, 0.5); border-left-color: var(--rose); }
+.drop[data-state="error"] #data-status { color: var(--rose); }
+
+#enter-btn {
+  justify-self: stretch;
+  min-height: 3.25rem;
+  margin-top: 0.2rem;
+  padding: 0.5rem 1rem;
+  font-size: 1.05rem;
+  line-height: 1.25;
+  letter-spacing: 0.12em;
+  text-indent: 0.12em;
+  text-align: center;
+  overflow-wrap: anywhere;
+  box-shadow: 0 0 0 2px var(--edge), 4px 4px 0 2px rgba(0, 0, 0, 0.55);
+}
+#form-error { margin: 0; text-align: center; }
+
+/* --- loading / failure --- */
+.panel-status { text-align: left; padding-top: 0; }
+.panel-status h2 {
+  margin: 0 calc(-1 * clamp(1rem, 4vw, 1.9rem)) 1.1rem;
+  padding: 0.7rem 1rem;
+  font: 400 0.95rem/1.2 var(--caps);
+  letter-spacing: 0.14em;
+  text-indent: 0.14em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--text);
+  text-shadow: var(--shadow-text);
+  background: linear-gradient(var(--steel-2) 0 50%, var(--steel-3) 50% 100%);
+  border-bottom: 2px solid var(--edge);
+  box-shadow: inset 0 2px 0 rgba(169, 180, 198, 0.35);
+}
+.steps { list-style: none; margin: 0 0 0.6rem; padding: 0; counter-reset: step; display: grid; gap: 0.45rem; }
+.steps li {
+  counter-increment: step;
+  position: relative;
+  margin: 0;
+  padding: 0.55rem 0.7rem 0.55rem 2.6rem;
+  font-size: 1rem;
+  color: var(--text-3);
+  background: rgba(7, 10, 15, 0.55);
+  border: 2px solid var(--steel-3);
+}
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0.6rem; top: 50%;
+  translate: 0 -50%;
+  width: 1.3rem; height: 1.3rem;
+  display: grid; place-items: center;
+  font: 400 0.62rem/1 var(--caps);
+  color: var(--text-3);
+  background: var(--steel-lo);
+  border: 2px solid var(--steel-2);
+  border-radius: 0;
+  transform: none;
+  animation: none;
+}
+.steps li[data-state="active"] { color: var(--text); border-color: var(--blue-2); }
+.steps li[data-state="active"]::before { color: #fff; background: var(--blue-1); border-color: var(--blue-hi); animation: hud-pulse 1.1s steps(2) infinite; }
+.steps li[data-state="active"]::after { content: " …"; color: var(--blue-hi); }
+.steps li[data-state="done"] { color: var(--text-2); }
+.steps li[data-state="done"]::before { content: "✓"; font: 600 0.8rem/1 var(--pixel); color: var(--night); background: var(--mint); border-color: #c4f5e6; }
+.steps li[data-state="failed"] { color: var(--rose); border-color: #5a2a33; }
+.steps li[data-state="failed"]::before { content: "✕"; font: 600 0.8rem/1 var(--pixel); color: var(--night); background: var(--rose); border-color: #ffd0d6; }
+
+#loading-detail { min-height: 1.3em; font-style: normal; text-align: center; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; justify-content: center; margin-top: 1.2rem; }
+.actions .btn-primary { width: auto; flex: 0 1 auto; }
+
+#screen-failure .panel { border-top-color: #8a4a55; }
+#screen-failure .panel-status h2 { background: linear-gradient(#4a2a33 0 50%, #3a2028 50% 100%); }
+#failure-title { color: #ffe3e7; }
+#failure-message { margin: 0 0 0.6rem; color: var(--text); }
+#failure-hint { color: var(--text-2); }
+
+@keyframes hud-pulse { 50% { background: var(--blue-2); } }
+
+/* -------------------------------------------------------------------- in game */
+
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none; /* drags reach the canvas; real controls opt back in */
+  font-size: calc(14px * var(--ui-scale, 1));
+}
+#hud :where(button, input, select, a, aside, #hud-banner, #chat-log) { pointer-events: auto; }
+
+/* Small, unobtrusive chrome: glass slate, a 1px steel rule, crisp black edge. */
+/* Region geometry (top bar, popovers, chat dock, prompts) lives in /hud/layout.css. */
+#hud-place {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.35rem 0.7rem 0.4rem;
+  background: var(--glass);
+  border: 1px solid var(--steel-2);
+  border-left: 3px solid var(--blue);
+  border-radius: 0;
+  box-shadow: var(--frame-thin);
+  max-width: 100%;
+  min-width: 0;
+}
+.town-name {
+  font: 600 1.05rem/1.1 var(--pixel);
+  letter-spacing: 0.06em;
+  font-variant: normal;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: var(--shadow-text);
+}
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  font: 400 0.6rem/1.2 var(--caps);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.conn::before { content: ""; width: 6px; height: 6px; background: var(--text-3); box-shadow: 0 0 0 1px var(--edge); flex: none; }
+.conn:empty { display: none; }
+.conn[data-conn="online"]::before { background: var(--mint); }
+.conn[data-conn="connecting"]::before { background: var(--blue); animation: hud-blink 1s steps(2) infinite; }
+.conn[data-conn="lost"], .conn[data-conn="closed"] { color: var(--rose); }
+.conn[data-conn="lost"]::before, .conn[data-conn="closed"]::before { background: var(--rose); }
+@keyframes hud-blink { 50% { opacity: 0.25; } }
+
+/* Compass: a sliding bearing ribbon (interface.js) under a fixed sapphire lubber mark. */
+#hud-compass {
+  position: relative;
+  min-width: 0;
+  padding: 0;
+  background: var(--glass);
+  border: 1px solid var(--steel-2);
+  border-radius: 0;
+  box-shadow: var(--frame-thin);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent);
+}
+#hud-heading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 400 0.8rem/1 var(--caps);
+  letter-spacing: 0.1em;
+  color: var(--text);
+}
+#hud-compass.has-ribbon #hud-heading { display: none; }
+#hud-compass::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 0;
+  width: 0; height: 0;
+  translate: -50% 0;
+  border: 5px solid transparent;
+  border-top: 6px solid var(--blue);
+  filter: drop-shadow(0 1px 0 #000);
+}
+.compass-strip {
+  position: absolute;
+  left: 50%; top: 0; bottom: 0;
+  width: 0;
+  transform: translateX(calc(var(--yaw, 0) * -1 * var(--deg-px)));
+  will-change: transform;
+}
+.compass-mark {
+  position: absolute;
+  bottom: 0.2rem;
+  left: calc(var(--d) * var(--deg-px));
+  translate: -50% 0;
+  display: grid;
+  justify-items: center;
+  font: 400 0.58rem/1 var(--caps);
+  color: var(--text-2);
+  text-shadow: 1px 1px 0 #000;
+}
+.compass-mark::after { content: ""; width: 2px; height: 0.3rem; margin-top: 0.15rem; background: currentColor; opacity: 0.6; }
+.compass-mark.minor { color: var(--text-3); }
+.compass-mark.minor::after { width: 1px; height: 0.25rem; opacity: 0.5; }
+.compass-mark.inter { letter-spacing: 0.04em; }
+.compass-mark.cardinal { font: 600 0.85rem/1 var(--pixel); color: var(--text); }
+.compass-mark.cardinal::after { height: 0.35rem; opacity: 0.9; }
+.compass-mark.north { color: var(--blue-hi); }
+
+#hud-actions {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+#hud-actions .btn { min-height: 1.9rem; }
+#hud-actions .btn[aria-expanded="true"] { color: #fff; background: var(--face-sapphire); border-color: #9fd0ff var(--blue-lo) var(--blue-lo) #9fd0ff; }
+#hud-count {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0.15em 0.3em;
+  font: 600 0.8em/1 var(--pixel);
+  text-indent: 0;
+  letter-spacing: 0;
+  color: var(--blue-hi);
+  background: var(--night);
+  box-shadow: 0 0 0 1px var(--steel-3);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+#hud-leave-btn { color: #ffd6dc; }
+
+/* Drop-down panels below the action buttons (stacked in #hud-popovers, see layout.css). */
+#hud-roster, #hud-help {
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 0 0.85rem 0.8rem;
+  background: var(--glass-solid);
+  border: 3px solid;
+  border-color: var(--steel-1) var(--steel-3) var(--steel-3) var(--steel-1);
+  border-radius: 0;
+  box-shadow: var(--frame);
+  scrollbar-width: thin;
+  scrollbar-color: var(--steel-1) transparent;
+}
+#hud-roster h3, #hud-help h3 {
+  position: sticky;
+  top: 0;
+  margin: 0 -0.85rem 0.6rem;
+  padding: 0.5rem 0.85rem;
+  font: 400 0.68rem/1.2 var(--caps);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+  text-shadow: var(--shadow-text);
+  background: linear-gradient(var(--steel-2) 0 50%, var(--steel-3) 50% 100%);
+  border-bottom: 2px solid var(--edge);
+}
+#roster-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.1rem; }
+#roster-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
+  padding: 0.25rem 0.1rem;
+  white-space: normal;
+  border-bottom: 1px solid var(--steel-3);
+  overflow-wrap: anywhere;
+}
+#roster-list li::before { content: ""; flex: none; width: 6px; height: 6px; background: var(--steel-1); translate: 0 -0.1em; }
+#roster-list li.you::before { background: var(--blue); }
+#roster-list li.you, #roster-list li.you .roster-name { color: var(--blue-hi); }
+#roster-list small { color: var(--text-3); font-style: normal; }
+
+#hud-help dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.4rem 0.75rem; font-size: 0.9rem; }
+#hud-help dt {
+  align-self: start;
+  justify-self: start;
+  padding: 0.15em 0.45em;
+  font: 400 0.66rem/1.4 var(--caps);
+  color: var(--text);
+  white-space: nowrap;
+  background: var(--face);
+  border: 1px solid;
+  border-color: var(--bevel);
+  box-shadow: 0 0 0 1px var(--edge);
+}
+#hud-help dd { margin: 0; color: var(--text-2); line-height: 1.35; }
+
+/* Chat: bottom-left, no slab; per-line backing keeps it legible over sky or stone. */
+#hud-chat {
+  box-sizing: border-box;
+  gap: 0.3rem;
+}
+#chat-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  -webkit-mask-image: none;
+          mask-image: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--steel-1) transparent;
+  overscroll-behavior: contain;
+  pointer-events: none;
+}
+#chat-log > li:first-child { margin-top: auto; }
+body[data-chat-open] #chat-log, #chat-log:hover { pointer-events: auto; }
+.chat-line {
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0.15rem 0.5rem 0.2rem;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  color: var(--text);
+  background: rgba(10, 12, 17, 0.7);
+  border-radius: 0;
+  text-shadow: 1px 1px 0 #000;
+  overflow-wrap: anywhere;
+  pointer-events: auto;
+  transition: opacity 0.6s ease;
+}
+.chat-name { color: var(--blue-hi); font-weight: 600; margin-right: 0.45em; }
+.chat-name::after { content: ":"; color: var(--text-3); font-weight: 400; }
+.chat-self { border-left: 2px solid var(--blue-2); }
+.chat-self .chat-name { color: var(--steel-hi); }
+.chat-system { background: rgba(10, 12, 17, 0.55); color: var(--text-2); font-style: normal; font-size: 0.86rem; }
+.chat-old { opacity: 0; }
+body[data-chat-open] .chat-old, #chat-log:hover .chat-old, #chat-log:focus-within .chat-old { opacity: 0.85; }
+
+#chat-form { margin: 0; }
+#chat-input {
+  box-sizing: border-box;
+  width: 100%;
+  font-size: 0.92rem;
+  padding: 0.4em 0.6em;
+  background: rgba(7, 10, 15, 0.6);
+  border-color: rgba(3, 4, 7, 0.8) rgba(52, 60, 73, 0.8) rgba(52, 60, 73, 0.8) rgba(3, 4, 7, 0.8);
+}
+#chat-input::placeholder { color: var(--text-3); font-style: normal; }
+#chat-input:focus { background: rgba(7, 10, 15, 0.92); }
+
+/* Connection lost: a framed notice above the crosshair. */
+#hud-banner {
+  position: absolute;
+  z-index: 50; /* above the menu: a dropped connection outranks any page */
+  left: 50%;
+  top: 38%;
+  translate: -50% -50%;
+  transform: none;
+  box-sizing: border-box;
+  width: min(24rem, calc(100vw - 1.5rem));
+  padding: 1.1rem 1.2rem 1rem;
+  text-align: center;
+  background: var(--glass-solid);
+  border: 4px solid;
+  border-color: #8a4a55 var(--steel-3) var(--steel-3) var(--steel-1);
+  border-radius: 0;
+  box-shadow: var(--frame);
+}
+#hud-banner-text { margin: 0; color: var(--text); }
+#hud-banner .actions { margin-top: 0.9rem; }
+
+/* Classic breath gauge on the right side of the view, yellow until the swimmer is short of breath. */
+#hud-breath {
+  border: 1px solid #26251c;
+  background: rgb(12 17 20 / 65%);
+  pointer-events: none;
+}
+#hud-breath span {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  background: #f7ef29;
+}
+#hud-breath.low span { background: #940c00; }
+
+#hud-crosshair {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 4px; height: 4px;
+  margin: 0;
+  translate: -50% -50%;
+  border-radius: 0;
+  background: rgba(221, 227, 236, 0.9);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75);
+  opacity: 0.55;
+}
+body[data-pointer-lock] #hud-crosshair { opacity: 0.9; }
+
+/* Vitals, action bar, target, toasts and the game menu are laid out by /gameplay/shell.css.
+   This layer only re-seats its tokens on the website's palette and type, and adds sapphire
+   for the states that matter (selected, pressed, focus). */
+:root {
+  --sh-ink: var(--edge);
+  --sh-slate-0: var(--night-2);
+  --sh-slate-1: var(--slate);
+  --sh-slate-2: var(--slate-2);
+  --sh-slate-3: var(--steel-3);
+  --sh-steel: #8a96aa;
+  --sh-steel-hi: var(--steel-hi);
+  --sh-steel-lo: var(--steel-2);
+  --sh-text: var(--text);
+  --sh-text-dim: var(--text-2);
+  --sh-text-mute: var(--text-3);
+  --sh-accent: var(--blue-hi);
+  --sh-health: #c4545f;
+  --sh-fatigue: #3fa68a;
+  --sh-magicka: var(--blue-1);
+  --sh-danger: var(--rose);
+  --sh-pixel: var(--pixel);
+  --sh-caps: var(--pixel);
+  --sh-focus: 0 0 0 2px var(--edge), 0 0 0 4px var(--blue);
+}
+#hud kbd, #game-menu kbd { font-family: var(--caps); font-weight: 400; font-size: 0.56rem; }
+.bar-btn { flex: none; letter-spacing: 0.06em; text-shadow: 1px 1px 0 #000; }
+.bar-btn[aria-pressed="true"], body[data-readied] #hud-ready-btn {
+  color: #fff;
+  background: var(--face-sapphire);
+  box-shadow: inset 1px 1px 0 #9fd0ff, inset -1px -1px 0 var(--blue-lo);
+}
+.bar-btn[aria-pressed="true"] kbd { color: var(--blue-hi); border-color: var(--blue-2); }
+.toast { border-left: 3px solid var(--blue); }
+.toast-error { border-left-color: var(--rose); }
+#game-menu .menu-frame { border-top: 3px solid var(--steel-1); }
+#menu-title { font: 400 0.95rem/1.2 var(--caps); color: var(--text); text-shadow: var(--shadow-text); }
+.menu-head { background: linear-gradient(var(--steel-2) 0 50%, var(--steel-3) 50% 100%); box-shadow: inset 0 2px 0 rgba(169, 180, 198, 0.3), inset 0 -2px 0 var(--edge); }
+.menu-tab[aria-selected="true"] {
+  color: #fff;
+  background: var(--face-sapphire);
+  box-shadow: inset 1px 1px 0 #9fd0ff, inset -1px -1px 0 var(--blue-lo);
+  text-shadow: 1px 1px 0 #000;
+}
+.menu-tab[aria-selected="true"] kbd { color: var(--blue-hi); }
+#game-menu .btn-primary { background: var(--face-sapphire); color: #fff; }
+.travel { --tr-cool: var(--blue-hi); --tr-accent: var(--blue); }
+
+/* Name plates over other travellers. */
+#labels { position: fixed; inset: 0; pointer-events: none; z-index: 15; overflow: hidden; }
+body:not([data-screen="game"]) #labels { display: none; }
+#labels .label {
+  position: absolute;
+  left: 0; top: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  color: inherit;
+  white-space: nowrap;
+}
+.label-name {
+  padding: 0.05em 0.5em 0.1em;
+  font: 600 0.82rem/1.3 var(--pixel);
+  letter-spacing: 0.04em;
+  color: var(--text);
+  background: rgba(10, 12, 17, 0.62);
+  border-radius: 0;
+  text-shadow: 1px 1px 0 #000;
+}
+.label-say {
+  position: relative;
+  max-width: 15rem;
+  padding: 0.3em 0.6em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  font: 400 0.84rem/1.3 var(--pixel);
+  color: #0b1220;
+  background: #e6ecf5;
+  border-radius: 0;
+  box-shadow: 0 0 0 2px var(--edge), 3px 3px 0 1px rgba(0, 0, 0, 0.45);
+}
+.label-say::after {
+  content: "";
+  position: absolute;
+  left: 50%; bottom: -7px;
+  translate: -50% 0;
+  border: 5px solid transparent;
+  border-bottom: 0;
+  border-top-color: #e6ecf5;
+}
+
+/* Arrival title card (interface.js). Decorative; chat already announces the arrival. */
+.hud-arrival {
+  position: fixed;
+  left: 50%; top: 22%;
+  translate: -50% 0;
+  z-index: 25;
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  pointer-events: none;
+  text-align: center;
+  animation: hud-arrive 4.2s ease forwards;
+}
+.hud-arrival small {
+  display: block;
+  font: 400 0.7rem/1.4 var(--caps);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  text-shadow: var(--shadow-text);
+}
+.hud-arrival strong {
+  display: block;
+  font: 400 clamp(2.4rem, 8vw, 4.4rem)/0.95 var(--display);
+  letter-spacing: 0.01em;
+  color: #e9eef5;
+  text-shadow: 3px 3px 0 #05070c, 0 0 24px rgba(0, 0, 0, 0.9);
+  overflow-wrap: anywhere;
+}
+.hud-arrival strong::after {
+  content: "";
+  display: block;
+  width: 60%;
+  height: 2px;
+  margin: 0.45rem auto 0;
+  background: linear-gradient(90deg, transparent, var(--steel-hi), transparent);
+}
+@keyframes hud-arrive {
+  0% { opacity: 0; translate: -50% 6px; }
+  15%, 70% { opacity: 1; translate: -50% 0; }
+  100% { opacity: 0; translate: -50% -4px; }
+}
+
+/* ---------------------------------------------------------------- responsive */
+
+@media (max-width: 860px) {
+  .panel-landing { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "acct" "join"; width: min(100%, 30rem); }
+  #screen-landing { align-items: start; }
+  .panel-head { padding-top: 3.2rem; }
+}
+@media (max-width: 640px) {
+  :root { --deg-px: 1.25px; }
+  #hud { font-size: calc(13px * var(--ui-scale, 1)); }
+  .lede { font-size: 1rem; }
+}
+@media (max-height: 480px) and (orientation: landscape) {
+  #screen-landing { align-items: start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  .hud-arrival { animation: none; display: none; }
+  .btn:active:not(:disabled) { transform: none; }
+}
+
+@media (forced-colors: active) {
+  .panel, #join-form, .panel-landing > .acct, #hud-place, #hud-compass, #hud-roster, #hud-help, #hud-banner, .chat-line { border: 1px solid CanvasText; }
+  .btn { border: 1px solid ButtonText; }
+  #landing-title { -webkit-text-fill-color: CanvasText; background: none; filter: none; }
+}
+
+/* Original ARENA2 art, supplied by the active selection. Labels and shortcuts stay visible. */
+#hud-compass.has-classic-compass {
+  width: 138px;
+  height: 34px;
+  border: 0;
+  mask-image: none;
+  background: none;
+  box-shadow: none;
+}
+#hud-compass.has-classic-compass .compass-strip { display: none; }
+#hud-compass.has-classic-compass::after { border-width: 4px; border-top-color: #cfe3ff; }
+.classic-compass { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+
+.compass-detection { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.compass-detection-marker {
+  position: absolute;
+  top: 0;
+  left: clamp(.4rem, calc(var(--bearing, .5) * 100%), 100% - .4rem);
+  width: .68rem;
+  height: .62rem;
+  transform: translateX(-50%);
+  background: #ffe291;
+  clip-path: polygon(50% 100%, 0 0, 100% 0, 72% 28%, 50% 65%, 28% 28%, 0 0);
+}
+#hud-compass.has-classic-compass { overflow: visible; }
+.has-classic-compass .compass-detection-marker { transform: translate(-50%, -55%); }
+
+#hud-bar .bar-btn { align-content: end; }
+#hud-bar .bar-btn::before, #menu-tabs .menu-tab::before, #menu-title::before {
+  content: var(--classic-slot, none);
+  display: block;
+  width: 34px;
+  height: 18px;
+  background: var(--classic-control, none) center / contain no-repeat;
+  image-rendering: pixelated;
+}
+#menu-tabs .menu-tab::before { flex: 0 0 24px; width: 24px; height: 15px; }
+#menu-title::before { display: inline-block; vertical-align: middle; margin-inline-end: 7px; }
+
+.has-classic-ready #hud-ready-btn { --classic-control: var(--classic-ready); --classic-slot: ""; }
+.has-classic-use :is(#hud-bar [data-action="interact"], #menu-tabs [data-panel="interaction"]) {
+  --classic-control: var(--classic-use); --classic-slot: "";
+}
+.has-classic-character :is(#hud-bar, #menu-tabs) [data-panel="character"] {
+  --classic-control: var(--classic-character); --classic-slot: "";
+}
+.has-classic-inventory :is(#hud-bar, #menu-tabs) [data-panel="inventory"] {
+  --classic-control: var(--classic-inventory); --classic-slot: "";
+}
+.has-classic-spellbook :is(#hud-bar, #menu-tabs) [data-panel="spellbook"] {
+  --classic-control: var(--classic-spellbook); --classic-slot: "";
+}
+.has-classic-map :is(#hud-bar, #menu-tabs) [data-panel="map"] { --classic-control: var(--classic-map); --classic-slot: ""; }
+.has-classic-journal :is(#hud-bar [data-panel="journal"], #menu-tabs [data-panel="journal"], .menu-main:has(.panel-journal) #menu-title) {
+  --classic-control: var(--classic-journal); --classic-slot: "";
+}
+.has-classic-automap #menu-tabs [data-panel="automap"] { --classic-control: var(--classic-automap); --classic-slot: ""; }
+.has-classic-rest #menu-tabs [data-panel="rest"] { --classic-control: var(--classic-rest); --classic-slot: ""; }
+#menu-tabs .menu-tab-name { margin-inline-end: auto; }
+

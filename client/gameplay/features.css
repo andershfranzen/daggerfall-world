@@ -1,0 +1,25 @@
+@import url('./character.css');
+@import url('./inventory.css');
+@import url('./travel.css');
+@import url('./interiors.css');
+@import url('./automap.css');
+@import url('./npcs.css');
+@import url('./townServices.css');
+@import url('./weapons.css');
+@import url('./magic.css');
+@import url('./quests.css');
+@import url('./social.css');
+@import url('./atmosphere.css');
+@import url('./wildernessMap.css');
+@import url('./sailing.css');
+
+.item-art-icon {
+  width: 2rem;
+  height: 2rem;
+  margin-inline-end: 0.4rem;
+  object-fit: contain;
+  image-rendering: pixelated;
+  vertical-align: middle;
+}
+
+.toast .item-art-icon { width: 1.25rem; height: 1.25rem; }

@@ -1,0 +1,149 @@
+/* Spellbook panel, readied-spell chip and casting overlay (client/gameplay/magic.js). Cool-toned; scoped to .mg-*. */
+.mg-root {
+  --mg-bg: #121821;
+  --mg-panel: #19212b;
+  --mg-line: #34475a;
+  --mg-ink: #dde6ef;
+  --mg-dim: #93a4b6;
+  --mg-sel: #263c53;
+  --mg-accent: #8fb9e0;
+  --mg-arcane: #a89bf0;
+  --mg-bad: #d58474;
+  --mg-warn: #d8c27a;
+  color: var(--mg-ink);
+  font: 15px/1.4 var(--text, Georgia, serif);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.mg-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mg-tabs { display: flex; gap: 4px; }
+.mg-tab {
+  font: inherit; font-size: 0.85rem; color: var(--mg-dim); background: transparent; border: 1px solid var(--mg-line);
+  padding: 4px 10px; border-radius: 2px; cursor: pointer; letter-spacing: 0.03em;
+}
+.mg-tab[aria-selected='true'] { color: var(--mg-ink); background: var(--mg-sel); border-color: var(--mg-accent); }
+.mg-search {
+  flex: 1 1 160px; min-width: 120px; max-width: 100%; box-sizing: border-box; font: inherit; font-size: 0.85rem; color: var(--mg-ink);
+  background: var(--mg-bg); border: 1px solid var(--mg-line); padding: 4px 8px; border-radius: 2px;
+}
+.mg-mana { margin-left: auto; color: var(--mg-accent); font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+.mg-layout { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 10px; min-height: 340px; }
+@container menu-page (max-width: 520px) { .mg-layout { grid-template-columns: 1fr; } }
+.mg-list {
+  list-style: none; margin: 0; padding: 4px; max-height: 56vh; overflow: auto;
+  background: var(--mg-panel); border: 1px solid var(--mg-line); border-radius: 3px;
+}
+.mg-row {
+  width: 100%; display: grid; grid-template-columns: 22px 1fr auto auto; gap: 8px; align-items: center;
+  text-align: left; font: inherit; font-size: 0.88rem; color: inherit; background: transparent;
+  border: 1px solid transparent; padding: 3px 6px; border-radius: 2px; cursor: pointer;
+}
+.mg-row:hover { background: var(--mg-bg); }
+.mg-row:focus-visible { outline: 1px solid var(--mg-accent); }
+.mg-row[aria-pressed='true'] { background: var(--mg-sel); border-color: var(--mg-accent); }
+.mg-row[data-support='unsupported'] { color: var(--mg-dim); }
+.mg-row[data-support='unsupported'] .mg-row-name { text-decoration: line-through; text-decoration-color: rgba(147, 164, 182, 0.5); }
+.mg-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mg-row-cost { color: var(--mg-dim); font-variant-numeric: tabular-nums; font-size: 0.8rem; }
+.mg-badge { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mg-arcane); }
+.mg-icon {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; border: 1px solid var(--mg-line, #34475a);
+  background: #0d1218; color: #a89bf0; font-size: 0.7rem; overflow: hidden; flex: none;
+}
+.mg-icon img { width: 100%; height: 100%; image-rendering: pixelated; display: block; }
+.mg-icon-lg { width: 34px; height: 34px; }
+.mg-icon-sm { width: 18px; height: 18px; }
+.mg-detail { min-width: 0; overflow-wrap: anywhere; background: var(--mg-panel); border: 1px solid var(--mg-line); border-radius: 3px; padding: 12px 14px; display: grid; gap: 8px; align-content: start; }
+.mg-detail-head { display: flex; gap: 10px; align-items: center; }
+.mg-detail-head h3 { margin: 0; font-family: var(--serif, serif); font-size: 1.15rem; letter-spacing: 0.03em; }
+.mg-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin: 0; font-size: 0.86rem; }
+.mg-facts dt { color: var(--mg-dim); }
+.mg-facts dd { margin: 0; }
+.mg-h4 { margin: 4px 0 0; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mg-dim); font-weight: normal; }
+.mg-effects { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.mg-effects li { display: grid; gap: 1px; padding: 6px 8px; background: var(--mg-bg); border-left: 2px solid var(--mg-accent); font-size: 0.85rem; }
+.mg-effects li[data-support='tracked'] { border-left-color: var(--mg-warn); }
+.mg-effects li[data-support='unsupported'] { border-left-color: var(--mg-bad); }
+.mg-school { color: var(--mg-arcane); font-size: 0.75rem; }
+.mg-line { color: var(--mg-ink); }
+.mg-note { color: var(--mg-dim); font-size: 0.78rem; font-style: italic; }
+.mg-note.mg-bad { color: var(--mg-bad); }
+.mg-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.mg-btn {
+  font: inherit; font-size: 0.85rem; color: var(--mg-ink); background: var(--mg-bg); border: 1px solid var(--mg-line);
+  padding: 5px 12px; border-radius: 2px; cursor: pointer;
+}
+.mg-btn:hover:not(:disabled) { border-color: var(--mg-accent); }
+.mg-btn:disabled { opacity: 0.5; cursor: default; }
+.mg-btn-primary { background: #23405e; border-color: var(--mg-accent); }
+.mg-btn-quiet { margin-left: auto; color: var(--mg-dim); }
+.mg-empty { color: var(--mg-dim); font-style: italic; margin: 8px; }
+.mg-foot { color: var(--mg-dim); font-size: 0.78rem; }
+.mg-active { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; font-size: 0.78rem; }
+.mg-active li { padding: 2px 8px; border: 1px solid var(--mg-line); border-radius: 10px; color: var(--mg-arcane); }
+
+/* Readied spell chip: lower left, above chat; never covers the weapon. */
+.mg-chip {
+  position: fixed; left: 12px; bottom: calc(12px + var(--mg-chip-lift, 180px)); z-index: 22;
+  display: flex; align-items: center; gap: 6px; padding: 3px 8px 3px 4px;
+  font: 13px/1.2 var(--text, Georgia, serif); color: #dde6ef;
+  background: rgba(14, 20, 28, 0.78); border: 1px solid #34475a; border-radius: 2px; cursor: pointer;
+}
+.mg-chip[hidden] { display: none; }
+.mg-chip[data-short='true'] .mg-chip-cost { color: #d58474; }
+.mg-chip-cost { color: #8fb9e0; font-variant-numeric: tabular-nums; }
+.mg-chip-cost::after { content: ' mp'; color: #93a4b6; font-size: 0.85em; }
+.mg-chip kbd { font: inherit; font-size: 0.72rem; color: #93a4b6; border: 1px solid #34475a; padding: 0 4px; border-radius: 2px; }
+
+/* First-person casting hands: same layer as the weapon view, drawn above it, never takes input. */
+canvas.fp-spell { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; image-rendering: pixelated; z-index: 0; }
+canvas.fp-spell[hidden] { display: none; }
+
+/* Brief element tint when a spell lands on you. */
+.mg-flash { position: fixed; inset: 0; pointer-events: none; z-index: 1; opacity: 0; }
+.mg-flash[hidden] { display: none; }
+.mg-flash-on { animation: mg-flash 0.55s ease-out; }
+.mg-flash[data-element='fire'] { background: radial-gradient(ellipse at center, transparent 40%, rgba(230, 110, 40, 0.45)); }
+.mg-flash[data-element='cold'] { background: radial-gradient(ellipse at center, transparent 40%, rgba(120, 190, 255, 0.45)); }
+.mg-flash[data-element='poison'] { background: radial-gradient(ellipse at center, transparent 40%, rgba(110, 200, 90, 0.45)); }
+.mg-flash[data-element='shock'] { background: radial-gradient(ellipse at center, transparent 40%, rgba(200, 220, 255, 0.5)); }
+.mg-flash[data-element='magic'] { background: radial-gradient(ellipse at center, transparent 40%, rgba(170, 150, 255, 0.45)); }
+@keyframes mg-flash { 0% { opacity: 1; } 100% { opacity: 0; } }
+
+.mg-icon-slot { display: inline-flex; }
+.mg-detail-head .mg-icon-slot:not(:has(img)), .mg-chip .mg-icon-slot:not(:has(img)) { display: none; }
+.mg-facts dd:has(.mg-symbol) { display: flex; align-items: center; gap: 0.4rem; }
+.mg-symbol { display: inline-flex; flex: none; }
+.mg-symbol img { display: block; image-rendering: pixelated; }
+
+.mg-maker { display: grid; gap: .8rem; padding: .4rem; }
+.mg-maker-row, .mg-maker-effect fieldset { display: flex; flex-wrap: wrap; align-items: end; gap: .65rem; }
+.mg-maker-control { display: grid; gap: .3rem; font-size: .8rem; }
+.mg-maker-control input, .mg-maker-control select { box-sizing: border-box; min-height: 2rem; padding: .25rem .5rem; color: #eee9cd; background: #171914; border: 1px solid #666048; }
+.mg-maker-control input[type="number"] { width: 5.5rem; }
+.mg-maker-icon, .mg-maker-buy, .mg-maker-effect header { display: flex; align-items: center; gap: .65rem; }
+.mg-maker-icon .mg-icon { margin-top: .9rem; }
+.mg-maker-effect { display: grid; gap: .55rem; padding: .7rem; background: #24251d; border: 1px solid #55523d; }
+.mg-maker-effect header button { margin-left: auto; }
+.mg-maker-effect fieldset { border: 1px solid #55523d; }
+.mg-maker-buy { justify-content: flex-end; }
+
+.mg-projectiles { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.mg-missile { position: absolute; width: 13px; height: 13px; color: #aa8dff; border-radius: 50%; background: white; box-shadow: 0 0 8px 5px currentcolor, 0 0 18px 8px currentcolor; }
+.mg-missile[data-element='fire'] { color: #ff963d; }
+.mg-missile[data-element='cold'] { color: #8bebff; }
+.mg-missile[data-element='poison'] { color: #a6e953; }
+.mg-missile[data-element='shock'] { color: #aabaff; }
+.mg-missile-impact { animation: mg-missile-fade .28s ease-out both; }
+@keyframes mg-missile-fade { from { opacity: 1; } to { opacity: 0; } }
+.mg-choice { justify-items: start; }
+.mg-choice h3 { margin: 0; }
+.mg-choice-grid {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: .35rem;
+}

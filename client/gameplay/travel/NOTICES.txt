@@ -1,0 +1,61 @@
+Third-party notices for client/gameplay/travel/, client/gameplay/travel.js,
+client/gameplay/journey.js and client/gameplay/mount/
+=============================================================================
+
+catalog.js, journey.js and mapimages.js translate code and tables from
+Daggerfall Unity, https://github.com/Interkarma/daggerfall-unity (MIT):
+  API/MapsFile.cs (ReadMapTable, LongitudeLatitudeToMapPixel, GetClimateIndex,
+  GetPoliticIndex, Climates), API/DFRegion.cs (LocationTypes), API/PakFile.cs,
+  API/ImgFile.cs (palette choice, headerless sizes),
+  Game/Utility/TravelTimeCalculator.cs (CalculateTravelTime, CalculateTripCost),
+  Game/UserInterfaceWindows/DaggerfallTravelPopUp.cs (day rounding, cautious
+  arrival) and Game/UserInterfaceWindows/DaggerfallTravelMapWindow.cs
+  (GetRegionMapNames, PopulateRegionOffsetDict, GetRegionMapScale, map dot
+  palette indices).
+client/gameplay/mount/ (cfa.js, rules.js) also translates Daggerfall Unity (MIT):
+  API/CfaFile.cs and API/BaseImageFile.cs (CFA header and RLE),
+  Game/TransportManager.cs (riding art placement and frame time) and
+  Game/Player/PlayerSpeedChanger.cs / PlayerHeightChanger.cs (ride speed and
+  rider height).
+
+client/gameplay/journey.js adapts the travel-view camera law of Daggerfall
+Online's research snapshot (src/player/travelCamera.js, MIT, Copyright (c)
+2026 Lattymoy): a raised, tilted eye over the traveller that never moves the
+player, with the traveller's own sprite drawn larger from height. Its licence
+text is the MIT text below with that copyright line.
+
+The BSA reader and palette parser are reused from client/world/ (see
+client/world/THIRD_PARTY_NOTICES.txt, which also covers daggerfall-js-source).
+
+No Daggerfall game data is included. Map pictures, place names and coordinates
+are read at run time from the player's or operator's own installation.
+The Elder Scrolls II: Daggerfall is the property of Bethesda Softworks.
+
+----------------------------------------------------------------------
+
+Daggerfall Unity
+
+MIT License
+
+Copyright (c) 2009-2023 Daggerfall Workshop
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+----------------------------------------------------------------------
+

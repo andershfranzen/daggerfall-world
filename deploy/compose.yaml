@@ -1,0 +1,48 @@
+# Public deployment: one game service + Caddy for automatic TLS. See docs/public-hosting.md.
+#   cp deploy/env.example deploy/.env   # set DFW_DOMAIN and ARENA2_HOST_DIR
+#   docker compose -f deploy/compose.yaml --env-file deploy/.env up -d --build
+name: daggerfallworld
+
+services:
+  game:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PUBLIC_ORIGIN: https://${DFW_DOMAIN:?set DFW_DOMAIN in deploy/.env}
+      MAX_PLAYERS: ${MAX_PLAYERS:-64}
+    volumes:
+      - dfw-data:/data
+      - ${ARENA2_HOST_DIR:?set ARENA2_HOST_DIR in deploy/.env}:/gamedata/arena2:ro
+    # Not published: only Caddy can reach it.
+    expose:
+      - "8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    stop_grace_period: 20s
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [game]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DFW_DOMAIN: ${DFW_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  dfw-data:
+  caddy-data:
+  caddy-config:

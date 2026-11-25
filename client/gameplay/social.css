@@ -1,0 +1,58 @@
+/* Party & Trade screen (client/gameplay/social.js). Scoped to .soc-root, plus channel chat lines. */
+.soc-root {
+  --soc-panel: #1b232c;
+  --soc-line: #3a4a5a;
+  --soc-ink: #dfe6ee;
+  --soc-dim: #94a3b3;
+  --soc-sel: #2c4258;
+  --soc-accent: #8fb4d6;
+  --soc-ok: #8cc4a4;
+  color: var(--soc-ink);
+  font: 15px/1.4 var(--serif, Georgia, serif);
+  display: grid;
+  gap: 12px;
+  /* Fill the menu page; never force it wider (a min-width here made the page scroll sideways). */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.soc-root > *, .soc-sec, .soc-row, .soc-pick, .soc-name, .soc-item-name { min-width: 0; }
+.soc-sec { background: var(--soc-panel); border: 1px solid var(--soc-line); border-radius: 3px; padding: 10px 12px; }
+.soc-h { margin: 0 0 8px; font-size: 1rem; letter-spacing: 0.04em; }
+.soc-h4 { margin: 0 0 6px; font-size: 0.85rem; color: var(--soc-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+.soc-note, .soc-empty { margin: 4px 0; color: var(--soc-dim); font-size: 0.85rem; }
+.soc-live { margin: 0; min-height: 1.4em; color: var(--soc-accent); font-size: 0.9rem; }
+.soc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.soc-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid transparent; border-radius: 2px; }
+.soc-row.soc-selected { border-color: var(--soc-accent); background: var(--soc-sel); }
+.soc-row.soc-offline .soc-name { color: var(--soc-dim); }
+.soc-name { flex: 1 1 auto; }
+.soc-meta { color: var(--soc-dim); font-size: 0.8rem; }
+.soc-badge { margin-left: 6px; padding: 0 5px; border: 1px solid var(--soc-accent); border-radius: 2px; font-size: 0.7rem; color: var(--soc-accent); text-transform: uppercase; letter-spacing: 0.06em; }
+.soc-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.soc-sec > .soc-actions { margin-top: 8px; margin-left: 0; }
+.soc-pick { flex: 1 1 auto; display: flex; gap: 8px; align-items: baseline; background: none; border: 0; color: inherit; font: inherit; text-align: left; padding: 2px 0; cursor: pointer; }
+.soc-pick:focus-visible, .soc-root .btn:focus-visible, .soc-root input:focus-visible, .soc-root select:focus-visible { outline: 2px solid var(--soc-accent); outline-offset: 2px; }
+.soc-trade-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@container menu-page (max-width: 540px) { .soc-trade-grid { grid-template-columns: 1fr; } }
+.soc-offer { margin: 0; border: 1px solid var(--soc-line); border-radius: 2px; padding: 8px; min-width: 0; }
+.soc-offer legend { padding: 0 4px; color: var(--soc-dim); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.soc-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; max-height: 220px; overflow: auto; }
+.soc-item { display: flex; align-items: center; gap: 8px; }
+.soc-item-name { flex: 1 1 auto; }
+.soc-qty { width: 5em; background: #10161c; color: var(--soc-ink); border: 1px solid var(--soc-line); border-radius: 2px; padding: 2px 4px; font: inherit; }
+.soc-gold { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.soc-gold label { flex: 1 1 auto; }
+.soc-offer-now { margin: 6px 0 0; font-size: 0.85rem; }
+.soc-confirm-state { margin: 4px 0 0; font-size: 0.85rem; color: var(--soc-dim); }
+.soc-confirm-state.soc-ok { color: var(--soc-ok); }
+.soc-compose { display: flex; flex-wrap: wrap; gap: 6px; }
+.soc-compose input { flex: 1 1 10rem; min-width: 0; background: #10161c; color: var(--soc-ink); border: 1px solid var(--soc-line); border-radius: 2px; padding: 4px 6px; font: inherit; }
+.soc-compose select { background: #10161c; color: var(--soc-ink); border: 1px solid var(--soc-line); border-radius: 2px; font: inherit; }
+.soc-root .btn-danger { border-color: #8a4a40; }
+.soc-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Channel lines in the HUD chat log. */
+.chat-line.chat-channel .chat-tag { font-size: 0.8em; letter-spacing: 0.04em; margin-right: 2px; }
+.chat-line.chat-party .chat-tag { color: #8fc9b0; }
+.chat-line.chat-region .chat-tag { color: #9db8de; }
+.chat-line.chat-global .chat-tag { color: #c2b3e0; }

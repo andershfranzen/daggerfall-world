@@ -1,0 +1,370 @@
+/* Game shell: menu dialog, vitals, target readout, toasts, action bar and account gate.
+ * Cool slate and steel with beveled, pixel-stepped frames. System fonts only, no images.
+ * Markup: client/play.html; behaviour: client/gameplay/shell.js; contract: client/hud-contract.md.
+ */
+
+:root {
+  --sh-ink: #0b0e12;
+  --sh-slate-0: #11161c;
+  --sh-slate-1: #18202a;
+  --sh-slate-2: #222c38;
+  --sh-slate-3: #2e3a48;
+  --sh-steel: #8796a8;
+  --sh-steel-hi: #c6d2df;
+  --sh-steel-lo: #4b5768;
+  --sh-text: #dfe6ee;
+  --sh-text-dim: #a3b0bf;
+  --sh-text-mute: #75838f;
+  --sh-accent: #9cc7e8;
+  --sh-health: #c4544a;
+  --sh-fatigue: #5fa06e;
+  --sh-magicka: #4d7fd0;
+  --sh-danger: #e2796c;
+  --sh-pixel: ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace;
+  --sh-caps: "Iowan Old Style", "Palatino Linotype", Palatino, "URW Palladio L", "P052", Georgia, serif;
+  --ui-scale: 1;
+  /* Beveled steel: light top-left edge, dark bottom-right edge, an inner rule. */
+  --sh-bevel:
+    inset 1px 1px 0 var(--sh-steel-hi),
+    inset -1px -1px 0 var(--sh-ink),
+    inset 2px 2px 0 rgba(198, 210, 223, 0.18),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.45);
+  --sh-frame:
+    0 0 0 1px var(--sh-ink),
+    0 0 0 3px var(--sh-steel-lo),
+    0 0 0 4px var(--sh-ink),
+    0 14px 40px rgba(0, 0, 0, 0.6);
+  --sh-focus: 0 0 0 2px var(--sh-ink), 0 0 0 4px var(--sh-accent);
+}
+
+/* Pixel-stepped corners on framed boxes. */
+.sh-stepped, #game-menu .menu-frame, #hud-bar, #hud-vitals, .toast, #hud-target {
+  clip-path: polygon(0 4px, 4px 4px, 4px 0, calc(100% - 4px) 0, calc(100% - 4px) 4px, 100% 4px,
+    100% calc(100% - 4px), calc(100% - 4px) calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%,
+    4px calc(100% - 4px), 0 calc(100% - 4px));
+}
+
+#hud kbd, #game-menu kbd {
+  font: 600 0.68rem/1 var(--sh-pixel);
+  padding: 0.18em 0.35em 0.15em;
+  color: var(--sh-steel-hi);
+  background: var(--sh-ink);
+  border: 1px solid var(--sh-steel-lo);
+  border-bottom-width: 2px;
+  border-radius: 0;
+  letter-spacing: 0;
+}
+
+/* ------------------------------------------------------------------ account gate (landing) */
+
+.account-gate {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.86rem;
+  color: var(--sh-text-dim);
+  background: rgba(17, 22, 28, 0.7);
+  border-left: 3px solid var(--sh-steel-lo);
+}
+.account-gate[data-state="signed-in"] { border-left-color: var(--sh-accent); color: var(--sh-text); }
+.account-gate[data-state="required"] { border-left-color: var(--sh-steel); }
+
+/* ------------------------------------------------------------------ vitals */
+
+/* Geometry (where vitals, bar, target, toasts and the menu sit) lives in /hud/layout.css. */
+#hud-vitals {
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.5rem 0.6rem;
+  background: linear-gradient(var(--sh-slate-1), var(--sh-slate-0));
+  box-shadow: var(--sh-bevel);
+  font-size: calc(0.78rem * var(--ui-scale));
+}
+.vital {
+  display: grid;
+  grid-template-columns: 2.1em 1fr auto;
+  align-items: center;
+  gap: 0.45rem;
+}
+.vital-name {
+  font: 700 0.72em/1 var(--sh-pixel);
+  color: var(--sh-text-dim);
+  letter-spacing: 0.06em;
+}
+.vital-bar {
+  position: relative;
+  height: 0.62rem;
+  background: var(--sh-ink);
+  box-shadow: inset 0 0 0 1px var(--sh-steel-lo);
+  overflow: hidden;
+}
+.vital-fill {
+  position: absolute;
+  inset: 1px auto 1px 1px;
+  width: 0;
+  max-width: calc(100% - 2px);
+  transition: width 220ms steps(6);
+  /* Pixel striping keeps bars readable without colour alone. */
+  background-image: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.14) 0 2px, transparent 2px 4px);
+}
+.vital[data-vital="health"] .vital-fill { background-color: var(--sh-health); }
+.vital[data-vital="fatigue"] .vital-fill { background-color: var(--sh-fatigue); }
+.vital[data-vital="magicka"] .vital-fill { background-color: var(--sh-magicka); }
+.vital[data-low="true"] .vital-num { color: var(--sh-danger); }
+.vital[data-low="true"][data-vital="health"] .vital-bar { box-shadow: inset 0 0 0 1px var(--sh-danger); }
+.vital-num {
+  min-width: 5.2em;
+  text-align: right;
+  font: 600 1em/1 var(--sh-pixel);
+  color: var(--sh-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ action bar */
+
+#hud-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 3px;
+  background: var(--sh-ink);
+  pointer-events: auto;
+  font-size: calc(0.74rem * var(--ui-scale));
+}
+.bar-sep { width: 3px; background: var(--sh-steel-lo); margin: 2px 1px; }
+.bar-btn {
+  display: grid;
+  justify-items: center;
+  gap: 0.2rem;
+  min-width: 4.6em;
+  padding: 0.38rem 0.45rem 0.32rem;
+  border: 0;
+  border-radius: 0;
+  color: var(--sh-text);
+  background: linear-gradient(var(--sh-slate-3), var(--sh-slate-2));
+  box-shadow: var(--sh-bevel);
+  font: 600 1em/1.1 var(--sh-caps);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.bar-btn:hover { background: linear-gradient(#3a4859, var(--sh-slate-3)); }
+.bar-btn:active, .bar-btn[aria-pressed="true"] {
+  background: var(--sh-slate-1);
+  box-shadow: inset 1px 1px 0 var(--sh-ink), inset -1px -1px 0 var(--sh-steel-lo);
+  color: var(--sh-accent);
+}
+.bar-btn:focus-visible { outline: none; box-shadow: var(--sh-focus); }
+.bar-btn kbd { font-size: 0.86em; }
+body[data-readied] #hud-ready-btn { color: var(--sh-accent); }
+
+/* ------------------------------------------------------------------ target and toasts */
+
+#hud-target {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.6rem;
+  background: rgba(11, 14, 18, 0.78);
+  color: var(--sh-text);
+  font: 600 calc(0.82rem * var(--ui-scale))/1.2 var(--sh-caps);
+  white-space: nowrap;
+  pointer-events: none;
+}
+#hud-target[data-kind="monster"] .target-name { color: #f0b3a8; }
+#hud-target[data-kind="npc"] .target-name { color: var(--sh-accent); }
+#hud-target[data-kind="loot"] .target-name { color: #d9e0a8; }
+.target-hp { font: 600 0.9em/1 var(--sh-pixel); color: var(--sh-text-dim); }
+
+#hud-toasts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.3rem;
+  justify-items: center;
+  pointer-events: none;
+}
+.toast {
+  padding: 0.4rem 0.8rem;
+  background: rgba(17, 22, 28, 0.92);
+  box-shadow: var(--sh-bevel);
+  color: var(--sh-text);
+  font: 0.88rem/1.35 var(--sh-caps);
+  text-align: center;
+  animation: sh-toast-in 160ms steps(3) both;
+}
+.toast-error { color: #f3c3bb; box-shadow: var(--sh-bevel), inset 3px 0 0 var(--sh-danger); }
+.toast-out { opacity: 0; transition: opacity 360ms steps(4); }
+@keyframes sh-toast-in { from { opacity: 0; translate: 0 -6px; } }
+
+/* ------------------------------------------------------------------ menu dialog */
+
+#game-menu {
+  background: rgba(6, 9, 12, 0.55);
+  pointer-events: auto;
+  font-size: calc(15px * var(--ui-scale));
+}
+#game-menu .menu-frame {
+  background: linear-gradient(160deg, var(--sh-slate-2), var(--sh-slate-0) 70%);
+  box-shadow: var(--sh-bevel), var(--sh-frame);
+  color: var(--sh-text);
+}
+
+#menu-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0.7rem 0 0.7rem 0.7rem;
+  overflow-y: auto;
+  background: rgba(11, 14, 18, 0.55);
+  box-shadow: inset -1px 0 0 var(--sh-steel-lo);
+}
+.menu-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(var(--sh-slate-3), var(--sh-slate-2));
+  box-shadow: var(--sh-bevel);
+  color: var(--sh-text-dim);
+  font: 600 0.84rem/1.1 var(--sh-caps);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+.menu-tab:hover { color: var(--sh-text); }
+.menu-tab[aria-selected="true"] {
+  color: var(--sh-ink);
+  background: linear-gradient(var(--sh-steel-hi), var(--sh-steel));
+  margin-right: -1px;
+}
+.menu-tab[aria-selected="true"] kbd { color: var(--sh-steel-hi); }
+.menu-tab:focus-visible { outline: none; box-shadow: var(--sh-focus); position: relative; z-index: 1; }
+
+.menu-main { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+.menu-head {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.75rem 1rem 0.6rem;
+  box-shadow: inset 0 -1px 0 var(--sh-steel-lo);
+}
+#menu-title {
+  margin: 0;
+  flex: 1;
+  font: 700 1.2rem/1.1 var(--sh-caps);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sh-steel-hi);
+}
+.menu-hint { font: 0.72rem/1 var(--sh-pixel); color: var(--sh-text-mute); }
+/* The page is a size container: feature pages lay out by the page's own width (@container
+   menu-page), not the viewport, which is wider by the tab rail and frame. The page body never
+   forces the page wider; a page that needs sideways scrolling (a map) scrolls its own box.
+   overflow-x stays auto so a page that is still too wide keeps every control reachable. */
+#menu-panel {
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 0.9rem 1.1rem 1.2rem;
+  scrollbar-color: var(--sh-steel-lo) transparent;
+  container: menu-page / inline-size;
+  min-width: 0;
+}
+#menu-panel > .panel-body { min-width: 0; max-width: 100%; }
+/* The rail lists pages top to bottom on wide screens; labels wrap rather than scroll sideways. */
+#menu-tabs { overflow-x: hidden; min-width: 0; }
+.menu-tab { min-width: 0; }
+.menu-tab-name { min-width: 0; overflow-wrap: anywhere; }
+#menu-panel:focus { outline: none; }
+
+/* Buttons inside the shell follow the steel style even if the base design differs. */
+#game-menu .btn {
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(var(--sh-slate-3), var(--sh-slate-2));
+  box-shadow: var(--sh-bevel);
+  color: var(--sh-text);
+  font-family: var(--sh-caps);
+  letter-spacing: 0.04em;
+}
+#game-menu .btn:hover:not(:disabled) { background: linear-gradient(#3a4859, var(--sh-slate-3)); }
+#game-menu .btn:focus-visible { box-shadow: var(--sh-focus); outline: none; }
+#game-menu .btn-primary { background: linear-gradient(#3f6585, #2b4a66); color: #f2f7fb; }
+
+/* Built-in panel content */
+.panel-body { display: grid; gap: 0.8rem; align-content: start; }
+.panel-body h3 { margin: 0; font: 700 1.15rem/1.2 var(--sh-caps); color: var(--sh-text); }
+.panel-body h4 {
+  margin: 0.4rem 0 0;
+  font: 700 0.76rem/1 var(--sh-caps);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--sh-steel);
+}
+.sheet-head { display: grid; gap: 0.2rem; }
+.sheet-sub, .menu-empty { margin: 0; color: var(--sh-text-dim); font-size: 0.9rem; }
+.menu-empty { padding: 0.8rem; background: rgba(11, 14, 18, 0.4); box-shadow: inset 0 0 0 1px var(--sh-slate-3); }
+.menu-error { color: var(--sh-danger); margin: 0; }
+.sheet-vitals, .sheet-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(3rem, max-content) max-content minmax(3rem, max-content);
+  gap: 0.2rem 1rem;
+  margin: 0;
+}
+.sheet-vitals dt, .sheet-grid dt { color: var(--sh-text-dim); font-size: 0.86rem; }
+.sheet-vitals dd, .sheet-grid dd { margin: 0; font: 600 0.9rem/1.35 var(--sh-pixel); color: var(--sh-text); font-variant-numeric: tabular-nums; }
+.sheet-skills { grid-template-columns: repeat(3, max-content minmax(2.5rem, max-content)); }
+
+.item-list, .quest-list, .dialogue { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.4rem 0.55rem;
+  background: rgba(11, 14, 18, 0.45);
+  box-shadow: inset 0 -1px 0 rgba(75, 87, 104, 0.4);
+}
+.item-row[data-equipped="true"] .item-name, .item-row[data-selected="true"] .item-name { color: var(--sh-accent); }
+.item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-slot { color: var(--sh-text-mute); font-size: 0.8rem; }
+.item-actions { display: flex; gap: 0.3rem; color: var(--sh-text-dim); font: 0.8rem var(--sh-pixel); }
+.quest { padding: 0.55rem 0.7rem; background: rgba(11, 14, 18, 0.45); display: grid; gap: 0.25rem; }
+.quest p { margin: 0; color: var(--sh-text-dim); font-size: 0.88rem; }
+.quest-status { font: 0.72rem var(--sh-pixel); color: var(--sh-steel); text-transform: uppercase; }
+.quest-objective { color: var(--sh-text) !important; }
+.dialogue li { padding: 0.35rem 0.55rem; background: rgba(11, 14, 18, 0.45); }
+.dialogue strong { color: var(--sh-accent); font-weight: 600; }
+.menu-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+.setting { display: grid; grid-template-columns: minmax(10rem, 14rem) 1fr; align-items: center; gap: 0.8rem; min-height: 2rem; }
+.setting-name { color: var(--sh-text-dim); }
+.setting-range { display: flex; align-items: center; gap: 0.6rem; }
+.setting-range output { font: 0.85rem var(--sh-pixel); min-width: 3em; }
+.setting input[type="range"] { width: min(14rem, 100%); accent-color: var(--sh-accent); }
+.setting input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--sh-accent); justify-self: start; }
+.setting input:focus-visible { outline: none; box-shadow: var(--sh-focus); }
+table.bindings { border-collapse: collapse; width: 100%; max-width: 30rem; }
+table.bindings th { text-align: left; font-weight: 400; color: var(--sh-text-dim); padding: 0.2rem 0.8rem 0.2rem 0; }
+table.bindings td { padding: 0.15rem 0; }
+.bind-btn { min-width: 6.5rem; font-family: var(--sh-pixel) !important; }
+
+/* While a menu is open the HUD bits behind it get out of the way. */
+body[data-menu] #hud-target, body[data-menu] #hud-crosshair { visibility: hidden; }
+/* A menu page is a full window: decorative overlays that live outside #hud (the arrival title
+   card is fixed on <body>, above #hud's stacking context) must not paint over it. */
+body[data-menu] .hud-arrival { display: none; }
+
+/* ------------------------------------------------------------------ small screens */
+/* Responsive geometry for the HUD and the menu is in /hud/layout.css. */
+@media (max-width: 640px) {
+  .setting { grid-template-columns: 1fr; gap: 0.3rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast, .vital-fill, .toast-out { animation: none; transition: none; }
+}

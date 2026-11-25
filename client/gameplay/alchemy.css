@@ -1,0 +1,58 @@
+/* Alchemy & Enchanting panel (client/gameplay/alchemy.js). Cool-toned; scoped to .alc-*. */
+.alc-root {
+  --alc-bg: #121821;
+  --alc-panel: #19212b;
+  --alc-line: #34475a;
+  --alc-ink: #dde6ef;
+  --alc-dim: #93a4b6;
+  --alc-sel: #263c53;
+  --alc-accent: #8fb9e0;
+  --alc-bad: #d58474;
+  color: var(--alc-ink);
+  font: 15px/1.4 var(--text, Georgia, serif);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.alc-root h2 { font-size: 1.15rem; margin: 0; letter-spacing: 0.04em; }
+.alc-root h3 { font-size: 0.8rem; margin: 4px 0; color: var(--alc-dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: normal; }
+.alc-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; border-bottom: 1px solid var(--alc-line); padding-bottom: 6px; }
+.alc-gold { margin-left: auto; color: var(--alc-accent); }
+.alc-dim { color: var(--alc-dim); font-size: 0.85rem; }
+.alc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; max-height: 280px; overflow: auto; }
+.alc-row, .alc-offer {
+  display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; text-align: left;
+  font: inherit; color: inherit; background: var(--alc-panel); border: 1px solid transparent; padding: 3px 8px; border-radius: 2px;
+}
+.alc-row { cursor: pointer; }
+.alc-row:hover, .alc-row:focus-visible { border-color: var(--alc-line); outline: none; }
+.alc-on { background: var(--alc-sel); border-color: var(--alc-accent); }
+.alc-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alc-price { color: var(--alc-accent); font-variant-numeric: tabular-nums; }
+.alc-root .item-art-icon { width: 24px; height: 24px; object-fit: contain; image-rendering: pixelated; flex: 0 0 auto; }
+.alc-chip, .alc-go, .alc-x {
+  font: inherit; font-size: 0.85rem; color: var(--alc-ink); background: var(--alc-bg); border: 1px solid var(--alc-line);
+  padding: 3px 10px; border-radius: 2px; cursor: pointer;
+}
+.alc-chip:hover:not(:disabled), .alc-go:hover:not(:disabled) { border-color: var(--alc-accent); }
+.alc-go { background: var(--alc-sel); border-color: var(--alc-accent); padding: 5px 16px; }
+.alc-chip:disabled, .alc-go:disabled { opacity: 0.45; cursor: default; }
+.alc-x { padding: 0 6px; margin-left: 6px; }
+.alc-recipes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.alc-recipes h3 { flex-basis: 100%; }
+.alc-cauldron { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--alc-line); padding-top: 8px; }
+.alc-cauldron .alc-go { margin-left: auto; }
+.alc-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 14px; }
+@media (max-width: 640px) { .alc-grid { grid-template-columns: 1fr; } }
+.alc-pickrow { display: flex; gap: 6px; flex-wrap: wrap; }
+.alc-select, .alc-input {
+  font: inherit; font-size: 0.85rem; color: var(--alc-ink); background: var(--alc-bg); border: 1px solid var(--alc-line);
+  padding: 3px 6px; border-radius: 2px; min-width: 0; max-width: 100%;
+}
+.alc-picks { margin: 8px 0; padding-left: 20px; display: grid; gap: 2px; font-size: 0.9rem; }
+.alc-side { color: #c9b7d8; }
+.alc-totals { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--alc-line); font-variant-numeric: tabular-nums; }
+.alc-bad { color: var(--alc-bad); }
+.alc-mine { border-top: 1px solid var(--alc-line); padding-top: 8px; }

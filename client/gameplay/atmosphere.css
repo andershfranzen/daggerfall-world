@@ -1,0 +1,97 @@
+/* Atmosphere: clock chip, night shade, weather layer, rest and sound panels. Cool-toned. */
+
+#atmo-shade {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  background-color: rgb(255 255 255);
+  transition: background-color 0.4s linear;
+  z-index: 0;
+}
+#atmo-weather {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+#atmo-shade[hidden], #atmo-weather[hidden], .atmo-chip[hidden] { display: none !important; }
+
+.atmo-chip {
+  position: absolute;
+  top: calc(max(0.6rem, env(safe-area-inset-top)) + 2.7rem);
+  left: 50%;
+  translate: -50% 0;
+  display: flex;
+  gap: 2px;
+  z-index: 5;
+  font: 0.86rem/1.2 var(--serif, Georgia, serif);
+}
+.atmo-chip button {
+  min-height: 1.9rem;
+  padding: 0.2rem 0.65rem;
+  color: #dfe6ef;
+  background: rgb(14 18 26 / 0.78);
+  border: 1px solid rgb(150 170 195 / 0.38);
+  border-radius: 2px;
+  cursor: pointer;
+  text-shadow: 0 1px 0 rgb(0 0 0 / 0.8);
+  font: inherit;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.atmo-chip button:hover { border-color: rgb(180 200 225 / 0.7); background: rgb(22 28 40 / 0.86); }
+.atmo-chip button:focus-visible { outline: 2px solid #a9c4e6; outline-offset: 2px; }
+.atmo-chip-audio { min-width: 2.1rem; }
+.atmo-chip.atmo-chip-under-menu { visibility: hidden; }
+.atmo-chip-audio[data-state="muted"], .atmo-chip-audio[data-state="off"] { color: #8f9aab; }
+.atmo-chip[data-resting="true"] .atmo-chip-time { border-color: #8fb0d8; color: #f2f6fb; }
+
+@media (max-width: 640px) {
+  .atmo-chip { top: calc(max(0.6rem, env(safe-area-inset-top)) + 5rem); font-size: 0.8rem; }
+}
+
+/* ---- panels */
+.atmo-panel { display: grid; gap: 0.7rem; max-width: 36rem; }
+.atmo-panel h3, .atmo-panel h4 { margin: 0; }
+.atmo-date { font-size: 1.15rem; letter-spacing: 0.03em; }
+.atmo-when { margin: 0; color: #c9d3df; }
+.atmo-when strong { font-variant-numeric: tabular-nums; font-size: 1.1rem; color: #eef3f9; }
+.atmo-holiday { margin: 0.25rem 0 0; color: #bcd3ee; font-weight: 600; letter-spacing: 0.02em; }
+.atmo-panel h4 { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.14em; color: #9fb2c8; margin-top: 0.4rem; }
+
+.atmo-vitals { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+.atmo-vital { display: grid; grid-template-columns: 5.5rem 1fr auto; align-items: center; gap: 0.6rem; }
+.atmo-vital meter { width: 100%; height: 0.7rem; }
+.atmo-vital-num { font-variant-numeric: tabular-nums; color: #c9d3df; font-size: 0.9rem; }
+
+.atmo-rest-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.atmo-rest-form input[type="number"] {
+  width: 4.5rem; padding: 0.35rem 0.45rem; font: inherit;
+  color: #eef3f9; background: #0f141c; border: 1px solid #5c6b80; border-radius: 2px;
+}
+.atmo-rest-form input:focus-visible { outline: 2px solid #a9c4e6; outline-offset: 1px; }
+.atmo-rest-status { min-height: 1.4em; margin: 0; color: #dfe8f3; }
+
+.atmo-toggles { display: flex; flex-wrap: wrap; gap: 1.2rem; }
+.atmo-toggles label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+.atmo-vols { border: 1px solid rgb(150 170 195 / 0.3); border-radius: 2px; padding: 0.5rem 0.8rem 0.7rem; margin: 0; display: grid; gap: 0.45rem; }
+.atmo-vols:disabled { opacity: 0.55; }
+.atmo-vols legend { padding: 0 0.3rem; color: #9fb2c8; font-size: 0.82rem; letter-spacing: 0.12em; text-transform: uppercase; }
+.atmo-vol { display: grid; grid-template-columns: 8.5rem 1fr 3rem; align-items: center; gap: 0.6rem; }
+.atmo-vol input[type="range"] { width: 100%; accent-color: #8fb0d8; }
+.atmo-vol-out { text-align: right; font-variant-numeric: tabular-nums; color: #c9d3df; }
+.atmo-arr { display: flex; align-items: center; gap: 0.6rem; }
+.atmo-arr select { font: inherit; color: #eef3f9; background: #0f141c; border: 1px solid #5c6b80; border-radius: 2px; padding: 0.25rem 0.4rem; }
+.atmo-now { margin: 0; color: #dfe8f3; }
+.atmo-sources { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.3rem; color: #c9d3df; font-size: 0.92rem; }
+
+@media (max-width: 520px) {
+  .atmo-vol { grid-template-columns: 1fr 3rem; }
+  .atmo-vol label { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #atmo-shade { transition: none; }
+}

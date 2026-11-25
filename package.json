@@ -1,0 +1,18 @@
+{
+  "name": "daggerfallworld",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser client and authoritative multiplayer server for Daggerfall World",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node server/main.js --dev",
+    "start": "node server/main.js",
+    "test": "node --test --test-concurrency=2 test/*.test.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.23.0"
+  }
+}

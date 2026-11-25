@@ -1,0 +1,62 @@
+/* Bank & Repairs panel (client/gameplay/townServices.js). Scoped to .tsv-root; cool-toned. */
+.tsv-root {
+  --tsv-bg: #121820;
+  --tsv-panel: #19212b;
+  --tsv-line: #34475a;
+  --tsv-ink: #dde5ee;
+  --tsv-dim: #93a4b6;
+  --tsv-accent: #8fb4d6;
+  --tsv-here: #23384c;
+  --tsv-ok: #9cc7a4;
+  color: var(--tsv-ink);
+  font: 15px/1.4 var(--text, Georgia, serif);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+}
+.tsv-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.tsv-h { font-family: var(--serif, serif); font-size: 1.05rem; margin: 0 0 2px; letter-spacing: 0.04em; }
+.tsv-h4 { font-family: var(--serif, serif); font-size: 0.85rem; margin: 0 0 8px; color: var(--tsv-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+.tsv-h5 { font-size: 0.8rem; margin: 12px 0 4px; color: var(--tsv-dim); font-weight: normal; text-transform: uppercase; letter-spacing: 0.06em; }
+.tsv-dim { color: var(--tsv-dim); margin: 0; }
+.tsv-small { font-size: 0.8rem; }
+.tsv-ok { color: var(--tsv-ok); }
+.tsv-purse { display: grid; grid-template-columns: auto auto; gap: 2px 12px; margin: 0; font-variant-numeric: tabular-nums; }
+.tsv-purse dt { color: var(--tsv-dim); }
+.tsv-purse dd { margin: 0; text-align: right; color: var(--tsv-accent); }
+.tsv-box { background: var(--tsv-panel); border: 1px solid var(--tsv-line); border-radius: var(--radius, 3px); padding: 10px 12px; }
+.tsv-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.tsv-counters, .tsv-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.tsv-counters li {
+  display: grid; grid-template-columns: 58px minmax(0, 1fr) auto minmax(72px, auto); gap: 8px; align-items: center;
+  padding: 3px 6px; border: 1px solid transparent; border-radius: 2px; background: var(--tsv-bg); font-size: 0.9rem;
+}
+.tsv-counters li.tsv-at { border-color: var(--tsv-accent); background: var(--tsv-here); }
+.tsv-tag { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; text-align: center; border: 1px solid var(--tsv-line); border-radius: 2px; padding: 0 4px; color: var(--tsv-dim); }
+.tsv-tag-bank { color: var(--tsv-accent); }
+.tsv-q { color: var(--tsv-dim); font-size: 0.8rem; }
+.tsv-dist { text-align: right; font-variant-numeric: tabular-nums; color: var(--tsv-dim); font-size: 0.85rem; }
+.tsv-at .tsv-dist { color: var(--tsv-ok); }
+.tsv-at-line { margin: 0 0 8px; color: var(--tsv-accent); }
+.tsv-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+.tsv-num {
+  width: 7.5em; padding: 4px 6px; background: var(--tsv-bg); color: var(--tsv-ink); border: 1px solid var(--tsv-line);
+  border-radius: 2px; font: inherit; font-variant-numeric: tabular-nums;
+}
+.tsv-btn {
+  padding: 4px 10px; background: #20303f; color: var(--tsv-ink); border: 1px solid var(--tsv-line); border-radius: 2px;
+  font: inherit; font-size: 0.85rem; cursor: pointer;
+}
+.tsv-btn:hover:not(:disabled), .tsv-btn:focus-visible { border-color: var(--tsv-accent); outline: none; }
+.tsv-btn:disabled { opacity: 0.5; cursor: default; }
+.tsv-btn-quiet { background: transparent; }
+.tsv-items li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; padding: 4px 6px; background: var(--tsv-bg); border-radius: 2px; }
+.tsv-items li > :nth-child(2) { grid-column: 1; font-size: 0.8rem; }
+.tsv-items li > :nth-child(3) { grid-column: 2; grid-row: 1 / span 2; }
+.tsv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsv-items .tsv-name { white-space: normal; }
+
+.tsv-operator { display: flex; gap: 0.5rem; align-items: center; }
+.tsv-portrait { display: inline-grid; width: 48px; height: 48px; flex: none; place-items: center; }
+.tsv-portrait canvas { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }

@@ -1,0 +1,194 @@
+/* Account panel (client/auth/account.js). Cool slate and silver, pixel-RPG framing,
+ * so the only warm colour on the page comes from the painting behind it.
+ * Pixel faces come from the website's /fonts/ (OFL); system fallbacks keep it readable without them. */
+
+@font-face {
+  font-family: "DFW Pixelify";
+  src: url("/fonts/pixelify-sans-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DFW Pixelify";
+  src: url("/fonts/pixelify-sans-latin-600-normal.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DFW Silkscreen";
+  src: url("/fonts/silkscreen-latin-400-normal.woff2") format("woff2");
+  font-display: swap;
+}
+
+.acct {
+  --acct-slate-0: #0e1217;
+  --acct-slate-1: #161c24;
+  --acct-slate-2: #222b36;
+  --acct-slate-3: #34404e;
+  --acct-silver: #c9d2dc;
+  --acct-silver-hi: #eef2f6;
+  --acct-silver-dim: #8b97a5;
+  --acct-steel: #5d6b7b;
+  --acct-ice: #6fb6ff;
+  --acct-err: #f0a0a6;
+  --acct-ok: #a6d8c0;
+  --acct-pixel: "DFW Five", "DFW Pixel", "DFW Pixelify", "Pixelify Sans", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --acct-caps: "DFW Silkscreen", "Silkscreen", ui-monospace, Menlo, Consolas, monospace;
+
+  margin: 0 0 1.1rem;
+  padding: 0 1.15rem 1.15rem;
+  color: var(--acct-silver);
+  font: 15px/1.45 var(--acct-pixel);
+  background: linear-gradient(180deg, rgb(34 43 54 / 0.92), rgb(14 18 23 / 0.94));
+  /* Stepped double border: a 1px silver line, a dark gap, then a dim steel line. */
+  box-shadow:
+    inset 0 0 0 1px var(--acct-silver-dim),
+    inset 0 0 0 3px var(--acct-slate-0),
+    inset 0 0 0 4px var(--acct-steel),
+    0 4px 0 0 rgb(0 0 0 / 0.45);
+  image-rendering: pixelated;
+}
+
+.acct[aria-busy="true"] { cursor: progress; }
+
+/* Window name band, the same as the website's window bars. */
+.acct-title {
+  margin: 0 -1.15rem 0.9rem;
+  padding: 0.6rem 1rem;
+  font: 400 0.78rem/1.2 var(--acct-caps);
+  letter-spacing: 0.14em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--acct-silver-hi);
+  text-shadow: 2px 2px 0 #000;
+  background: linear-gradient(#343c49 0 50%, #262c36 50% 100%);
+  border-bottom: 2px solid #030407;
+  box-shadow: inset 0 2px 0 rgb(169 180 198 / 0.35);
+}
+/* Signed in: a compact status row needs no tall band above it. */
+.acct > .acct-row:first-child { padding-top: 1rem; }
+
+.acct-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 0.8rem;
+}
+
+.acct-tab {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  font: 400 0.7rem/1.2 var(--acct-caps);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--acct-silver-dim);
+  background: var(--acct-slate-1);
+  border: 1px solid var(--acct-slate-3);
+  border-radius: 0;
+  cursor: pointer;
+}
+.acct-tab[aria-pressed="true"] {
+  color: var(--acct-slate-0);
+  background: linear-gradient(var(--acct-silver-hi) 0 50%, var(--acct-silver) 50% 100%);
+  border-color: var(--acct-silver-hi);
+  text-shadow: none;
+}
+.acct-tab:hover:not([aria-pressed="true"]) { color: var(--acct-silver-hi); border-color: var(--acct-steel); }
+
+.acct-form { display: grid; gap: 0.65rem; }
+.acct-field { display: grid; gap: 0.25rem; }
+
+.acct .acct-field label,
+.acct .acct-check label {
+  display: block;
+  margin: 0;
+  font: 600 0.95rem/1.3 var(--acct-pixel);
+  font-variant: normal;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--acct-silver-hi);
+}
+
+.acct input[type="text"],
+.acct input[type="password"] {
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  font: 400 1rem/1.3 var(--acct-pixel);
+  color: var(--acct-silver-hi);
+  background: var(--acct-slate-0);
+  border: 0;
+  border-radius: 0;
+  box-shadow: inset 2px 2px 0 rgb(0 0 0 / 0.6), inset 0 0 0 1px var(--acct-slate-3);
+}
+.acct input[aria-invalid="true"] { box-shadow: inset 2px 2px 0 rgb(0 0 0 / 0.6), inset 0 0 0 1px var(--acct-err); }
+
+.acct-check { display: flex; align-items: center; gap: 0.45rem; font-size: 0.9rem; }
+.acct .acct-check label { font-weight: 400; color: var(--acct-silver); }
+.acct .acct-check input { appearance: auto; width: 1rem; height: 1rem; margin: 0; accent-color: var(--acct-ice); }
+
+.acct-note { margin: 0; font-size: 0.85rem; color: var(--acct-silver-dim); }
+.acct-err { color: var(--acct-err); }
+.acct-warn { color: var(--acct-ice); }
+
+.acct-status { margin: 0; min-height: 1.3em; font-size: 0.9rem; }
+.acct-status:empty { min-height: 0; }
+.acct-status[data-kind="error"] { color: var(--acct-err); }
+.acct-status[data-kind="ok"] { color: var(--acct-ok); }
+.acct-status[data-kind="info"] { color: var(--acct-silver-dim); }
+
+.acct-btn {
+  min-height: 2.5rem;
+  padding: 0.5rem 1rem;
+  font: 400 0.75rem/1.2 var(--acct-caps);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+}
+/* Sapphire, bevelled like the website's Play button. */
+.acct-btn-primary {
+  color: #fff;
+  text-shadow: 2px 2px 0 #000;
+  background: linear-gradient(#2e6cc0 0 50%, #1c4a8e 50% 100%);
+  border: 2px solid;
+  border-color: #9fd0ff #0b2147 #0b2147 #9fd0ff;
+  box-shadow: 0 0 0 2px #030407, 3px 3px 0 2px rgb(0 0 0 / 0.5);
+}
+.acct-btn-primary:hover:not(:disabled) { background: linear-gradient(#3b7fd6 0 50%, #2e6cc0 50% 100%); }
+.acct-btn-primary:active:not(:disabled) { transform: translate(2px, 2px); border-color: #0b2147 #9fd0ff #9fd0ff #0b2147; box-shadow: 0 0 0 2px #030407, 1px 1px 0 2px rgb(0 0 0 / 0.5); }
+/* Steel, bevelled. */
+.acct-btn-quiet {
+  color: var(--acct-silver-hi);
+  text-shadow: 2px 2px 0 #000;
+  background: linear-gradient(#485262 0 50%, #343c49 50% 100%);
+  border: 2px solid;
+  border-color: #a9b4c6 #161a21 #161a21 #a9b4c6;
+  box-shadow: 0 0 0 2px #030407;
+}
+.acct-btn-quiet:hover:not(:disabled) { color: #b6dcff; background: linear-gradient(#556072 0 50%, #485262 50% 100%); }
+.acct button:disabled,
+.acct input:disabled { opacity: 0.6; cursor: progress; }
+
+.acct :focus-visible {
+  outline: 2px solid var(--acct-ice);
+  outline-offset: 3px;
+}
+.acct input[type="text"]:focus-visible,
+.acct input[type="password"]:focus-visible { outline-offset: 2px; }
+
+.acct-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.acct-who { font-size: 0.95rem; }
+.acct-name { color: var(--acct-silver-hi); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  .acct-btn-primary:active:not(:disabled) { transform: none; }
+}
+@media (forced-colors: active) {
+  .acct, .acct-btn, .acct-tab, .acct input { border: 1px solid CanvasText; }
+}

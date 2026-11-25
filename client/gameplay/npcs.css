@@ -1,0 +1,71 @@
+/* Conversation panel (client/gameplay/npcs.js). Scoped to .npc-root; cool tones only. */
+.npc-root {
+  --npc-panel: #18212b;
+  --npc-deep: #111820;
+  --npc-line: #34465a;
+  --npc-ink: #dde6ef;
+  --npc-dim: #8fa1b4;
+  --npc-accent: #8db6da;
+  --npc-good: #7fc0a8;
+  --npc-warn: #b9a6d8;
+  --npc-bad: #d27a6a;
+  color: var(--npc-ink);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  max-width: 760px;
+}
+.npc-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+.npc-portrait {
+  width: 76px; height: 76px; display: grid; place-items: end center; overflow: hidden;
+  background: linear-gradient(180deg, #1d2a37, var(--npc-deep)); border: 1px solid var(--npc-line); border-radius: var(--radius, 3px);
+}
+.npc-head:has(.npc-portrait:not([hidden])) { grid-template-columns: 76px minmax(0, 1fr) auto; }
+.npc-portrait canvas { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.npc-name { margin: 0; font-family: var(--serif, serif); font-size: 1.15rem; letter-spacing: 0.03em; }
+.npc-title, .npc-standing, .npc-guild, .npc-rel { margin: 2px 0 0; color: var(--npc-dim); font-size: 0.85rem; }
+.npc-rel { font-size: 0.78rem; }
+.npc-att { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; padding: 1px 5px; border: 1px solid currentColor; border-radius: 2px; }
+.npc-att-friendly { color: var(--npc-good); }
+.npc-att-neutral { color: var(--npc-accent); }
+.npc-att-cold { color: var(--npc-warn); }
+.npc-att-hostile { color: var(--npc-bad); }
+.npc-gold { margin: 0; color: var(--npc-accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.npc-say {
+  margin: 0; padding: 10px 12px; background: var(--npc-panel); border-left: 3px solid var(--npc-accent);
+  font-family: var(--serif, serif); font-style: italic; line-height: 1.45; white-space: pre-wrap;
+}
+.npc-topics { display: flex; flex-wrap: wrap; gap: 6px; }
+.npc-topic { font-size: 0.85rem; }
+.npc-journal { border-color: var(--npc-accent); }
+.npc-box { background: var(--npc-panel); border: 1px solid var(--npc-line); border-radius: var(--radius, 3px); padding: 8px 10px; }
+.npc-h4 { margin: 4px 0 6px; color: var(--npc-dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.npc-services { display: flex; flex-wrap: wrap; gap: 6px; }
+.npc-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
+.npc-row {
+  display: grid; grid-template-columns: 1fr 4.5em 4.5em 4em auto; gap: 8px; align-items: center;
+  padding: 4px 2px; border-bottom: 1px solid rgba(52, 70, 90, 0.6); font-size: 0.88rem;
+}
+.npc-row:last-child { border-bottom: 0; }
+.npc-poor .npc-price { color: var(--npc-bad); }
+.npc-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npc-num, .npc-price { text-align: right; font-variant-numeric: tabular-nums; color: var(--npc-dim); }
+.npc-qty { width: 4em; font: inherit; font-size: 0.85rem; padding: 2px 4px; background: var(--npc-deep); color: inherit; border: 1px solid var(--npc-line); }
+.npc-shop-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+.npc-tabs { display: flex; gap: 2px; }
+.npc-tab {
+  font: inherit; font-size: 0.82rem; padding: 3px 10px; color: var(--npc-dim); background: var(--npc-deep);
+  border: 1px solid var(--npc-line); border-bottom-width: 2px; cursor: pointer;
+}
+.npc-tab[aria-selected='true'] { color: var(--npc-ink); border-bottom-color: var(--npc-accent); background: #22344a; }
+.npc-purse { color: var(--npc-dim); font-size: 0.8rem; }
+.npc-empty { color: var(--npc-dim); margin: 6px 0; }
+.npc-actions { display: flex; justify-content: flex-end; }
+@container menu-page (max-width: 420px) {
+  .npc-head { grid-template-columns: minmax(0, 1fr); }
+  .npc-head:has(.npc-portrait:not([hidden])) { grid-template-columns: 56px minmax(0, 1fr); }
+  .npc-portrait { width: 56px; height: 56px; }
+  .npc-head:has(.npc-portrait:not([hidden])) .npc-gold { grid-column: 2; }
+  .npc-row { grid-template-columns: 1fr 3.5em 3.8em auto; }
+  .npc-row .npc-num { display: none; }
+}

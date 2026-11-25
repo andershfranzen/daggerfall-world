@@ -1,0 +1,15 @@
+.shop-root { display: flex; flex-direction: column; gap: 0.6rem; }
+.shop-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+.shop-meta, .shop-note, .shop-hint { opacity: 0.8; font-size: 0.9em; margin: 0; }
+.shop-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+.shop-row { display: grid; grid-template-columns: 1fr auto auto 4.5rem auto; gap: 0.6rem; align-items: center; padding: 0.2rem 0.3rem; }
+.shop-row:nth-child(odd) { background: rgba(255, 255, 255, 0.04); }
+.shop-item { display: flex; align-items: center; gap: 0.4rem; }
+.shop-num, .shop-price { font-variant-numeric: tabular-nums; text-align: right; }
+.shop-qty { width: 4rem; }
+.shop-poor .shop-price { opacity: 0.55; }
+.shop-empty { opacity: 0.75; font-style: italic; }
+.shop-basket { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.5rem 0.6rem; border: 1px solid rgba(150, 180, 210, 0.35); border-radius: 4px; background: rgba(20, 30, 42, 0.45); }
+.shop-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.shop-shelf { opacity: 0.7; }
+.shop-steal { opacity: 0.85; }

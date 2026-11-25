@@ -1,0 +1,76 @@
+Third-party notices for client/world/
+=====================================
+
+The modules in client/world/ (bsa.js, maps.js, blocks.js, arch3d.js,
+arch3dPatch.js, textures.js, town.js) contain code adapted from the two
+projects below. Both are MIT licensed. Their notices follow verbatim.
+
+- Daggerfall Unity, https://github.com/Interkarma/daggerfall-unity
+  (consulted at commit 3d85a283672a4955e32992097ea7719e896dbadb)
+  Format readers and layout rules: API/BsaFile.cs, API/MapsFile.cs,
+  API/PakFile.cs, API/BlocksFile.cs, API/Arch3dFile.cs, API/Arch3dPatch.cs,
+  API/FaceUVTool.cs, API/TextureFile.cs, API/DFPalette.cs, MeshReader.cs,
+  Utility/RMBLayout.cs, Utility/ClimateSwaps.cs, Utility/TextureReader.cs,
+  Internal/DaggerfallLocation.cs.
+
+- daggerfall-js-source by Lattymoy, https://github.com/Lattymoy/daggerfall-js-source
+  (commit a3eb1605ea1dc391b691fe314377458a7e63e483), whose src/formats/
+  JavaScript translations of the readers above (bsaFile.js, arch3dFile.js, arch3dPatch.js, faceUVTool.js, textureFile.js, dfPalette.js,
+  mapsFile.js, blocksFile.js) were adapted here. Its LICENSE carries the MIT
+  notice below together with Daggerfall Unity's.
+
+No Daggerfall game data is included. The Elder Scrolls II: Daggerfall is the
+property of Bethesda Softworks; its files are read from the player's own
+installation in the browser and never leave the device.
+
+----------------------------------------------------------------------
+
+Daggerfall Unity
+
+MIT License
+
+Copyright (c) 2009-2023 Daggerfall Workshop
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+----------------------------------------------------------------------
+
+daggerfall-js-source
+
+MIT License
+
+Copyright (c) 2026 Lattymoy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Daggerfall World — Play</title>
+  <link rel="icon" href="/images/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/play.css">
+  <link rel="stylesheet" href="/gameplay/shell.css">
+  <link rel="stylesheet" href="/gameplay/features.css">
+  <link rel="stylesheet" href="/hud/interface.css">
+  <link rel="stylesheet" href="/hud/layout.css">
+</head>
+<body data-screen="landing" data-conn="idle">
+  <canvas id="view" tabindex="-1" aria-label="First-person view of the town"></canvas>
+  <div id="labels" aria-hidden="true"></div>
+
+  <!-- ============ Landing: name + game data + enter ============ -->
+  <section id="screen-landing" class="screen" aria-labelledby="landing-title">
+    <div class="panel panel-landing">
+      <header class="panel-head">
+        <a class="back-link" href="/">&larr; Back to site</a>
+        <h1 id="landing-title">Daggerfall World</h1>
+        <p class="lede">Enter the Iliac Bay with other players.</p>
+      </header>
+
+      <!-- /auth/account.js mounts #account-panel (sign in / create account) before the form. -->
+      <form id="join-form" novalidate>
+        <p id="account-gate" class="note account-gate" aria-live="polite" hidden></p>
+        <div class="field" id="name-field">
+          <label for="name-input">Your name</label>
+          <input id="name-input" name="name" type="text" maxlength="24" autocomplete="nickname"
+                 spellcheck="false" required aria-describedby="name-note">
+          <p id="name-note" class="note" aria-live="polite"></p>
+        </div>
+
+        <div class="field">
+          <span class="label" id="data-label">Game data</span>
+          <div id="data-drop" class="drop" data-state="empty" aria-labelledby="data-label">
+            <button id="data-pick" type="button" class="btn">Choose ARENA2 folder…</button>
+            <p id="data-status" class="note" aria-live="polite">
+              Select the ARENA2 folder from your Daggerfall install, or the install folder that contains it.
+              You can also drop the folder here.
+            </p>
+          </div>
+          <input id="data-input" type="file" webkitdirectory directory multiple hidden>
+          <p class="note fine">Files are read locally in this browser. Nothing is uploaded.</p>
+        </div>
+
+        <button id="enter-btn" type="submit" class="btn btn-primary" disabled>Enter the world</button>
+        <p id="form-error" class="note error" role="alert" hidden></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============ Loading ============ -->
+  <section id="screen-loading" class="screen" hidden aria-labelledby="loading-title" aria-busy="true">
+    <div class="panel panel-status">
+      <h2 id="loading-title">Travelling…</h2>
+      <ol id="loading-steps" class="steps">
+        <li data-step="read" data-state="pending">Reading game data</li>
+        <li data-step="build" data-state="pending">Raising the town</li>
+        <li data-step="connect" data-state="pending">Reaching the other travellers</li>
+        <li data-step="arrive" data-state="pending">Arriving: the place, its people and their likenesses</li>
+      </ol>
+      <p id="loading-detail" class="note" aria-live="polite"></p>
+      <div class="actions">
+        <button id="loading-cancel" type="button" class="btn">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Failure ============ -->
+  <section id="screen-failure" class="screen" hidden aria-labelledby="failure-title">
+    <div class="panel panel-status" role="alertdialog" aria-labelledby="failure-title" aria-describedby="failure-message">
+      <h2 id="failure-title">Something went wrong</h2>
+      <p id="failure-message"></p>
+      <p id="failure-hint" class="note"></p>
+      <div class="actions">
+        <button id="failure-retry" type="button" class="btn btn-primary">Try again</button>
+        <button id="failure-folder" type="button" class="btn">Choose another folder</button>
+        <button id="failure-back" type="button" class="btn">Back</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ In-game HUD ============ -->
+  <!-- Layout regions (hud/layout.css): top bar · notices · popovers · centre prompts · bottom docks.
+       Regions never overlap; only real controls take pointer input. See client/hud-contract.md. -->
+  <section id="hud" hidden aria-label="Game interface">
+    <header id="hud-top">
+      <div id="hud-status" data-hud-slot="status">
+        <div id="hud-place">
+          <span id="hud-town" class="town-name"></span>
+          <span id="hud-conn" class="conn" data-conn="idle" aria-live="polite"></span>
+        </div>
+      </div>
+      <div id="hud-compass" aria-hidden="true"><span id="hud-heading">N</span></div>
+      <div id="hud-actions">
+        <button id="hud-people-btn" type="button" class="btn btn-small" aria-controls="hud-roster" aria-expanded="false">
+          People <span id="hud-count">0</span>
+        </button>
+        <button id="hud-help-btn" type="button" class="btn btn-small" aria-controls="hud-help" aria-expanded="false">Controls</button>
+        <button id="hud-menu-btn" type="button" class="btn btn-small" aria-controls="game-menu" aria-expanded="false">Menu</button>
+        <button id="hud-leave-btn" type="button" class="btn btn-small">Leave</button>
+      </div>
+    </header>
+
+    <ol id="hud-toasts" aria-live="polite" aria-label="Messages"></ol>
+
+    <div id="hud-popovers">
+      <aside id="hud-roster" hidden aria-label="People in town">
+        <h3>In town</h3>
+        <ul id="roster-list"></ul>
+      </aside>
+
+      <aside id="hud-help" hidden aria-label="Controls">
+        <h3>Controls</h3>
+        <dl id="hud-help-list">
+          <dt>W A S D</dt><dd>Walk and sidestep</dd>
+          <dt>← → / Q E</dt><dd>Turn</dd>
+          <dt>↑ ↓</dt><dd>Look up and down</dd>
+          <dt>Click view</dt><dd>Capture mouse, then move it to look (Esc releases)</dd>
+          <dt>Touch drag</dt><dd>Look around</dd>
+          <dt>F</dt><dd>Ready or sheathe weapon</dd>
+          <dt>Space / Click</dt><dd>Attack once the mouse is captured</dd>
+          <dt>G</dt><dd>Talk, use or loot target</dd>
+          <dt>C I B J M O</dt><dd>Character, inventory, spells, journal, map, party</dd>
+          <dt>Enter / T</dt><dd>Speak</dd>
+          <dt>Esc</dt><dd>Close chat or panels</dd>
+          <dt>P</dt><dd>Show people here</dd>
+        </dl>
+      </aside>
+    </div>
+
+    <div id="hud-crosshair" aria-hidden="true"></div>
+    <div id="hud-breath" role="meter" aria-label="Breath remaining" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0" hidden><span></span></div>
+    <!-- Contextual prompts under the crosshair: target readout, door prompts (data-hud-slot="prompts"). -->
+    <div id="hud-prompts" data-hud-slot="prompts">
+      <p id="hud-target" hidden></p>
+    </div>
+
+    <div id="hud-bottom">
+      <!-- Chat dock: an NPC conversation (#hud-talk, gameplay/npcs.js) sits above the log. -->
+      <div id="hud-chat" role="region" aria-label="Chat and conversation">
+        <section id="hud-talk" hidden aria-label="Conversation"></section>
+        <ol id="chat-log" aria-live="polite" aria-label="Town chat"></ol>
+        <form id="chat-form" autocomplete="off">
+          <input id="chat-input" type="text" maxlength="200" placeholder="Press Enter to speak" aria-label="Chat message">
+        </form>
+      </div>
+
+      <div id="hud-dock" data-hud-slot="dock">
+        <div id="hud-vitals" role="group" aria-label="Vitals" hidden>
+          <div class="vital" data-vital="health" role="meter" aria-label="Health" aria-valuemin="0" aria-valuenow="0" aria-valuemax="1">
+            <span class="vital-name">HP</span><span class="vital-bar"><span class="vital-fill"></span></span><span class="vital-num"></span>
+          </div>
+          <div class="vital" data-vital="fatigue" role="meter" aria-label="Fatigue" aria-valuemin="0" aria-valuenow="0" aria-valuemax="1">
+            <span class="vital-name">FT</span><span class="vital-bar"><span class="vital-fill"></span></span><span class="vital-num"></span>
+          </div>
+          <div class="vital" data-vital="magicka" role="meter" aria-label="Magicka" aria-valuemin="0" aria-valuenow="0" aria-valuemax="1">
+            <span class="vital-name">MP</span><span class="vital-bar"><span class="vital-fill"></span></span><span class="vital-num"></span>
+          </div>
+        </div>
+
+        <nav id="hud-bar" aria-label="Actions and menus">
+          <button type="button" class="bar-btn" id="hud-ready-btn" data-action="ready" aria-pressed="false"><span class="bar-name">Ready</span><kbd>F</kbd></button>
+          <button type="button" class="bar-btn" data-action="attack"><span class="bar-name">Attack</span><kbd>Space</kbd></button>
+          <button type="button" class="bar-btn" id="hud-use-btn" data-action="interact"><span class="bar-name">Use</span><kbd>G</kbd></button>
+          <span class="bar-sep" aria-hidden="true"></span>
+          <button type="button" class="bar-btn" data-panel="character" aria-pressed="false"><span class="bar-name">Character</span><kbd>C</kbd></button>
+          <button type="button" class="bar-btn" data-panel="inventory" aria-pressed="false"><span class="bar-name">Inventory</span><kbd>I</kbd></button>
+          <button type="button" class="bar-btn" data-panel="spellbook" aria-pressed="false"><span class="bar-name">Spells</span><kbd>B</kbd></button>
+          <button type="button" class="bar-btn" data-panel="journal" aria-pressed="false"><span class="bar-name">Journal</span><kbd>J</kbd></button>
+          <button type="button" class="bar-btn" data-panel="map" aria-pressed="false"><span class="bar-name">Map</span><kbd>M</kbd></button>
+          <button type="button" class="bar-btn" data-panel="party" aria-pressed="false"><span class="bar-name">Party</span><kbd>O</kbd></button>
+        </nav>
+      </div>
+    </div>
+
+    <div id="hud-banner" hidden role="alert">
+      <p id="hud-banner-text"></p>
+      <div class="actions">
+        <button id="hud-reconnect-btn" type="button" class="btn btn-primary">Reconnect</button>
+        <button id="hud-banner-leave-btn" type="button" class="btn">Leave</button>
+      </div>
+    </div>
+
+    <div id="game-menu" role="dialog" aria-modal="true" aria-labelledby="menu-title" hidden>
+      <div class="menu-frame">
+        <div id="menu-tabs" role="tablist" aria-orientation="vertical" aria-label="Menu pages"></div>
+        <section class="menu-main">
+          <header class="menu-head">
+            <h2 id="menu-title">Menu</h2>
+            <span id="menu-hint" class="menu-hint">Esc closes · ↑↓ pages · Tab moves</span>
+            <button id="menu-close" type="button" class="btn btn-small">Close</button>
+          </header>
+          <div id="menu-panel" role="tabpanel" tabindex="-1"></div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <script type="module" src="/auth/account.js"></script>
+  <script type="module" src="/main.js"></script>
+  <script type="module" src="/hud/interface.js"></script>
+  <script type="module" src="/hud/layout.js"></script>
+</body>
+</html>

@@ -1,0 +1,99 @@
+/* Sailing controls (client/gameplay/sailing.js). Cool steel-and-slate kit; the warm colour belongs to the world. */
+:root {
+  --sail-bg: rgb(14 20 28 / 0.86);
+  --sail-bg-2: rgb(24 33 45 / 0.92);
+  --sail-edge: #4a5d72;
+  --sail-edge-hi: #7f9bb8;
+  --sail-ink: #dbe6f0;
+  --sail-dim: #93a6b8;
+  --sail-accent: #8fc3e0;
+  --sail-ready: #a9d8c2;
+  --sail-warn: #e2a88f;
+  --sail-hull: #c98b84;
+  --sail-sails: #d6dde4;
+  --sail-crew: #9cc4a1;
+}
+
+.sail-plate, .sail-card, .sail-aim, .sail-strip { color: var(--sail-ink); font: 13px/1.35 var(--text, Georgia, serif); }
+.sail-plate[hidden], .sail-card[hidden], .sail-aim[hidden], .sail-strip[hidden] { display: none !important; }
+
+.sail-plate {
+  pointer-events: auto; align-self: end; width: min(300px, 92vw); margin-bottom: 6px; padding: 8px 10px;
+  background: linear-gradient(180deg, var(--sail-bg-2), var(--sail-bg)); border: 1px solid var(--sail-edge);
+  border-radius: 3px; box-shadow: 0 6px 22px rgb(0 0 0 / 0.45), inset 0 0 0 1px rgb(180 210 240 / 0.05);
+}
+.sail-plate-head { display: flex; align-items: baseline; gap: 4px; margin-bottom: 4px; }
+.sail-plate-head strong, .sail-card header strong { font-family: var(--serif, serif); letter-spacing: 0.04em; color: var(--sail-accent); }
+.sail-dim { color: var(--sail-dim); }
+.sail-small { font-size: 12px; margin: 4px 0 0; }
+.sail-stale { margin: 2px 0 6px; padding: 2px 6px; border-left: 2px solid var(--sail-warn); color: var(--sail-warn); font-size: 12px; }
+
+.sail-read { display: grid; grid-template-columns: max-content 1fr; gap: 1px 10px; margin: 0 0 6px; }
+.sail-read dt { color: var(--sail-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; align-self: center; }
+.sail-read dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+.sail-meters { display: grid; gap: 3px; margin: 4px 0; }
+.sail-meter { display: grid; grid-template-columns: 44px 1fr 56px; align-items: center; gap: 6px; font-size: 11px; }
+.sail-meter-name { color: var(--sail-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+.sail-meter-bar { height: 7px; background: rgb(0 0 0 / 0.5); border: 1px solid #2c3949; border-radius: 1px; overflow: hidden; }
+.sail-meter-fill { display: block; height: 100%; background: var(--sail-accent); transition: width 0.2s linear; }
+.sail-meter[data-tone=hull] .sail-meter-fill { background: var(--sail-hull); }
+.sail-meter[data-tone=sails] .sail-meter-fill { background: var(--sail-sails); }
+.sail-meter[data-tone=crew] .sail-meter-fill { background: var(--sail-crew); }
+.sail-meter-num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.sail-guns { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; margin-top: 6px; }
+.sail-gun { display: flex; justify-content: space-between; gap: 4px; padding: 2px 6px; border: 1px solid #2c3949; background: rgb(0 0 0 / 0.35); font-size: 12px; }
+.sail-gun[data-loaded=true] { border-color: var(--sail-ready); }
+.sail-gun[data-loaded=true] .sail-gun-state { color: var(--sail-ready); }
+.sail-gun[data-facing=true] { box-shadow: inset 0 0 0 1px var(--sail-accent); }
+.sail-gun-name { color: var(--sail-dim); }
+.sail-gun-state { font-variant-numeric: tabular-nums; }
+
+.sail-helm { display: grid; gap: 4px; margin-top: 8px; padding-top: 6px; border-top: 1px solid #2c3949; }
+.sail-helm-row { display: flex; align-items: center; gap: 4px; }
+.sail-helm-row > .sail-btn { flex: 1; }
+.sail-helm-val { flex: 1.2; text-align: center; font-variant-numeric: tabular-nums; color: var(--sail-accent); }
+
+.sail-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px; padding: 3px 10px;
+  color: var(--sail-ink); font: inherit; background: linear-gradient(180deg, #263446, #18222f); border: 1px solid var(--sail-edge);
+  border-radius: 2px; cursor: pointer;
+}
+.sail-btn:hover, .sail-btn:focus-visible { border-color: var(--sail-edge-hi); outline: none; box-shadow: 0 0 0 1px var(--sail-edge-hi); }
+.sail-btn-primary { border-color: var(--sail-accent); }
+.sail-btn-small { min-height: 26px; padding: 2px 6px; font-size: 12px; }
+.sail-btn[aria-pressed=true] { background: linear-gradient(180deg, #2f4760, #1d2d3e); border-color: var(--sail-accent); }
+.sail-btn[aria-disabled=true] { opacity: 0.5; cursor: not-allowed; }
+.sail-btn[aria-busy=true] { cursor: progress; }
+.sail-btn kbd { font: 11px var(--mono, monospace); padding: 0 4px; border: 1px solid #3b4c60; border-radius: 2px; color: var(--sail-dim); }
+
+/* Under the crosshair: aim readout, encounter card, contextual actions. */
+.sail-aim {
+  pointer-events: none; margin-top: 6px; padding: 2px 8px; background: var(--sail-bg); border: 1px solid #2c3949;
+  font-size: 12px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.sail-aim[data-loaded=true] { border-color: var(--sail-ready); color: var(--sail-ready); }
+.sail-card {
+  pointer-events: none; width: min(320px, 86vw); margin-top: 6px; padding: 6px 10px; background: var(--sail-bg);
+  border: 1px solid var(--sail-edge); border-radius: 3px;
+}
+.sail-card-state { margin: 2px 0; font-size: 12px; color: var(--sail-dim); }
+.sail-card-state[data-hostile=true] { color: var(--sail-warn); }
+.sail-strip { pointer-events: auto; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; margin-top: 8px; max-width: min(560px, 94vw); }
+
+/* Ship & Sea panel (inside the shared menu frame). */
+.sail-panel .sail-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+.sail-panel .sail-battery { flex: 1 1 220px; padding: 6px; border: 1px solid #2c3949; }
+.sail-panel .sail-ports li { display: flex; align-items: center; gap: 6px; }
+.sail-panel .sail-ports li .sail-btn { margin-left: auto; }
+.sail-chart-canvas { display: block; width: 100%; height: auto; margin: 0.65rem 0; border: 1px solid var(--sail-edge); }
+.sail-chart-controls { flex-wrap: wrap; }
+.sail-chart-controls select { max-width: 100%; }
+
+@media (max-width: 640px) {
+  .sail-plate { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sail-meter-fill { transition: none; }
+}
