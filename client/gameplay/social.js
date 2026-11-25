@@ -2,7 +2,7 @@
 // Server rules: server/rpg/social.js. All state comes from `{kind:'social', social}` events;
 // every button sends one server action and the panel re-renders from the server's reply.
 import { getItemArtSource, itemIcon } from './inventory/icons.js';
-import { describeOffer, draftFrom, draftMatches, draftToArgs, parseChannelCommand, tradeableItems } from './social/model.js';
+import { CHAT_HELP_SUMMARY, describeOffer, draftFrom, draftMatches, draftToArgs, parseChatInput, tradeableItems } from './social/model.js';
 
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -18,7 +18,17 @@ const el = (tag, attrs = {}, ...kids) => {
   return n;
 };
 
-const CHANNEL_LABEL = { party: 'Party', region: 'Region', global: 'Global' };
+const CHANNEL_LABEL = {
+  say: 'Nearby',
+  local: 'Nearby',
+  shout: 'Shout',
+  yell: 'Shout',
+  whisper: 'Whisper',
+  emote: 'Emote',
+  party: 'Party',
+  region: 'Region',
+  global: 'Global',
+};
 
 function loadStyles() {
   if (typeof document === 'undefined' || document.querySelector('link[data-feature="social"]')) return;
@@ -113,34 +123,88 @@ export function install(api) {
   }
 
   // ---------------------------------------------------------------- channel chat in the HUD log
-  function chatLine(ev) {
+  function appendChatItem(li) {
     const log = document.getElementById('chat-log');
     if (!log) return;
-    const li = el('li', { class: `chat-line chat-channel chat-${ev.channel}`, 'data-at': String(performance.now()) },
-      el('span', { class: 'chat-tag', text: `[${CHANNEL_LABEL[ev.channel] ?? ev.channel}${ev.channel === 'region' && ev.region ? `: ${ev.region}` : ''}]` }),
-      ' ',
-      el('span', { class: 'chat-name', text: ev.name }),
-      el('span', { class: 'chat-text', text: ev.text }));
-    if (ev.fromId === api.selfId || ev.fromId === api.state?.selfId) li.classList.add('chat-self');
     log.append(li);
     while (log.children.length > 80) log.firstElementChild.remove();
     log.scrollTop = log.scrollHeight;
   }
 
-  // `/p text`, `/r text`, `/g text` in the existing chat box go to the matching channel.
+  function systemChatLine(text, extraClass = '') {
+    appendChatItem(el('li', {
+      class: `chat-line chat-system${extraClass ? ` ${extraClass}` : ''}`,
+      'data-at': String(Date.now()),
+    }, el('span', { class: 'chat-text', text })));
+  }
+
+  function chatLine(ev) {
+    const channel = ev.channel === 'local' ? 'say' : ev.channel === 'yell' ? 'shout' : ev.channel;
+    const selfId = api.selfId ?? api.state?.selfId;
+    const isSelf = selfId != null && String(ev.fromId) === String(selfId);
+    let li;
+    if (channel === 'say') {
+      li = el('li', { class: 'chat-line chat-channel chat-say', 'data-at': String(Date.now()) },
+        el('span', { class: 'chat-name', text: ev.name }),
+        el('span', { class: 'chat-text', text: ev.text }));
+    } else if (channel === 'emote') {
+      li = el('li', { class: 'chat-line chat-channel chat-emote', 'data-at': String(Date.now()) },
+        el('span', { class: 'chat-emote-mark', text: '*' }),
+        ' ',
+        el('span', { class: 'chat-name', text: ev.name }),
+        ' ',
+        el('span', { class: 'chat-text', text: ev.text }));
+    } else if (channel === 'whisper') {
+      const label = isSelf && ev.toName ? `To ${ev.toName}` : ev.name;
+      li = el('li', { class: 'chat-line chat-channel chat-whisper', 'data-at': String(Date.now()) },
+        el('span', { class: 'chat-tag', text: '[Whisper]' }),
+        ' ',
+        el('span', { class: 'chat-name', text: label }),
+        el('span', { class: 'chat-text', text: ev.text }));
+    } else {
+      const tag = channel === 'region' && ev.region
+        ? `[${CHANNEL_LABEL[channel]}: ${ev.region}]`
+        : `[${CHANNEL_LABEL[channel] ?? channel}]`;
+      li = el('li', { class: `chat-line chat-channel chat-${channel}`, 'data-at': String(Date.now()) },
+        el('span', { class: 'chat-tag', text: tag }),
+        ' ',
+        el('span', { class: 'chat-name', text: ev.name }),
+        el('span', { class: 'chat-text', text: ev.text }));
+    }
+    if (isSelf) li.classList.add('chat-self');
+    appendChatItem(li);
+  }
+
+  // Plain text sends proximity chat (~24 m); leading `/` or `/yell` shouts across the area.
   if (typeof document !== 'undefined') {
     const form = document.getElementById('chat-form');
     const input = document.getElementById('chat-input');
     form?.addEventListener('submit', (e) => {
-      const cmd = parseChannelCommand(input?.value ?? '');
-      if (!cmd) return;
+      const cmd = parseChatInput(input?.value ?? '');
       e.preventDefault();
       e.stopImmediatePropagation();
-      if (cmd.text) act('chat.send', { channel: cmd.channel, text: cmd.text });
-      input.value = '';
-      input.blur();
+      if (cmd) {
+        if (cmd.channel === 'help') {
+          systemChatLine(CHAT_HELP_SUMMARY, 'chat-help');
+        } else if (cmd.channel === 'whisper') {
+          if (!cmd.target || !cmd.text) {
+            systemChatLine('Usage: /w <name> <message> (quote names with spaces).', 'chat-help');
+          } else {
+            act('chat.send', { channel: 'whisper', target: cmd.target, text: cmd.text });
+          }
+        } else if (cmd.text) {
+          act('chat.send', { channel: cmd.channel, text: cmd.text });
+        }
+      }
+      if (input) {
+        input.value = '';
+        input.blur();
+      }
     }, true);
-    if (input && !input.title) input.title = 'Say to people here. Start with /p, /r or /g for party, region or global chat.';
+    if (input) {
+      input.placeholder = 'Speak nearby · /yell or /msg to shout · /help';
+      input.title = 'Plain text speaks nearby (~24 m). Start with / or /yell to shout across the area. /p, /r, /g, /w, /me, /help.';
+    }
   }
 
   // ---------------------------------------------------------------- rendering
@@ -325,13 +389,13 @@ export function install(api) {
       el('form', { class: 'soc-compose', onsubmit: send },
         el('label', { for: 'soc-chat-channel', class: 'soc-visually-hidden', text: 'Channel' }),
         el('select', { id: 'soc-chat-channel', onchange: (e) => (ui.channel = e.target.value) },
-          ['party', 'region', 'global'].map((c) => el('option', { value: c, selected: ui.channel === c ? true : null, disabled: c === 'party' && !inParty ? true : null },
+          ['say', 'shout', 'party', 'region', 'global'].map((c) => el('option', { value: c, selected: ui.channel === c ? true : null, disabled: c === 'party' && !inParty ? true : null },
             c === 'region' ? `Region (${s.region})` : CHANNEL_LABEL[c]))),
         el('label', { for: 'soc-chat-text', class: 'soc-visually-hidden', text: 'Message' }),
         el('input', { id: 'soc-chat-text', type: 'text', maxlength: '200', autocomplete: 'off', value: ui.compose, placeholder: 'Message…', oninput: (e) => (ui.compose = e.target.value),
           onkeydown: (e) => e.stopPropagation() }),
         el('button', { type: 'submit', class: 'btn' }, 'Send')),
-      el('p', { class: 'soc-note', text: 'Tip: in the chat box, start with /p, /r or /g for party, region or global.' }));
+      el('p', { class: 'soc-note', text: 'Tip: plain chat speaks nearby (~24 m). Start with / or /yell to shout; /p, /r, /g, /w, /me, /help.' }));
   }
 
   api.registerPanel('party', 'Party & Trade', render);

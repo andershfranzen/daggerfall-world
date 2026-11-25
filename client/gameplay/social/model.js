@@ -2,6 +2,29 @@
 
 export const CHANNEL_PREFIXES = Object.freeze({ '/p': 'party', '/party': 'party', '/r': 'region', '/region': 'region', '/g': 'global', '/global': 'global' });
 
+export const CHAT_COMMAND_PREFIXES = Object.freeze({
+  '/say': 'say',
+  '/local': 'say',
+  '/l': 'say',
+  '/shout': 'shout',
+  '/yell': 'shout',
+  '/y': 'shout',
+  '/s': 'shout',
+  '/me': 'emote',
+  '/w': 'whisper',
+  '/whisper': 'whisper',
+  '/p': 'party',
+  '/party': 'party',
+  '/r': 'region',
+  '/region': 'region',
+  '/g': 'global',
+  '/global': 'global',
+  '/help': 'help',
+  '/?': 'help',
+});
+
+export const CHAT_HELP_SUMMARY = 'Chat: plain text speaks nearby (~24 m) · /msg or /yell (/y, /s, /shout) shouts across the area · /me <action> · /w <name> <msg> · /p party · /r region · /g global';
+
 /** `/p hello` -> {channel:'party', text:'hello'}; anything else -> null (location chat). */
 export function parseChannelCommand(raw) {
   if (typeof raw !== 'string') return null;
@@ -10,6 +33,55 @@ export function parseChannelCommand(raw) {
   const channel = CHANNEL_PREFIXES[m[1].toLowerCase()];
   if (!channel) return null;
   return { channel, text: (m[2] ?? '').replace(/\s+/g, ' ').trim() };
+}
+
+function parseWhisperRest(rest) {
+  if (!rest) return { channel: 'whisper', target: '', text: '' };
+  if (rest.startsWith('"') || rest.startsWith("'")) {
+    const q = rest[0];
+    const end = rest.indexOf(q, 1);
+    if (end > 1) {
+      return {
+        channel: 'whisper',
+        target: rest.slice(1, end).replace(/\s+/g, ' ').trim(),
+        text: rest.slice(end + 1).replace(/\s+/g, ' ').trim(),
+      };
+    }
+  }
+  const sp = rest.search(/\s/);
+  if (sp < 0) return { channel: 'whisper', target: rest, text: '' };
+  return {
+    channel: 'whisper',
+    target: rest.slice(0, sp).trim(),
+    text: rest.slice(sp + 1).replace(/\s+/g, ' ').trim(),
+  };
+}
+
+/**
+ * Parse HUD chat input:
+ * - Plain text -> { channel: 'say', text } (proximity ~24 m)
+ * - /shout, /yell, /y, /s, or bare leading `/` (e.g. `/Watch out!`) -> { channel: 'shout', text }
+ * - /p, /party, /r, /region, /g, /global, /say, /local, /l, /me, /w, /whisper, /help
+ */
+export function parseChatInput(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith('/')) {
+    return { channel: 'say', text: trimmed.replace(/\s+/g, ' ').trim() };
+  }
+  const m = /^(\/(?:[a-z]+|\?))(?:\s+([\s\S]*))?$/i.exec(trimmed);
+  if (m) {
+    const channel = CHAT_COMMAND_PREFIXES[m[1].toLowerCase()];
+    if (channel) {
+      const rest = (m[2] ?? '').trim();
+      if (channel === 'help') return { channel: 'help', text: '' };
+      if (channel === 'whisper') return parseWhisperRest(rest);
+      return { channel, text: rest.replace(/\s+/g, ' ').trim() };
+    }
+  }
+  // Any other leading `/` (e.g. `/Watch out!`) shouts across the area.
+  return { channel: 'shout', text: trimmed.slice(1).replace(/\s+/g, ' ').trim() };
 }
 
 /** Items the player may put on the table: unequipped, not gold, not quest-bound. */

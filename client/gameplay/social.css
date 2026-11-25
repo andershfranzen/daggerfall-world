@@ -51,8 +51,34 @@
 .soc-root .btn-danger { border-color: #8a4a40; }
 .soc-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* Channel lines in the HUD chat log. */
-.chat-line.chat-channel .chat-tag { font-size: 0.8em; letter-spacing: 0.04em; margin-right: 2px; }
-.chat-line.chat-party .chat-tag { color: #8fc9b0; }
+/* Channel lines in the HUD chat log (slate/steel/sapphire palette matching interface.css). */
+.chat-line.chat-channel .chat-tag { font-size: 0.8em; font-weight: 600; letter-spacing: 0.04em; margin-right: 2px; }
+.chat-line.chat-say { color: var(--text, #dde3ec); }
+.chat-line.chat-shout {
+  background: rgba(18, 42, 82, 0.78);
+  border-left: 2px solid var(--blue, #6fb6ff);
+}
+.chat-line.chat-shout .chat-tag { color: var(--blue-hi, #b6dcff); text-transform: uppercase; letter-spacing: 0.06em; }
+.chat-line.chat-shout .chat-name { color: var(--frost, #c9d8ff); }
+.chat-line.chat-shout .chat-name::after { content: " shouts:"; color: var(--blue-hi, #b6dcff); font-weight: 400; }
+.chat-line.chat-shout .chat-text { color: #eef5ff; font-weight: 600; }
+.chat-line.chat-whisper {
+  background: rgba(20, 26, 44, 0.78);
+  border-left: 2px solid #9ab4e8;
+}
+.chat-line.chat-whisper .chat-tag { color: #b7c8f2; }
+.chat-line.chat-whisper .chat-name { color: #d1dcfa; }
+.chat-line.chat-whisper .chat-text { color: #dce4f7; font-style: italic; }
+.chat-line.chat-emote { color: var(--text-2, #aab4c4); font-style: italic; }
+.chat-line.chat-emote .chat-emote-mark { color: var(--steel-hi, #a9b4c6); font-style: normal; }
+.chat-line.chat-emote .chat-name { color: var(--steel-hi, #a9b4c6); margin-right: 0; }
+.chat-line.chat-emote .chat-name::after { content: ""; }
+.chat-line.chat-party .chat-tag { color: var(--mint, #7ee0c3); }
 .chat-line.chat-region .chat-tag { color: #9db8de; }
 .chat-line.chat-global .chat-tag { color: #c2b3e0; }
+.chat-line.chat-help {
+  background: rgba(14, 18, 25, 0.82);
+  border-left: 2px solid var(--steel-hi, #a9b4c6);
+  color: var(--text-2, #aab4c4);
+  font-size: 0.84rem;
+}
