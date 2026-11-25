@@ -4,8 +4,45 @@ import { regionNameOf } from '../../../client/gameplay/travel/identity.js';
 
 export const CHANNELS = Object.freeze(['party', 'region', 'global']);
 export const MAX_CHAT_LENGTH = 200; // matches server/game.js DEFAULTS.maxChatLength
-export const CHAT_RATE_PER_SEC = 1; // matches DEFAULTS.chatRatePerSec
-export const CHAT_BURST = 5; // matches DEFAULTS.chatBurst
+
+// Global shout keeps a tighter anti-spam burst while still allowing natural sustained pacing.
+// Local, party, whisper, and region channels have generous human-conversation budgets via CHAT_LIMITS.
+export const CHAT_RATE_PER_SEC = 2;
+export const CHAT_BURST = 5;
+
+export const CHAT_LIMITS = Object.freeze({
+  local: Object.freeze({ ratePerSec: 4, burst: 12 }),
+  party: Object.freeze({ ratePerSec: 5, burst: 15 }),
+  whisper: Object.freeze({ ratePerSec: 5, burst: 15 }),
+  region: Object.freeze({ ratePerSec: 3, burst: 10 }),
+  global: Object.freeze({ ratePerSec: CHAT_RATE_PER_SEC, burst: CHAT_BURST }),
+});
+
+/** Return the rate/burst budget for a chat channel (falls back to `local` for unknown channels). */
+export function chatLimitFor(channel) {
+  return CHAT_LIMITS[channel] ?? CHAT_LIMITS.local;
+}
+
+/**
+ * Per-player multi-channel chat limiter with independent token buckets per channel so
+ * active party/local/whisper conversation never throttles or collides with global shout limits.
+ */
+export function createChatLimiter(now = () => performance.now(), overrides = {}) {
+  const buckets = new Map();
+  return (channel = 'local') => {
+    const key = String(channel || 'local');
+    let check = buckets.get(key);
+    if (!check) {
+      const base = chatLimitFor(key);
+      const custom = overrides[key];
+      const ratePerSec = custom?.ratePerSec ?? base.ratePerSec;
+      const burst = custom?.burst ?? base.burst;
+      check = tokenBucket(ratePerSec, burst, now);
+      buckets.set(key, check);
+    }
+    return check();
+  };
+}
 
 // Same character filter as server/game.js (C0/C1 controls, line separators, bidi overrides).
 // eslint-disable-next-line no-control-regex

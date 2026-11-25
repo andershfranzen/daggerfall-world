@@ -4,6 +4,17 @@ import { statSync, realpathSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { createGameServer, DEFAULTS } from './game.js';
 import { createAccounts, ACCOUNT_DEFAULTS } from './accounts.js';
+import { CHAT_LIMITS } from './rpg/social/chat.js';
+
+// Single-world capacity default: high practical cap instead of a 32-player instance cap.
+// Operators can set MAX_PLAYERS=0 for uncapped, or any positive integer up to 1,000,000.
+const DEFAULT_MAX_PLAYERS = 2000;
+const MAX_PLAYERS_UPPER_BOUND = 1_000_000;
+
+function maxPlayersEnv(name, fallback) {
+  const n = intEnv(name, fallback, 0, MAX_PLAYERS_UPPER_BOUND);
+  return n === 0 ? Number.POSITIVE_INFINITY : n;
+}
 
 function intEnv(name, fallback, min, max) {
   const raw = process.env[name];
@@ -90,7 +101,9 @@ const server = createGameServer({
   host: process.env.HOST || DEFAULTS.host,
   port: intEnv('PORT', DEFAULTS.port, 0, 65535),
   dbPath: process.env.DB_PATH ? resolve(process.env.DB_PATH) : DEFAULTS.dbPath,
-  maxPlayers: intEnv('MAX_PLAYERS', DEFAULTS.maxPlayers, 1, 1000),
+  maxPlayers: maxPlayersEnv('MAX_PLAYERS', DEFAULT_MAX_PLAYERS),
+  chatRatePerSec: intEnv('CHAT_RATE_PER_SEC', CHAT_LIMITS.local.ratePerSec, 1, 100),
+  chatBurst: intEnv('CHAT_BURST', CHAT_LIMITS.local.burst, 1, 500),
   worldHalfExtent: intEnv('WORLD_HALF_EXTENT', DEFAULTS.worldHalfExtent, 1, 100_000),
   siteDir: process.env.SITE_DIR ? resolve(process.env.SITE_DIR) : DEFAULTS.siteDir,
 });
