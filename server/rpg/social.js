@@ -6,7 +6,10 @@
 // copy cannot re-admit them. Trades and invitations are live-only and end on disconnect.
 import { randomBytes } from 'node:crypto';
 import { CHANNELS, CHAT_BURST, CHAT_RATE_PER_SEC, cleanChatText, isMuted, regionOf, tokenBucket } from './social/chat.js';
+import { PROXIMITY_RANGE, SHOUT_RANGE, canonicalChannel, findWhisperTarget, parseChatCommand, selectChatAudience } from './social/proximity.js';
 import { TRADE_RANGE, describeOffer, goldOf, normaliseOffer, offerProblem, settle } from './social/trade.js';
+
+export { PROXIMITY_RANGE, SHOUT_RANGE };
 
 export const PARTY_MAX = 6;
 export const INVITE_TTL_MS = 60_000;
@@ -162,7 +165,9 @@ export function install(ctx) {
     const tid = tradeOf.get(p.id);
     return {
       region: regionOf(loc),
-      channels: ['location', ...CHANNELS],
+      channels: ['say', 'shout', ...CHANNELS],
+      proximityRange: PROXIMITY_RANGE,
+      shoutRange: SHOUT_RANGE,
       party: partyView(party),
       invites: myInvites,
       outgoing: [...invites].filter(([, m]) => m.has(p.id)).map(([toId]) => ({ toId, toName: online(toId)?.name ?? 'Someone' })),
@@ -525,27 +530,36 @@ export function install(ctx) {
   });
 
   // ------------------------------------------------------------ chat channels
+  function chatAudience(sender, rawChannel = 'say', options = {}) {
+    return selectChatAudience(ctx, sender, rawChannel, { party: partyOfPlayer(sender), ...options });
+  }
+
   ctx.onAction('chat.send', (p, args = {}) => {
     settlePending();
-    const channel = String(args.channel ?? '');
-    if (!CHANNELS.includes(channel)) throw new Error('Choose party, region or global chat.');
+    const channel = canonicalChannel(args.channel);
+    if (!channel) throw new Error('Choose say, shout, party, region, global or whisper chat.');
+    if (channel === 'whisper' && !args.target && args.targetId == null) {
+      throw new Error('Choose a player to whisper to.');
+    }
     if (isMuted(ctx, p)) throw new Error('You are muted and cannot chat right now.');
     const text = cleanChatText(args.text);
     // Share the runtime's per-player chat budget when present, plus our own as a floor.
     const okShared = typeof p.chatOk === 'function' ? p.chatOk() : true;
     if (!okShared || !limiter(p).chat()) throw new Error('You are chatting too fast.');
-    let recipients;
     const region = regionOf(locationOf(p));
-    if (channel === 'party') {
-      const party = partyOfPlayer(p);
-      if (!party) throw new Error('You are not in a party.');
-      recipients = [...party.members.keys()].map(online).filter(Boolean);
-    } else if (channel === 'region') {
-      recipients = [...ctx.players.values()].filter((o) => regionOf(locationOf(o)) === region);
-    } else {
-      recipients = [...ctx.players.values()];
-    }
-    const event = { kind: 'chat', channel, fromId: p.id, name: p.name, text, ...(channel === 'region' ? { region } : {}) };
+    const whisperTo = channel === 'whisper'
+      ? findWhisperTarget(ctx.players, p, { target: args.target, targetId: args.targetId })
+      : null;
+    const recipients = chatAudience(p, channel, { recipient: whisperTo });
+    const event = {
+      kind: 'chat',
+      channel,
+      fromId: p.id,
+      name: p.name,
+      text,
+      ...(channel === 'region' ? { region } : {}),
+      ...(whisperTo ? { toId: whisperTo.id, toName: whisperTo.name } : {}),
+    };
     for (const r of recipients) ctx.notify(r, event);
   });
 
@@ -626,6 +640,8 @@ export function install(ctx) {
   };
   services.tradeOpenFor = (p) => tradeOf.has(p.id);
   services.goldOf = services.goldOf ?? ((p) => goldOf(p?.rpg));
+  services.chatAudience = chatAudience;
+  services.parseChatCommand = parseChatCommand;
 
-  return { parties, trades, invites, view, settlePending };
+  return { parties, trades, invites, view, settlePending, chatAudience };
 }
