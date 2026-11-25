@@ -144,7 +144,7 @@ export function createRpgRuntime(opts) {
   const tickHandlers = [];
   const actions = new Map();
   const events = new Map();
-  const lastSent = new WeakMap(); // player -> diff key of the last rpg snapshot sent
+  const lastSent = new WeakMap(); // player -> {key, parts} of the last rpg snapshot sent
   // name -> (location) => {status:'loading'|'ready'|'failed', ...}: what the server still prepares for a place
   // (its people, ...). Sent with every snapshot as `readiness` so a joining client can wait for it.
   const readinessProviders = new Map();
@@ -362,11 +362,12 @@ export function createRpgRuntime(opts) {
 
   // ---- snapshots -------------------------------------------------------------------------------
 
-  function visibleEntity(e, viewer) {
-    if (e.visibleTo != null) {
-      const ok = e.visibleTo instanceof Set ? e.visibleTo.has(viewer.id) : Array.isArray(e.visibleTo) && e.visibleTo.includes(viewer.id);
-      if (!ok) return null;
-    }
+  function canSee(e, viewer) {
+    if (e.visibleTo == null) return true;
+    return e.visibleTo instanceof Set ? e.visibleTo.has(viewer.id) : Array.isArray(e.visibleTo) && e.visibleTo.includes(viewer.id);
+  }
+
+  function publicEntity(e) {
     const out = {};
     for (const k of Object.keys(e)) {
       if (k.startsWith('_') || k === 'visibleTo' || typeof e[k] === 'function') continue;
@@ -405,37 +406,86 @@ export function createRpgRuntime(opts) {
     return peer;
   }
 
-  /** Builds the private snapshot for `p` (`cache` memoizes per-location work within one sync). */
-  function rpgMessage(p, cache = new Map()) {
-    const loc = locationOf(p);
+  // `cache` memoizes work within one sync: per location (string keys) the entities, peers and readiness, and
+  // per player (object keys) the public peer. Each is copied and serialized once, however many viewers share it.
+  function peerOf(q, cache) {
+    let v = cache.get(q);
+    if (!v) {
+      const peer = publicPeer(q);
+      const { x, z, yaw, moving, ...rest } = peer; // peer positions stream through `state`
+      v = { peer, rest: JSON.stringify(rest) };
+      cache.set(q, v);
+    }
+    return v;
+  }
+
+  function locationCache(loc, cache) {
     let c = cache.get(loc);
     if (!c) {
+      const readiness = { location: loc, ...readinessOf(readinessProviders, loc) };
       c = {
-        entities: [...entities.values()].filter((e) => e && e.location === loc),
+        entities: [...entities.values()].filter((e) => e && e.location === loc).map((e) => {
+          const v = publicEntity(e);
+          return { e, v, json: JSON.stringify(v) };
+        }),
         // Players still on their loading screen (server/game.js `arriving`) are not shown to others yet.
-        peers: [...players.values()].filter((q) => locationOf(q) === loc && !q.arriving).map((q) => [q.id, publicPeer(q), sceneOf(q)]),
-        readiness: { location: loc, ...readinessOf(readinessProviders, loc) },
+        peers: [...players.values()].filter((q) => locationOf(q) === loc && !q.arriving).map((q) => ({ id: q.id, scene: sceneOf(q), ...peerOf(q, cache) })),
+        readiness,
+        readinessJson: JSON.stringify(readiness),
       };
       cache.set(loc, c);
     }
-    const ents = [];
-    for (const e of c.entities) {
-      const v = visibleEntity(e, p);
-      if (v) ents.push(v);
-    }
+    return c;
+  }
+
+  // The snapshot's parts for `p` and its diff key, built from the cached JSON (no full snapshot is assembled).
+  // Peer positions are left out of the key: they alone never trigger a resend.
+  function viewOf(p, cache) {
+    const loc = locationOf(p);
+    const c = locationCache(loc, cache);
     const scene = sceneOf(p);
-    const peers = c.peers.filter(([id, , s]) => id !== p.id && s === scene).map(([, peer]) => peer);
+    const ents = c.entities.filter(({ e }) => canSee(e, p));
+    const peers = c.peers.filter((q) => q.id !== p.id && q.scene === scene);
     // Outdoor players just across a boundary (server/rpg/peers.js): public appearance only, in p's frame.
     // Listed by id, not distance, so walking alone never changes the snapshot's diff key.
-    const across = [...(ctx.services.peerView?.across(p) ?? [])].sort((x, y) => x.player.id - y.player.id);
-    for (const a of across) {
-      peers.push({ ...publicPeer(a.player), x: r3(a.x), z: r3(a.z), across: true });
-    }
+    const across = [...(ctx.services.peerView?.across(p) ?? [])]
+      .sort((x, y) => x.player.id - y.player.id)
+      .map((a) => ({ a, ...peerOf(a.player, cache) }));
     const readiness = privateReadinessProviders.size
       ? { ...c.readiness, ...readinessOf(privateReadinessProviders, loc, p) }
       : c.readiness;
     const locomotion = ctx.services.locomotionMods?.(p);
-    return { type: 'rpg', selfId: p.id, character: p.rpg, entities: ents, peers, readiness, locomotion };
+    const peerKeys = peers.map((q) => q.rest);
+    for (const { rest } of across) peerKeys.push(rest === '{}' ? '{"across":true}' : `${rest.slice(0, -1)},"across":true}`);
+    // One JSON part per snapshot field: character, entities, peers, readiness, locomotion.
+    const parts = [
+      JSON.stringify(p.rpg) ?? 'null',
+      `[${ents.map((x) => x.json).join(',')}]`,
+      `[${peerKeys.join(',')}]`,
+      readiness === c.readiness ? c.readinessJson : JSON.stringify(readiness),
+      JSON.stringify(locomotion) ?? 'null',
+    ];
+    return { p, ents, peers, across, readiness, locomotion, parts, key: parts.join('\n') };
+  }
+
+  /** The snapshot; with `prevParts` (a client that merges partial snapshots) only the fields that changed. */
+  function messageOf({ p, ents, peers, across, readiness, locomotion, parts }, prevParts = null) {
+    const msg = { type: 'rpg', selfId: p.id };
+    const want = (i) => !prevParts || prevParts[i] !== parts[i];
+    if (want(0)) msg.character = p.rpg;
+    if (want(1)) msg.entities = ents.map((x) => x.v);
+    if (want(2)) {
+      msg.peers = peers.map((q) => q.peer);
+      for (const { a, peer } of across) msg.peers.push({ ...peer, x: r3(a.x), z: r3(a.z), across: true });
+    }
+    if (want(3)) msg.readiness = readiness;
+    if (want(4)) msg.locomotion = locomotion;
+    return msg;
+  }
+
+  /** Builds the private snapshot for `p` (`cache` memoizes per-location work within one sync). */
+  function rpgMessage(p, cache = new Map()) {
+    return messageOf(viewOf(p, cache));
   }
 
   function readinessOf(providers, loc, viewer) {
@@ -451,32 +501,22 @@ export function createRpgRuntime(opts) {
     return out;
   }
 
-  // Peer positions stream through the `state` message, so they alone never trigger a resend.
-  function diffKey(msg) {
-    return JSON.stringify([
-      msg.character,
-      msg.entities,
-      msg.peers.map(({ x, z, yaw, moving, ...rest }) => rest),
-      msg.readiness,
-      msg.locomotion,
-    ]);
-  }
-
   /** Sends rpg snapshots whose content changed. `list` defaults to every live player. */
   function sync(list = players.values(), { force = false } = {}) {
     const cache = new Map();
     for (const p of list) {
       if (players.get(p.id) !== p) continue;
-      let msg, key;
+      const prev = lastSent.get(p);
+      let view, msg;
       try {
-        msg = rpgMessage(p, cache);
-        key = diffKey(msg);
+        view = viewOf(p, cache);
+        if (!force && prev?.key === view.key) continue;
+        msg = messageOf(view, !force && p.delta === true ? prev?.parts : null);
       } catch (err) {
         log.error('[rpg] snapshot failed:', err);
         continue;
       }
-      if (!force && lastSent.get(p) === key) continue;
-      lastSent.set(p, key);
+      lastSent.set(p, { key: view.key, parts: view.parts });
       send(p, msg);
     }
   }

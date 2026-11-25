@@ -17,7 +17,9 @@
 // the production feature list.
 //
 // Options: --scenarios town,clustered,dispersed  --counts 2,8,32  --warmup 4  --seconds 12
-//          --chat 6  --json FILE
+//          --chat 6  --json FILE  --delta (clients join with `delta: true`, like the browser client:
+//          `stateDelta` frames and partial `rpg` snapshots; without it they get the legacy full frames)
+// ARENA2_DIR is required only for the dispersed scenario; without it the town has no data-driven NPCs.
 import { isMainThread, Worker, parentPort, workerData } from 'node:worker_threads';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir, cpus, loadavg } from 'node:os';
@@ -30,7 +32,7 @@ const HALF = 409.6;
 // ------------------------------------------------------------------------------- worker: clients
 if (!isMainThread) {
   const { default: WebSocket } = await import('ws');
-  const { port, places, seconds, warmup, chatEvery, seed } = workerData;
+  const { port, places, seconds, warmup, chatEvery, seed, delta } = workerData;
   let s = seed >>> 0;
   const rand = () => {
     s = (s + 0x6d2b79f5) >>> 0;
@@ -52,19 +54,28 @@ if (!isMainThread) {
         if (m.type === 'actionResult') c.placed = m.ok ? true : m.error;
         if (m.type === 'error') c.errors.push(m.message);
       }
+      // Delta clients rebuild the roster from every frame, as client/lib/net.js does; legacy frames are
+      // parsed only when sampled (every 5th while measuring) to keep the worker light.
+      const frame = type === 'state' || type === 'stateDelta';
+      const sample = measuring && frame && c.states++ % 5 === 0;
+      if (frame && (delta || sample)) {
+        const m = JSON.parse(data);
+        if (type === 'state') c.roster = new Map(m.players.map((p) => [p.id, p]));
+        else {
+          for (const id of m.gone ?? []) c.roster.delete(id);
+          for (const p of m.players) c.roster.set(p.id, { ...c.roster.get(p.id), ...p });
+        }
+      }
       if (!measuring) return;
       c.bytes += data.length;
       c.msgs++;
       const t = (c.byType[type] ??= { msgs: 0, bytes: 0 });
       t.msgs++;
       t.bytes += data.length;
-      if (type === 'state') {
-        // Count visible peers (sampled: every 5th state) without slowing the worker much.
-        if (c.states++ % 5 === 0) {
-          const m = JSON.parse(data);
-          c.seen += m.players.length - 1;
-          c.across += m.players.filter((p) => p.across).length;
-        }
+      if (sample) {
+        const players = [...c.roster.values()];
+        c.seen += players.length - 1;
+        c.across += players.filter((p) => p.across).length;
       }
     });
     c.ws.on('close', (code) => (c.closed = code));
@@ -75,7 +86,7 @@ if (!isMainThread) {
       c.ws.send(d);
     };
     c.ready = new Promise((res, rej) => {
-      c.ws.once('open', () => c.send({ type: 'join', name: `Walker ${i}` }));
+      c.ws.once('open', () => c.send({ type: 'join', name: `Walker ${i}`, ...(delta ? { delta: true } : {}) }));
       c.ws.once('error', rej);
       const timer = setInterval(() => {
         if (c.welcome) { clearInterval(timer); res(); }
@@ -130,7 +141,7 @@ if (!isMainThread) {
 
 // ------------------------------------------------------------------------------ main: server side
 function parseArgs(argv) {
-  const o = { scenarios: ['town', 'clustered', 'dispersed'], counts: [2, 8, 32], warmup: 4, seconds: 12, chat: 6, json: null };
+  const o = { scenarios: ['town', 'clustered', 'dispersed'], counts: [2, 8, 32], warmup: 4, seconds: 12, chat: 6, json: null, delta: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const v = () => argv[++i];
@@ -140,6 +151,7 @@ function parseArgs(argv) {
     else if (a === '--seconds') o.seconds = Number(v());
     else if (a === '--chat') o.chat = Number(v());
     else if (a === '--json') o.json = resolve(v());
+    else if (a === '--delta') o.delta = true;
     else throw new Error(`unknown option ${a}`);
   }
   if (!o.counts.every((n) => Number.isInteger(n) && n >= 1 && n <= 32)) throw new Error('--counts must be integers in [1, 32]');
@@ -221,7 +233,7 @@ async function runOnce(scenario, count, o, arena2Dir) {
     if (view) unwrap.push(wrap(view, 'across', across));
 
     const worker = new Worker(fileURLToPath(import.meta.url), {
-      workerData: { port: addr.port, places, seconds: o.seconds, warmup: o.warmup, chatEvery: o.chat, seed: 0xe0 + count },
+      workerData: { port: addr.port, places, seconds: o.seconds, warmup: o.warmup, chatEvery: o.chat, seed: 0xe0 + count, delta: o.delta },
     });
     const h = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS });
     let elu0, cpu0, t0, heap0, placeErrors = [];
@@ -288,16 +300,17 @@ async function runOnce(scenario, count, o, arena2Dir) {
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   const raw = process.env.ARENA2_DIR;
-  if (!raw || !existsSync(raw) || !statSync(raw).isDirectory()) throw new Error('ARENA2_DIR must name the ARENA2 folder (frames and towns come from it)');
-  const arena2Dir = resolve(raw);
-  console.log(`measure-peers: scenarios=${o.scenarios.join(',')} counts=${o.counts.join(',')} warmup=${o.warmup}s measured=${o.seconds}s cpus=${cpus().length} load=${loadavg().map((v) => v.toFixed(1)).join('/')} node=${process.version}`);
+  const needsData = o.scenarios.includes('dispersed');
+  if ((raw || needsData) && (!raw || !existsSync(raw) || !statSync(raw).isDirectory())) throw new Error('ARENA2_DIR must name the ARENA2 folder (frames and towns come from it)');
+  const arena2Dir = raw ? resolve(raw) : null;
+  console.log(`measure-peers: scenarios=${o.scenarios.join(',')} counts=${o.counts.join(',')} delta=${o.delta} arena2=${!!arena2Dir} warmup=${o.warmup}s measured=${o.seconds}s cpus=${cpus().length} load=${loadavg().map((v) => v.toFixed(1)).join('/')} node=${process.version}`);
   const results = [];
   for (const sc of o.scenarios) {
     for (const n of o.counts) {
       process.stdout.write(`  ${sc.padEnd(9)} ${String(n).padStart(2)} players ... `);
       const r = await runOnce(sc, n, o, arena2Dir);
       results.push(r);
-      console.log(`down ${r.downKBps.mean} KB/s/player (state ${r.byType.state?.kbPerSec ?? 0} @ ${r.byType.state?.avgBytes ?? 0} B, rpg ${r.byType.rpg?.kbPerSec ?? 0}) | peers ${r.visiblePeers.mean} (across ${r.visiblePeers.acrossMean}) | ` +
+      console.log(`down ${r.downKBps.mean} KB/s/player (state ${r.byType.state?.kbPerSec ?? 0} @ ${r.byType.state?.avgBytes ?? 0} B, stateDelta ${r.byType.stateDelta?.kbPerSec ?? 0} @ ${r.byType.stateDelta?.avgBytes ?? 0} B, rpg ${r.byType.rpg?.kbPerSec ?? 0} @ ${r.byType.rpg?.avgBytes ?? 0} B) | peers ${r.visiblePeers.mean} (across ${r.visiblePeers.acrossMean}) | ` +
         `tick mean/p99 ${r.runtimeTick.meanMs}/${r.runtimeTick.p99Ms} ms | sync mean/p99 ${r.runtimeSync.meanMs}/${r.runtimeSync.p99Ms} ms | across/tick ${r.peerAcross.perTickMs} ms (p99 call ${r.peerAcross.p99Ms}) | ` +
         `loop p99 ${r.loopDelayMs.p99} ms | ELU ${r.loopUtilization} | heap ${r.heapMB} MB` + (r.placeErrors.length ? ` | place errors: ${r.placeErrors.join('; ')}` : '') + (r.clientErrors.length ? ` | client errors: ${r.clientErrors.join('; ')}` : ''));
     }

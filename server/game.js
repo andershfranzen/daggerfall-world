@@ -312,6 +312,11 @@ export function createGameServer(options = {}) {
   // `state` goes to each location's occupants, plus outdoor players just across a town gate or
   // map-pixel edge (server/rpg/peers.js, projected into the viewer's frame and marked `across`).
   // A message is sent only when it changed or the heartbeat is due.
+  //
+  // Clients that join with `delta: true` (client/lib/net.js) get the same roster as `stateDelta` frames:
+  // `players` holds new entries in full and, for known ids, only the fields that changed; `gone` lists ids
+  // that left (an id in both `gone` and `players` is replaced, e.g. when a field disappears). A full `state`
+  // still starts every new socket and location, and is resent on `force` and on the idle heartbeat.
   function broadcastState(force = false) {
     const groups = new Map();
     // Grouped by presence scene: crews sharing one classic ship deck are separate scenes (server/rpg/sailing.js).
@@ -323,19 +328,39 @@ export function createGameServer(options = {}) {
     }
     const now = performance.now();
     const view = services.peerView;
+    const pub = new Map(); // each player's public entry, built once per broadcast
+    const publicOf = (q) => {
+      let o = pub.get(q);
+      if (!o) pub.set(q, (o = publicPlayer(q)));
+      return o;
+    };
     for (const q of lastState.keys()) if (players.get(q.id) !== q) lastState.delete(q);
     for (const [, group] of groups) {
       const loc = runtime.locationOf(group[0]);
       // A player still on their loading screen (`arriving`) sees themselves, but nobody else sees them yet.
-      const local = group.filter((q) => !q.arriving).map(publicPlayer);
-      const shared = JSON.stringify({ type: 'state', location: loc, players: local });
+      const local = group.filter((q) => !q.arriving).map(publicOf);
+      let shared = null;
       for (const p of group) {
         const across = view ? view.across(p) : [];
-        const mine = p.arriving ? local.concat(publicPlayer(p)) : local;
-        const data = across.length || p.arriving
-          ? JSON.stringify({ type: 'state', location: loc, players: mine.concat(across.map(acrossPlayer)) })
-          : shared;
+        const mine = p.arriving ? local.concat(publicOf(p)) : local;
+        const list = across.length
+          ? mine.concat(across.map(({ player, x, z }) => ({ ...publicOf(player), x: r3(x), z: r3(z), across: true })))
+          : mine;
+        const full = () => (list === local ? (shared ??= stateData(loc, local)) : stateData(loc, list));
         const prev = lastState.get(p);
+        if (p.delta) {
+          // The same socket still shows this location: send what changed, if anything.
+          const known = !force && prev?.ws === p.ws && prev.location === loc;
+          let data = known ? deltaData(loc, prev.sent, list) : null;
+          if (!data) {
+            if (known && now - prev.at < cfg.stateHeartbeatMs) continue;
+            data = full();
+          }
+          lastState.set(p, { ws: p.ws, location: loc, sent: new Map(list.map((o) => [o.id, o])), at: now });
+          if (p.ws.readyState === p.ws.OPEN) p.ws.send(data);
+          continue;
+        }
+        const data = full();
         if (!force && prev && prev.data === data && now - prev.at < cfg.stateHeartbeatMs) continue;
         lastState.set(p, { data, at: now });
         if (p.ws.readyState === p.ws.OPEN) p.ws.send(data);
@@ -343,8 +368,33 @@ export function createGameServer(options = {}) {
     }
   }
 
-  function acrossPlayer({ player, x, z }) {
-    return { ...publicPlayer(player), x: r3(x), z: r3(z), across: true };
+  const stateData = (location, players) => JSON.stringify({ type: 'state', location, players });
+
+  /** `stateDelta` from the entries last sent to a viewer to `list`, or null when nothing changed. */
+  function deltaData(location, sent, list) {
+    const changed = [];
+    const gone = [];
+    const ids = new Set();
+    for (const o of list) {
+      ids.add(o.id);
+      const old = sent.get(o.id);
+      if (old === o) continue;
+      if (!old) {
+        changed.push(o);
+        continue;
+      }
+      if (Object.keys(old).some((k) => !(k in o))) {
+        gone.push(o.id); // a field disappeared: replace the whole entry
+        changed.push(o);
+        continue;
+      }
+      let d = null;
+      for (const k in o) if (o[k] !== old[k]) (d ??= { id: o.id })[k] = o[k];
+      if (d) changed.push(d);
+    }
+    for (const id of sent.keys()) if (!ids.has(id)) gone.push(id);
+    if (!changed.length && !gone.length) return null;
+    return JSON.stringify(gone.length ? { type: 'stateDelta', location, players: changed, gone } : { type: 'stateDelta', location, players: changed });
   }
 
   function saveNow(list) {
@@ -586,6 +636,8 @@ export function createGameServer(options = {}) {
     // `arrival: true`: the client holds a loading screen after the welcome and sends {type:'arrived'} once its
     // place is complete (client/main.js). Until then others do not see this player and monsters ignore them.
     conn.arrival = msg.arrival === true;
+    // `delta: true`: the client applies `stateDelta` frames and merges partial `rpg` snapshots (client/lib/net.js).
+    conn.delta = msg.delta === true;
     return conn.account ? joinAccount(conn, msg) : joinGuest(conn, msg);
   }
 
@@ -667,6 +719,7 @@ export function createGameServer(options = {}) {
       existing.chatOk = bucket(cfg.chatRatePerSec, cfg.chatBurst);
       existing.dirty = true;
       existing.arriving = conn.arrival === true;
+      existing.delta = conn.delta === true;
       conn.player = existing;
       runtime.resetSync(existing);
       send(ws, { type: 'welcome', id: existing.id, ...welcome, ...(conn.arrival ? { arrival: true } : {}), player: publicPlayer(existing) });
@@ -699,6 +752,7 @@ export function createGameServer(options = {}) {
       conn,
       chatOk: bucket(cfg.chatRatePerSec, cfg.chatBurst),
       arriving: conn.arrival === true,
+      delta: conn.delta === true,
     };
     conn.player = p;
     players.set(p.id, p);

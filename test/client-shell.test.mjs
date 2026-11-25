@@ -230,7 +230,7 @@ test('connection: account join sends no guest token, carries claimToken, accepts
   };
   const c = new Connection('ws://x/ws', { WebSocketImpl: FakeWS });
   const w = await c.connect({ name: 'Ysmir', token: 'should-not-be-sent', account: true, claimToken: 'A'.repeat(43) });
-  assert.deepEqual(FakeWS.last.sent[0], { type: 'join', name: 'Ysmir', arrival: true, account: true, claimToken: 'A'.repeat(43) });
+  assert.deepEqual(FakeWS.last.sent[0], { type: 'join', name: 'Ysmir', arrival: true, delta: true, account: true, claimToken: 'A'.repeat(43) });
   assert.equal(w.token, null);
   assert.deepEqual(w.account, { id: '12', username: 'Ysmir' });
   assert.equal(c.sendArrived(), false, 'older servers do not negotiate the arrival acknowledgement');

@@ -112,6 +112,7 @@ export class Connection {
     this.joined = false;
     this.closedByUs = false;
     this.onState = null;
+    this.roster = null; // {location, players: Map id -> entry} rebuilt from `state` + `stateDelta`
     this.onChat = null;
     this.onError = null;
     this.onClose = null;
@@ -150,7 +151,8 @@ export class Connection {
 
       ws.onopen = () => {
         // arrival: we send {type:'arrived'} once the loading screen shows a complete place (client/main.js).
-        const msg = { type: 'join', name, arrival: true };
+        // delta: the server may send `stateDelta` (applied below) and partial `rpg` snapshots (merged by mergeRpg).
+        const msg = { type: 'join', name, arrival: true, delta: true };
         if (account) {
           msg.account = true;
           if (claimToken) msg.claimToken = claimToken;
@@ -192,8 +194,20 @@ export class Connection {
         }
         switch (msg.type) {
           case 'state':
-            if (Array.isArray(msg.players)) this.onState?.(msg.players.map(sanitizePlayer).filter(Boolean), typeof msg.location === 'string' ? msg.location : null);
+            if (Array.isArray(msg.players)) {
+              this.roster = { location: msg.location, players: new Map(msg.players.filter(isObj).map((p) => [p.id, p])) };
+              this.onState?.(msg.players.map(sanitizePlayer).filter(Boolean), typeof msg.location === 'string' ? msg.location : null);
+            }
             break;
+          case 'stateDelta': {
+            // Changes to the last full `state`: `gone` ids leave first, then `players` entries are added or merged.
+            const r = this.roster;
+            if (!r || r.location !== msg.location || !Array.isArray(msg.players)) break;
+            if (Array.isArray(msg.gone)) for (const id of msg.gone) r.players.delete(id);
+            for (const p of msg.players) if (isObj(p)) r.players.set(p.id, { ...r.players.get(p.id), ...p });
+            this.onState?.([...r.players.values()].map(sanitizePlayer).filter(Boolean), typeof msg.location === 'string' ? msg.location : null);
+            break;
+          }
           case 'chat':
             if (typeof msg.text === 'string') this.onChat?.({ name: String(msg.name ?? '?'), text: msg.text });
             break;

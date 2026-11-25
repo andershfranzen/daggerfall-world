@@ -46,10 +46,30 @@ Other agents' test suites and servers ran on the same machine during the measure
 4. **The event loop is healthy at 32 players.** ELU is 0.08, and p99 excess delay is about 5 ms against a 40 ms tick. A single process has plenty of CPU headroom for one town. Bandwidth will limit a public host before CPU does.
 5. Upload is a constant 0.5 KB/s per player: 10 `input` frames of about 52 B each per second.
 
-## Bottlenecks for the runtime owner (not changed here)
+## Changes after this measurement (2026-11-25)
 
-- **`server/game.js` → `broadcastState`:** the full roster as JSON for every location at 12.5 Hz is the bandwidth cost. Optimize in this layer: send per-entity deltas (only players who moved, quantized positions, and the static `name` only on join), cull by interest radius, and/or use a lower rate for distant peers. One shared `data` string is already reused per location, which keeps the CPU cost low. Only the size is the problem. `perMessageDeflate` is off, which is reasonable for CPU, but it means repetitive JSON goes out uncompressed.
-- **`server/rpg/runtime.js` → `sync` / `diffKey`:** the change check costs O(snapshot size) per player per tick. Optimize at the runtime layer: give characters and entities dirty flags or version counters (bump them in `act`, in feature ticks that mutate entities, and on join or leave). Then skip `rpgMessage` and `JSON.stringify` for players with no dirty inputs. Alternatively, cache the per-location entity JSON once per sync instead of re-serializing it for each player.
+Both bottlenecks above are addressed. The wire protocol is backward-compatible. A client that sends `delta: true` in its `join` (the browser client does, in `client/lib/net.js`) opts in. Raw WebSocket clients and tests without the flag still get full `state` and `rpg` frames.
+
+- **`server/rpg/runtime.js` → `sync`:** the diff key is built from JSON that is cached once per location per sync. Each entity is copied and serialized once, each public peer once, and readiness once, no matter how many viewers share them. The full snapshot is only assembled when the key changed. A key is still computed from the complete content, so features that mutate `p.rpg` or entities directly cannot leave a stale snapshot. The owner's character is still serialized once per sync. It is the remaining per-player cost, and a dirty counter would need every feature to report its mutations. For `delta` clients, a changed snapshot carries only the top-level fields that changed (`character`, `entities`, `peers`, `readiness`, `locomotion`). `mergeRpg` (`client/gameplay/api.js`) already merges partial snapshots. `force`, `resetSync` and `join` always send the full snapshot.
+- **`server/game.js` → `broadcastState`:** each player's public entry is built once per broadcast. The legacy shared string is only serialized when a legacy viewer needs it. `delta` clients get `stateDelta` frames, `{type:'stateDelta', location, players, gone?}`. `players` holds new entries in full and, for known ids, only the fields that changed (positions keep the same 1 mm quantization as `state`). `gone` lists ids that left. An id that appears in both `gone` and `players` is replaced, for example when a field such as `stance` disappears. A full `state` still starts every new socket and location, and is sent on `force` (join, leave, arrival) and on the idle heartbeat. Interest culling is not implemented: towns are at most about 1 km across, and culling would change who sees whom. Add a configurable radius when one location holds well over 32 players.
+
+### Before and after (2026-11-25, Node 26.12.1, 18 threads, ARENA2 **off**, 10 s per count)
+
+`node tools/measure-peers.mjs --scenarios town --counts 2,8,32 --seconds 10 [--delta]`. "Before" is the same tool run against the previous commit. Without ARENA2 the town has wandering monsters and no NPCs, so their positions change every sync. Before this change, every client then received its full private snapshot (17–24 KB, mostly its own unchanged character) at 12.5 Hz. That is why the `rpg` column here is large, unlike the ARENA2 table above, where nothing moved.
+
+| Players | Run | Down per player | `state` / `stateDelta` | `rpg` | `runtime.sync` mean / p99 | Loop delay p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2 | before | 180 KB/s | 3.0 (248 B frames) | 177 (17.8 KB frames) | 0.81 / 1.67 ms | 1.8 ms |
+| 2 | after, legacy client | 217 KB/s | 3.0 | 214 | 0.78 / 1.61 ms | 1.9 ms |
+| 2 | after, `delta` client | **34 KB/s** | 1.7 (145 B) | 32 (3.5 KB) | 0.47 / 1.22 ms | 2.0 ms |
+| 8 | before | 184 KB/s | 9.4 (785 B) | 175 (19.0 KB) | 2.98 / 4.81 ms | 5.0 ms |
+| 8 | after, legacy client | 237 KB/s | 9.4 | 228 | 1.11 / 2.20 ms | 2.2 ms |
+| 8 | after, `delta` client | **47 KB/s** | 4.5 (371 B) | 42 (3.6 KB) | 1.27 / 2.30 ms | 3.4 ms |
+| 32 | before | 327 KB/s | 35.6 (2966 B) | 291 (24.1 KB) | 9.07 / 12.86 ms | 12.0 ms |
+| 32 | after, legacy client | 327 KB/s | 35.6 | 291 | 7.15 / 9.34 ms | 9.4 ms |
+| 32 | after, `delta` client | **59 KB/s** | 15.1 (1255 B) | 43 (3.6 KB) | **3.25 / 5.35 ms** | 7.7 ms |
+
+At 32 players, server output drops from about 10.4 MB/s to 1.9 MB/s with `delta` clients (−82%). `state` traffic drops 58%, even though every walker moves almost all the time: frames leave out names and unchanged fields. Idle players cost nothing. `runtime.sync` takes 64% less time. Legacy clients get byte-identical frames. Their sync time also falls at 8 and 32 players, because peers and entities are serialized once per location. The legacy `rpg` rate varies between runs (177 against 214 KB/s at 2 players) with monster spawn timing. The ARENA2 workload of the first table was not re-measured on this machine, which has no game data. There, `state` is 99% of the traffic, so the `stateDelta` reduction applies directly.
 
 ## Current limitations
 
