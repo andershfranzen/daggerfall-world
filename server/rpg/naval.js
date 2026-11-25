@@ -27,9 +27,12 @@ import {
   dirToWorld, bearingOf, sideForBearing, segmentBox, hullBox, rigBox, clamp, G, WITNESS_RANGE,
 } from './sailing/combatRules.js';
 import { generateRandomLoot } from './items/loot.js';
+import { GOODS } from './sailing/yardTrade.js';
 import { MAX_STORED_ITEMS as MAX_HOLD } from '../../client/gameplay/property/rules.js';
 
 export const name = 'naval';
+const HOLD_PREFIX = 'naval:hold:';
+const ESCROW_PREFIX = 'naval:escrow:';
 
 const DEG = Math.PI / 180;
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -70,6 +73,14 @@ export function install(ctx, opts = {}) {
   const ramClock = new Map(); // `${a}|${b}` -> last ram second
   const wrecks = new Map(); // vessel id -> {v, wreck} while her killer may still haul up her hold
   const quarries = new Map(); // bounty key -> {id} live, or {sunk:true}
+  const holdSnapshots = new Map(); // vessel id -> {ownerId, vesselId, shipId, goodsOnly, goods, items, at}
+  const escrows = new Map(); // prize id -> {id, ownerId, vesselId, shipId, victorId, victorName, vesselName, goodsOnly, goods, items, createdAt}
+  for (const [key, val] of ctx.loadWorld?.(HOLD_PREFIX) ?? []) {
+    if (val && typeof val === 'object' && typeof val.vesselId === 'string') holdSnapshots.set(key.slice(HOLD_PREFIX.length), val);
+  }
+  for (const [key, val] of ctx.loadWorld?.(ESCROW_PREFIX) ?? []) {
+    if (val && typeof val === 'object' && typeof val.id === 'string' && Number.isSafeInteger(val.ownerId)) escrows.set(key.slice(ESCROW_PREFIX.length), val);
+  }
   /** The online player who commands a player ship: her owner when aboard, else her helmsman. */
   const captainOf = (rec) => {
     if (!isPlayer(rec)) return null;
@@ -587,8 +598,9 @@ export function install(ctx, opts = {}) {
       ctx.emit('naval.sunk', { player: byPlayer, vessel: by && isPlayer(by) ? by.v.id : null, target: shipView(rec), by: by ? shipView(by) : null });
       if (rec.quarry) quarries.set(rec.quarry, { sunk: true });
       if (isPlayer(rec)) {
-        const prize = by && isPlayer(by) ? { id: `wreck:${rec.id}:${Math.round(nowS() * 1000)}`, killerOwnerId: by.ownerId ?? null, killerVesselId: by.id, x: rec.x, z: rec.z, at: nowS(), taken: false } : null;
+        const prize = by && isPlayer(by) ? { id: `wreck:${rec.id}:${Math.round(nowS() * 1000)}`, killerOwnerId: by.ownerId ?? null, killerVesselId: by.id, x: rec.x, z: rec.z, at: nowS(), atWall: Date.now(), taken: false } : null;
         rec.v.naval.wreck = prize;
+        snapshotHold(rec.v);
         crewNotify(rec, 'She is holed and sinking! Abandon ship or pray for the shore.');
       }
     }
@@ -820,8 +832,11 @@ export function install(ctx, opts = {}) {
   function wreckPlayer(rec) {
     const v = rec.v;
     const d = rec.d;
+    snapshotHold(v);
     d.state = 'wrecked';
     d.fires = [];
+    if (rec.boarding) endBoarding(rec, 'sunk');
+    if (rec.repel) { banish(rec.repel.foes); rec.repel = null; }
     breakGrapple(rec);
     news(rec.x, rec.z, 'wrecked', rec, `The ${rec.title} is wrecked.`);
     ctx.emit('naval.wrecked', { vessel: v.id, killer: v.naval.wreck?.killerOwnerId != null ? ctx.players.get(v.naval.wreck.killerOwnerId) ?? null : null });
@@ -914,7 +929,7 @@ export function install(ctx, opts = {}) {
         target.prize = true;
         target.prizeOf = rec.id;
         news(target.x, target.z, 'boardWon', target, `The ${target.title}'s crew throw down their arms. She is your prize.`);
-        ctx.emit('naval.boarded', { player: captainOf(rec) ?? ctx.players.get(b.by) ?? null, vessel: rec.v.id, target: shipView(target) });
+        ctx.emit('naval.boarded', { player: captainOf(rec) ?? ctx.players.get(b.by) ?? crewOf(rec.v).find((q) => !q.rpg?.defeated) ?? null, vessel: rec.v.id, target: shipView(target) });
         banish(b.foes.filter((f) => !f.down));
         markDirty(rec);
       } else if (!crewOf(rec.v).some((p) => !p.rpg?.defeated)) {
@@ -937,6 +952,12 @@ export function install(ctx, opts = {}) {
 
   function stepRepel(rec) {
     const r = rec.repel;
+    if (!crewOf(rec.v).length) {
+      banish(r.foes);
+      rec.repel = null;
+      breakGrapple(rec);
+      return;
+    }
     const tally = foesDown(r.foes);
     const pirate = ships.get(r.byId);
     if (tally.down >= tally.total || !pirate) {
@@ -1273,6 +1294,12 @@ export function install(ctx, opts = {}) {
     if (t) return t;
     const w = wreck ? wrecks.get(id) : null;
     if (w) return { id, kind: 'player', wreckOnly: true, v: w.v, d: w.v.naval.d, deck: w.v.naval.deck, x: w.wreck.x, z: w.wreck.z, hull: PLAYER_HULL[w.v.type] ?? 2, title: w.v.name ?? 'wreck', ownerId: w.v.ownerId };
+    if (wreck) {
+      const v = sail()?.byId?.(id) ?? null;
+      if (v?.naval?.wreck && !v.naval.wreck.taken) {
+        return { id, kind: 'player', wreckOnly: true, v, d: v.naval.d, deck: v.naval.deck, x: v.naval.wreck.x, z: v.naval.wreck.z, hull: PLAYER_HULL[v.type] ?? 2, title: v.name ?? 'wreck', ownerId: v.ownerId };
+      }
+    }
     fail('No such ship in sight.');
   }
 
@@ -1335,7 +1362,8 @@ export function install(ctx, opts = {}) {
     rec.d.state = 'struck';
     rec.v.naval.colours = 'peace';
     rec.colours = 'peace';
-    rec.v.naval.surrender = { at: nowS(), by: rec.lastHitBy ?? null };
+    rec.v.naval.surrender = { id: `surrender:${rec.id}:${Math.round(nowS() * 1000)}`, at: nowS(), atWall: Date.now(), by: rec.lastHitBy ?? null };
+    snapshotHold(rec.v);
     markDirty(rec);
     news(rec.x, rec.z, 'surrender', rec, `The ${rec.title} strikes her colours and surrenders.`);
   });
@@ -1419,25 +1447,207 @@ export function install(ctx, opts = {}) {
     markDirty(rec);
   });
 
-  /** A wrecked or surrendered captain's hold: a third of its worth (eight pieces at most), once. */
+  const wreckAgeS = (w) => {
+    const dt = nowS() - w.at;
+    if (dt >= 0) return dt;
+    return Number.isFinite(w.atWall) ? Math.max(0, (Date.now() - w.atWall) / 1000) : Infinity;
+  };
+
+  /** Persists an owner's prize-eligible hold manifest so an offline claim can settle fairly and reconcile on rejoin. */
+  function snapshotHold(v) {
+    if (!v || v.ownerId == null) return null;
+    const owner = ownerOnline(v);
+    if (!owner) return holdSnapshots.get(String(v.id)) ?? null;
+    const id = String(v.id);
+    let snap;
+    if (S.shipyard) {
+      const ya = yardOf(v);
+      if (!ya) return null;
+      const goods = (ya.ship.cargo ?? [])
+        .filter((c) => GOODS[c.good] && (c.qty | 0) > 0)
+        .map((c) => ({ good: c.good, qty: Math.trunc(c.qty), label: GOODS[c.good].label }));
+      snap = { ownerId: v.ownerId, vesselId: id, shipId: ya.shipId, goodsOnly: true, goods, items: [], at: Date.now() };
+    } else {
+      const hold = holdOf(owner, v);
+      snap = { ownerId: v.ownerId, vesselId: id, shipId: null, goodsOnly: false, goods: [], items: structuredClone(hold.list), at: Date.now() };
+    }
+    const prev = holdSnapshots.get(id);
+    holdSnapshots.set(id, snap);
+    if (ctx.inAction()) ctx.onRollback(() => { if (prev) holdSnapshots.set(id, prev); else holdSnapshots.delete(id); });
+    ctx.dirtyWorld?.(HOLD_PREFIX + id, snap);
+    return snap;
+  }
+
+  function clearHoldSnapshot(vesselId) {
+    const id = String(vesselId);
+    if (!holdSnapshots.has(id)) return;
+    const prev = holdSnapshots.get(id);
+    holdSnapshots.delete(id);
+    if (ctx.inAction()) ctx.onRollback(() => holdSnapshots.set(id, prev));
+    ctx.dirtyWorld?.(HOLD_PREFIX + id, null);
+  }
+
+  function saveEscrow(record) {
+    const prev = escrows.get(record.id);
+    escrows.set(record.id, record);
+    if (ctx.inAction()) ctx.onRollback(() => { if (prev) escrows.set(record.id, prev); else escrows.delete(record.id); });
+    ctx.dirtyWorld?.(ESCROW_PREFIX + record.id, record);
+  }
+
+  /** Same prize law as shipyard.transferCargo, evaluated against a snapshotted offline hold. */
+  function pickOfflineGoods(snapGoods, victorShip, victorStats, { maxPieces = 8, share = 1 / 3 } = {}) {
+    const used = (victorShip?.cargo ?? []).reduce((n, c) => n + Math.max(0, Math.trunc(c.qty || 0)), 0);
+    let room = Math.max(0, (victorStats?.capacity ?? 0) - used);
+    let pieces = Math.max(0, Math.min(999, Math.trunc(maxPieces)));
+    const valid = (snapGoods ?? []).filter((c) => GOODS[c.good] && Math.trunc(c.qty || 0) > 0);
+    let worth = valid.reduce((n, c) => n + GOODS[c.good].base * Math.trunc(c.qty), 0) * Math.max(0, Math.min(1, Number(share) || 0));
+    const moved = [];
+    for (const c of [...valid].sort((x, y) => GOODS[y.good].base - GOODS[x.good].base)) {
+      const n = Math.min(Math.trunc(c.qty), room, pieces, Math.floor(worth / GOODS[c.good].base));
+      if (n <= 0) continue;
+      room -= n;
+      pieces -= n;
+      worth -= n * GOODS[c.good].base;
+      moved.push({ good: c.good, qty: n, label: GOODS[c.good].label });
+    }
+    return moved;
+  }
+
+  /** Reconciles any escrowed offline prize debits for a returning captain (atomic, idempotent, never negative). */
+  function reconcileEscrows(p) {
+    const due = [...escrows.values()].filter((e) => e.ownerId === p.id);
+    if (!due.length) return;
+    const apply = (e) => {
+      if (!escrows.has(e.id)) return; // already reconciled
+      ctx.dirty(p);
+      let lostGoods = [];
+      const lostItems = [];
+      if (e.goodsOnly && S.shipyard) {
+        const shipId = e.shipId && S.shipyard.ship?.(p, e.shipId) ? e.shipId : S.shipyard.active?.(p);
+        if (shipId && typeof S.shipyard.debitCargo === 'function') {
+          lostGoods = S.shipyard.debitCargo(p, shipId, e.goods ?? []);
+        }
+      } else if (!e.goodsOnly && Array.isArray(e.items) && e.items.length) {
+        const hold = holdOf(p, sail()?.byId?.(e.vesselId) ?? null);
+        for (const debit of e.items) {
+          let idx = debit.id ? hold.list.findIndex((x) => x.id === debit.id) : -1;
+          if (idx < 0) idx = hold.list.findIndex((x) => x.template === debit.template && !x.quest && !x.owner);
+          if (idx < 0) continue;
+          const it = hold.list[idx];
+          const have = Math.max(1, it.quantity | 0 || 1);
+          const take = Math.min(have, Math.max(1, debit.quantity | 0 || 1));
+          if (have > take) it.quantity = have - take;
+          else hold.list.splice(idx, 1);
+          lostItems.push({ template: it.template, name: it.name, quantity: take });
+        }
+        hold.commit();
+      }
+      escrows.delete(e.id);
+      if (ctx.inAction()) ctx.onRollback(() => escrows.set(e.id, e));
+      ctx.dirtyWorld?.(ESCROW_PREFIX + e.id, null);
+      if (lostGoods.length) {
+        const g = lostGoods.map((x) => `${x.qty} × ${x.label ?? x.good}`).join(', ');
+        ctx.afterCommit(() => ctx.notify(p, { kind: 'naval', text: `${e.victorName} took from your hold while you were away: ${g}.`, lostGoods, escrowed: true }));
+      } else if (lostItems.length) {
+        const names = lostItems.map((i) => `${i.quantity > 1 ? `${i.quantity} × ` : ''}${i.name ?? i.template}`).join(', ');
+        ctx.afterCommit(() => ctx.notify(p, { kind: 'naval', text: `${e.victorName} took ${lostItems.length} pieces from your hold while you were away: ${names}.`, lost: lostItems, escrowed: true }));
+      }
+    };
+    for (const e of due) {
+      if (typeof ctx.runAtomic === 'function') {
+        const res = ctx.runAtomic(p, 'naval.escrowReconcile', () => apply(e));
+        if (res && res.ok === false) log.warn?.(`[naval] escrow ${e.id} reconcile failed for ${p.id}: ${res.error}`);
+      } else {
+        apply(e);
+        p.dirty = true;
+      }
+    }
+  }
+
+  /** A wrecked or surrendered captain's hold: a third of its worth (eight pieces at most), once (online or via offline escrow). */
   function plunderPlayer(p, rec, t) {
     const owner = ownerOnline(t.v);
     const n = t.v.naval;
     const surrendered = !t.wreckOnly && t.d.state === 'struck' && rec.grappledTo === t.id;
-    const wreck = n.wreck && !n.wreck.taken && n.wreck.killerVesselId === rec.id && nowS() - n.wreck.at <= cfg.wreckPrizeS ? n.wreck : null;
+    const wreck = n.wreck && !n.wreck.taken && n.wreck.killerVesselId === rec.id && wreckAgeS(n.wreck) <= cfg.wreckPrizeS ? n.wreck : null;
     if (!surrendered && !wreck) fail('She is not your prize.');
     if (surrendered && n.surrender?.taken) fail('Her hold has already been taken.');
     if (wreck && Math.hypot(rec.x - wreck.x, rec.z - wreck.z) > ABANDON_RANGE) fail('Sail over the wreck to haul up her cargo.');
-    if (!owner) fail('Her captain is not here; her hold stays with her.');
-    ctx.dirty(owner); // snapshot the loser before her hold changes
+    const prizeId = wreck ? wreck.id : (n.surrender?.id ?? `surrender:${t.id}:${Math.round((n.surrender?.at ?? 0) * 1000)}`);
+    if (escrows.has(prizeId)) fail('Her hold has already been taken.');
+
+    const goodsOnly = !!S.shipyard;
     ctx.dirty(p);
     if (!t.wreckOnly) guard(t);
     guard(rec);
     if (t.wreckOnly && ctx.inAction()) { const keep = structuredClone(t.v.naval); const v = t.v; ctx.onRollback(() => { v.naval = keep; const w = wrecks.get(t.id); if (w) w.wreck = keep.wreck; }); }
+
+    const finish = () => {
+      if (wreck) wreck.taken = true; else n.surrender.taken = true;
+      if (surrendered) { breakGrapple(rec); t.d.state = 'afloat'; }
+      clearHoldSnapshot(t.id);
+      if (t.wreckOnly) saveVessel(t.v); else markDirty(t);
+      markDirty(rec);
+    };
+
+    if (!owner) {
+      // Offline loser: settle from the persisted hold snapshot and record a world_state escrow debit for when they rejoin.
+      const snap = holdSnapshots.get(t.id) ?? null;
+      if (goodsOnly) {
+        const yb = yardOf(rec.v);
+        const ybStats = yb ? S.shipyard.stats?.(yb.player, yb.shipId) : null;
+        const goods = yb && snap?.goodsOnly ? pickOfflineGoods(snap.goods, yb.ship, ybStats, { maxPieces: 8, share: 1 / 3 }) : [];
+        if (goods.length) {
+          S.shipyard.addCargo?.(yb.player, yb.shipId, goods);
+          saveEscrow({
+            id: prizeId, ownerId: t.v.ownerId, vesselId: t.id, shipId: snap.shipId ?? t.v.shipId ?? null,
+            victorId: p.id, victorName: p.name ?? 'a captain', vesselName: t.title,
+            goodsOnly: true, goods, items: [], createdAt: Date.now(),
+          });
+          finish();
+          const g = goods.map((x) => `${x.qty} × ${x.label ?? x.good}`).join(', ');
+          ctx.notify(p, { kind: 'naval', text: `Into your hold from the ${t.title}: ${g}.`, prizeGoods: goods, escrowed: true });
+          ctx.emit('naval.plundered', { player: p, vessel: rec.v.id, target: shipView(t), gold: 0, items: 0, goods, pvp: true, escrowed: true });
+          return;
+        }
+        finish();
+        ctx.notify(p, { kind: 'naval', text: 'Her hold is empty.' });
+        return;
+      }
+      const list = snap && !snap.goodsOnly && Array.isArray(snap.items) ? snap.items : [];
+      const worths = list.map((it) => ({ worth: it.quest || it.owner ? 0 : worthOf(it) }));
+      const picks = seaPrizePlaces(worths).sort((a, b) => b - a);
+      if (!picks.length) {
+        finish();
+        ctx.notify(p, { kind: 'naval', text: 'Her hold is empty.' });
+        return;
+      }
+      const moved = picks.map((i) => structuredClone(list[i]));
+      const debitItems = moved.map((it) => ({ id: it.id ?? null, template: it.template, name: it.name ?? null, quantity: Math.max(1, it.quantity | 0 || 1) }));
+      const dest = p.rpg.property?.ship ? holdOf(p, rec.v) : null;
+      if (dest && dest.room >= moved.length) {
+        for (const it of moved) if (dest.list.some((x) => x.id === it.id)) it.id = `${it.id}-p${Math.floor(rng() * 1e6)}`;
+        dest.list.push(...moved);
+        dest.commit();
+      } else {
+        for (const it of moved) giveRecord(p, it);
+      }
+      saveEscrow({
+        id: prizeId, ownerId: t.v.ownerId, vesselId: t.id, shipId: null,
+        victorId: p.id, victorName: p.name ?? 'a captain', vesselName: t.title,
+        goodsOnly: false, goods: [], items: debitItems, createdAt: Date.now(),
+      });
+      finish();
+      const names = moved.map((i) => `${i.quantity > 1 ? `${i.quantity} × ` : ''}${i.name ?? i.template}`).join(', ');
+      ctx.notify(p, { kind: 'naval', text: `You haul ${moved.length} pieces from the ${t.title}: ${names}.`, prize: moved.map((i) => ({ template: i.template, name: i.name, quantity: i.quantity })), escrowed: true });
+      ctx.emit('naval.plundered', { player: p, vessel: rec.v.id, target: shipView(t), gold: 0, items: moved.length, goods: [], pvp: true, escrowed: true });
+      return;
+    }
+
+    ctx.dirty(owner); // snapshot the loser before her hold changes
     // With the shipyard installed the prize is trade goods only (its transferCargo: a third of their worth, eight
     // units, the winner's room); the classic item hold (property) is never touched. Without it, the item hold pays.
     const ya = yardOf(t.v), yb = yardOf(rec.v);
-    const goodsOnly = !!S.shipyard;
     const hold = goodsOnly ? { list: [], commit() {} } : holdOf(owner, t.v);
     const worths = hold.list.map((it) => ({ worth: it.quest || it.owner ? 0 : worthOf(it) }));
     const picks = seaPrizePlaces(worths).sort((a, b) => b - a);
@@ -1448,16 +1658,13 @@ export function install(ctx, opts = {}) {
       ctx.notify(owner, { kind: 'naval', text: `${p.name} takes from your hold: ${g}.`, lostGoods: goods });
     }
     if (!picks.length && goods.length) {
-      if (wreck) wreck.taken = true; else n.surrender.taken = true;
-      if (surrendered) { breakGrapple(rec); t.d.state = 'afloat'; }
-      if (t.wreckOnly) saveVessel(t.v); else markDirty(t);
+      finish();
       ctx.emit('naval.plundered', { player: p, vessel: rec.v.id, target: shipView(t), gold: 0, items: 0, goods, pvp: true });
       return;
     }
     if (!picks.length) {
-      if (wreck) wreck.taken = true; else n.surrender.taken = true;
+      finish();
       ctx.notify(p, { kind: 'naval', text: 'Her hold is empty.' });
-      saveVessel(t.v);
       return;
     }
     const taken = picks.map((i) => hold.list[i]);
@@ -1473,10 +1680,7 @@ export function install(ctx, opts = {}) {
     } else {
       for (const it of moved) giveRecord(p, it);
     }
-    if (wreck) wreck.taken = true; else n.surrender.taken = true;
-    if (surrendered) { breakGrapple(rec); t.d.state = 'afloat'; }
-    if (t.wreckOnly) saveVessel(t.v); else markDirty(t);
-    markDirty(rec);
+    finish();
     const names = moved.map((i) => `${i.quantity > 1 ? `${i.quantity} × ` : ''}${i.name ?? i.template}`).join(', ');
     ctx.notify(p, { kind: 'naval', text: `You haul ${moved.length} pieces from the ${t.title}: ${names}.`, prize: moved.map((i) => ({ template: i.template, name: i.name, quantity: i.quantity })) });
     ctx.notify(owner, { kind: 'naval', text: `${p.name} takes ${moved.length} pieces from your hold: ${names}.`, lost: moved.map((i) => ({ template: i.template, name: i.name, quantity: i.quantity })) });
@@ -1579,7 +1783,7 @@ export function install(ctx, opts = {}) {
       stepBalls(t);
       stepRams(t);
       stepDirector(t);
-      for (const [id, w] of wrecks) if (w.wreck.taken || t - w.wreck.at > cfg.wreckPrizeS) wrecks.delete(id);
+      for (const [id, w] of wrecks) if (w.wreck.taken || wreckAgeS(w.wreck) > cfg.wreckPrizeS) wrecks.delete(id);
       stateAcc += step;
       if (stateAcc >= 1 / cfg.stateHz) { stateAcc = 0; publishStates(); }
       flushSaves();
@@ -1587,7 +1791,29 @@ export function install(ctx, opts = {}) {
       log.error?.('[naval] tick failed', err);
     }
   });
-  ctx.onLeave(() => flushSaves(true));
+  ctx.onJoin?.((p) => {
+    try { reconcileEscrows(p); } catch (err) { log.error?.('[naval] escrow reconcile failed', err); }
+    const own = sail()?.byId?.(`v${p.id}`) ?? null;
+    const unclaimed = (own?.naval?.wreck && !own.naval.wreck.taken) || (own?.naval?.surrender && !own.naval.surrender.taken);
+    if (own && !unclaimed) clearHoldSnapshot(own.id);
+  });
+  ctx.onLeave((p) => {
+    if (p) {
+      lastState.delete(p.id);
+      const own = sail()?.byId?.(`v${p.id}`) ?? null;
+      if (own && (!own.docked || (own.naval?.wreck && !own.naval.wreck.taken) || (own.naval?.surrender && !own.naval.surrender.taken))) {
+        snapshotHold(own);
+      }
+      const ab = aboardOf(p);
+      const rec = ab ? ships.get(String(ab.id)) : null;
+      if (rec) {
+        const remaining = crewOf(rec.v).filter((q) => q !== p);
+        if (rec.boarding && !remaining.some((q) => !q.rpg?.defeated)) endBoarding(rec, 'abandoned');
+        if (rec.repel && !remaining.length) { banish(rec.repel.foes); rec.repel = null; breakGrapple(rec); }
+      }
+    }
+    flushSaves(true);
+  });
 
   // ------------------------------------------------------------------ services
 

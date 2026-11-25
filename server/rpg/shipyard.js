@@ -1049,6 +1049,27 @@ export function install(ctx) {
       }
       return moved;
     },
+    /** Offline prize escrow reconciliation: debit specific trade goods from a hold (idempotent, never negative). */
+    debitCargo(p, id, goods = []) {
+      const s = mut(p, id);
+      if (!s) return [];
+      const debited = [];
+      for (const g of goods) {
+        if (!GOODS[g?.good]) continue;
+        const want = Math.max(0, int(g.qty));
+        if (!want) continue;
+        const lot = s.cargo.find((c) => c.good === g.good);
+        if (!lot) continue;
+        const n = Math.min(lot.qty, want);
+        if (n > 0) {
+          lot.qty -= n;
+          debited.push({ good: g.good, qty: n, label: GOODS[g.good].label });
+        }
+      }
+      s.cargo = s.cargo.filter((c) => c.qty > 0);
+      if (debited.length) changed(p, s.id, 'plundered');
+      return debited;
+    },
     status,
     deckType,
     bindVessel,

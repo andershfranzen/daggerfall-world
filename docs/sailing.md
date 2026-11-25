@@ -30,7 +30,7 @@ Open **Ship & Sea** in a port town. The shipyard sells hulls, stores, refits and
 | Cycle the load of the battery you face | / |
 | Fire the ready battery you face | Space |
 
-Two signed-in accounts tested shared boarding, manual sailing, anchoring, a server restart and going ashore. A separate installed-data fixture paid 200 gold for passage from Daggerfall to Sentinel, followed the roughly 201 km charted course with ordinary simulation ticks and reached the quay with zero groundings. An owned vessel completed the same crossing. Naval playtests staged the encounter positions. The chart and helm were exercised in Play.
+Two signed-in accounts tested shared boarding, manual sailing, anchoring, a server restart and going ashore. A separate installed-data fixture paid 200 gold for passage from Daggerfall to Sentinel, followed the roughly 201 km charted course with ordinary simulation ticks and reached the quay with zero groundings. An owned vessel completed the same crossing. Unstaged multi-account integration tests (`test/rpg-naval-multiplayer.test.mjs`) exercise full open-sea sailing under the helm, naval combat, boarding and disconnect cleanup, offline prize escrow and rejoin reconciliation, party wreck recovery, admiralty bounty persistence, harbour return, and server restarts. The chart and helm were exercised in Play.
 
 ## Server protocol (server/rpg/sailing.js)
 
