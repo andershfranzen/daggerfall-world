@@ -20,7 +20,8 @@ Standing is kept for every faction in the installed FACTION.TXT. When a quest su
 
 | Service | Consumer | Meaning |
 |---|---|---|
-| `guildHallAccess(p, portal)` | package 2 (doors) | `Guild.HallAccessAnytime` for exactly this hall |
+| `guildHallAccess(p, portal)` | package 2 (doors), `townServices/access.js`, `npcs/places.js` | `Guild.HallAccessAnytime` for exactly this hall |
+| `guildIsMember(p, target, opts)` / `guilds.isMember(…)` | interiors, town services, NPCs | true when `p` belongs to the given guild group (matching `factionId` for temples/orders), portal/building, or NPC hall |
 | `guildCanRest(p, portal or location)` | packages 2 and 20 (rest) | `Guild.CanRest` for exactly this hall; never in taverns |
 | `guildRank(p, group, {factionId})` | quests, repairs, law (14), summoning (19) | rank or null. Groups: `fighters`, `mages`, `thieves`, `brotherhood` (alias `darkBrotherhood`), `temple`, `knights`. Temples and orders must match `factionId` when it is given |
 | `templeRank(p, deityId)` | 19 | the same, for a deity |
@@ -53,6 +54,19 @@ Secret recruitment: package 19 tallies crimes from package 14 and sends the lett
 
 Saved state is `rpg.guilds[group] = {rank, joinedAt, lastRankChange, variant?, flags?}`, `rpg.guildInvites` and `rpg.factions`. A legacy temple membership without a deity becomes the Order of Arkay's.
 
-## Not yet covered
+## Specialist wiring
 
-The other specialist services belong to their owners: spells (9), potions, items and soul gems (16) and summoning (19). Until an owner registers a handler, the gate runs and then answers that the service is not available yet.
+All classic guild specialist services are wired through `guilds.access` / `requireNpcService` to their owning features:
+
+| Service | Owner | Hook / Handler |
+|---|---|---|
+| `spells`, `makeSpells` | [magic.js](../server/rpg/magic.js) (package 9) | `services.npcServiceHandlers.{spells, makeSpells}` |
+| `potions`, `makePotions`, `magicItems`, `makeItems`, `soulgems`, `identify` | [alchemy.js](../server/rpg/alchemy.js) (package 16) | `services.npcServiceHandlers.{potions, makePotions, magicItems, makeItems, soulgems, identify}` |
+| `summon` | [special.js](../server/rpg/special.js) (package 19) | `services.daedraSummon` |
+| `teleport` | [guilds.js](../server/rpg/guilds.js) → [travel.js](../server/rpg/travel.js) | `services.npcServiceHandlers.teleport` → `services.travel.teleport` |
+| `spymaster` | [guilds.js](../server/rpg/guilds.js) | `services.npcServiceHandlers.spymaster` |
+| `house` | [guilds.js](../server/rpg/guilds.js) → [property.js](../server/rpg/property.js) | `services.npcServiceHandlers.house` → `services.property.grantHouse` |
+| `library` | [guilds.js](../server/rpg/guilds.js) → [containers.js](../server/rpg/containers.js) | `services.guildLibraryAccess` |
+| `sellItems`, `train`, `heal`, `cure`, `donate`, `armor`, `repair` | [npcs.js](../server/rpg/npcs.js) / [townServices.js](../server/rpg/townServices.js) | `services.guilds.{tutor, freeHealingAt, cureQuote, donate, receiveArmor, repairCost}` |
+
+When an optional feature is not installed in a minimal test fixture, `npcs.js` still applies the guild rank gate before falling back to `"cannot offer that service yet"`.
