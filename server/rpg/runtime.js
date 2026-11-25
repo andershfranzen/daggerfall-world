@@ -465,15 +465,57 @@ export function createRpgRuntime(opts) {
       readiness === c.readiness ? c.readinessJson : JSON.stringify(readiness),
       JSON.stringify(locomotion) ?? 'null',
     ];
-    return { p, ents, peers, across, readiness, locomotion, parts, key: parts.join('\n') };
+    return { p, loc, ents, peers, across, readiness, locomotion, parts, key: parts.join('\n') };
   }
 
-  /** The snapshot; with `prevParts` (a client that merges partial snapshots) only the fields that changed. */
-  function messageOf({ p, ents, peers, across, readiness, locomotion, parts }, prevParts = null) {
+  function entityMapOf(ents) {
+    const map = new Map();
+    for (const x of ents) {
+      const id = x.v.id;
+      if (id === undefined || id === null) return null;
+      const key = String(id);
+      if (map.has(key)) return null;
+      map.set(key, { id, json: x.json });
+    }
+    return map;
+  }
+
+  /** Per-entity delta `{ upsert?, remove? }` against the viewer's last-sent entities, or null to send full `entities`. */
+  function buildEntityDelta(ents, prevEntMap) {
+    if (!prevEntMap) return null;
+    const upsert = [];
+    const seen = new Set();
+    for (const x of ents) {
+      const id = x.v.id;
+      if (id === undefined || id === null) return null;
+      const key = String(id);
+      if (seen.has(key)) return null;
+      seen.add(key);
+      const prev = prevEntMap.get(key);
+      if (!prev || prev.json !== x.json) upsert.push(x.v);
+    }
+    const remove = [];
+    for (const [key, prev] of prevEntMap) {
+      if (!seen.has(key)) remove.push(prev.id);
+    }
+    if (!upsert.length && !remove.length) return null; // order-only change: send full list
+    const delta = {};
+    if (upsert.length) delta.upsert = upsert;
+    if (remove.length) delta.remove = remove;
+    return delta;
+  }
+
+  /** The snapshot; with `prev` (a delta client) only changed fields and per-entity `entityDelta` within one location. */
+  function messageOf({ p, loc, ents, peers, across, readiness, locomotion, parts }, prev = null) {
+    const prevParts = prev?.parts ?? null;
     const msg = { type: 'rpg', selfId: p.id };
     const want = (i) => !prevParts || prevParts[i] !== parts[i];
     if (want(0)) msg.character = p.rpg;
-    if (want(1)) msg.entities = ents.map((x) => x.v);
+    if (want(1)) {
+      const delta = prev && prev.loc === loc ? buildEntityDelta(ents, prev.entMap) : null;
+      if (delta) msg.entityDelta = delta;
+      else msg.entities = ents.map((x) => x.v);
+    }
     if (want(2)) {
       msg.peers = peers.map((q) => q.peer);
       for (const { a, peer } of across) msg.peers.push({ ...peer, x: r3(a.x), z: r3(a.z), across: true });
@@ -511,12 +553,17 @@ export function createRpgRuntime(opts) {
       try {
         view = viewOf(p, cache);
         if (!force && prev?.key === view.key) continue;
-        msg = messageOf(view, !force && p.delta === true ? prev?.parts : null);
+        msg = messageOf(view, !force && p.delta === true ? prev : null);
       } catch (err) {
         log.error('[rpg] snapshot failed:', err);
         continue;
       }
-      lastSent.set(p, { key: view.key, parts: view.parts });
+      lastSent.set(p, {
+        key: view.key,
+        loc: view.loc,
+        parts: view.parts,
+        entMap: p.delta === true ? entityMapOf(view.ents) : null,
+      });
       send(p, msg);
     }
   }

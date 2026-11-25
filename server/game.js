@@ -55,6 +55,8 @@ export const DEFAULTS = Object.freeze({
   chatBurst: 5,
   actionRatePerSec: 10,
   actionBurst: 20,
+  accountActionRatePerSec: null, // defaults to actionRatePerSec when null
+  accountActionBurst: null, // defaults to actionBurst when null
   maxChatLength: 200,
   maxNameLength: 24,
 });
@@ -163,6 +165,29 @@ export function createGameServer(options = {}) {
   // a rejoin resumes from this (newer than the DB) and removes it, so it can never overwrite a newer session.
   const orphans = new Map();
   const lastState = new Map(); // player -> { data, at } of the last `state` sent
+  const accountActionBuckets = new Map(); // String(accountId) -> { ok, lastUsed }
+  function accountActionOk(accountId) {
+    const key = String(accountId);
+    const rate = cfg.accountActionRatePerSec ?? cfg.actionRatePerSec;
+    const burst = cfg.accountActionBurst ?? cfg.actionBurst;
+    let entry = accountActionBuckets.get(key);
+    if (!entry) {
+      entry = { ok: bucket(rate, burst), lastUsed: 0 };
+      accountActionBuckets.set(key, entry);
+    }
+    entry.lastUsed = performance.now();
+    return entry.ok();
+  }
+  function pruneAccountActionBuckets() {
+    if (!accountActionBuckets.size) return;
+    const rate = cfg.accountActionRatePerSec ?? cfg.actionRatePerSec;
+    const burst = cfg.accountActionBurst ?? cfg.actionBurst;
+    const staleMs = Math.ceil((burst / Math.max(rate, 0.001)) * 1000) + 60_000;
+    const cutoff = performance.now() - staleMs;
+    for (const [k, entry] of accountActionBuckets) {
+      if (entry.lastUsed < cutoff) accountActionBuckets.delete(k);
+    }
+  }
   let tickTimer = null;
   let saveTimer = null;
   let heartbeatTimer = null;
@@ -209,6 +234,38 @@ export function createGameServer(options = {}) {
           for (const c of conns) {
             if (!c.account || String(c.account.id) !== String(accountId)) continue;
             if (sessionKey == null || c.account.sessionKey === String(sessionKey)) fatal(c.ws, CLOSE.ACCOUNT, 'signed out');
+          }
+        })
+      : null;
+  // Self-deletion (POST /api/delete-account): disconnect every socket and unlink/delete the account's character row.
+  const unsubscribeAccountDelete =
+    typeof accounts?.onAccountDelete === 'function'
+      ? accounts.onAccountDelete(({ accountId } = {}) => {
+          if (accountId === undefined || accountId === null) return;
+          const key = String(accountId);
+          accountActionBuckets.delete(key);
+          for (const c of conns) {
+            if (!c.account || String(c.account.id) !== key) continue;
+            const p = c.player;
+            if (p && p.conn === c && players.get(p.id) === p) {
+              c.player = null;
+              leave(p, { skipSave: true });
+            }
+            fatal(c.ws, CLOSE.ACCOUNT, 'account deleted');
+          }
+          try {
+            const row = store.findByAccount(accountId);
+            if (row) {
+              orphans.delete(row.id);
+              if (store.db?.isOpen) {
+                store.transaction(() => {
+                  store.db.prepare('DELETE FROM account_characters WHERE account_id = ?').run(key);
+                  store.db.prepare('DELETE FROM players WHERE id = ?').run(row.id);
+                });
+              }
+            }
+          } catch (err) {
+            console.error('[game] failed to delete character for deleted account:', err.message);
           }
         })
       : null;
@@ -596,7 +653,7 @@ export function createGameServer(options = {}) {
     });
   }
 
-  function leave(p) {
+  function leave(p, { skipSave = false } = {}) {
     let toSave = [p];
     try {
       toSave = runtime.leave(p);
@@ -604,13 +661,16 @@ export function createGameServer(options = {}) {
       console.error('[game] leave failed:', err);
     }
     players.delete(p.id);
-    try {
-      saveNow(toSave);
-    } catch (err) {
-      console.error('[game] failed to save on leave:', err.message);
-      for (const q of toSave) {
-        if (q === p) orphans.set(p.id, p);
-        else q.dirty = true;
+    const saveList = skipSave ? toSave.filter((q) => q !== p) : toSave;
+    if (saveList.length) {
+      try {
+        saveNow(saveList);
+      } catch (err) {
+        console.error('[game] failed to save on leave:', err.message);
+        for (const q of saveList) {
+          if (q === p) orphans.set(p.id, p);
+          else q.dirty = true;
+        }
       }
     }
     if (!closing) {
@@ -816,7 +876,10 @@ export function createGameServer(options = {}) {
       if (seq !== undefined) send(conn.ws, { type: 'actionResult', seq, verb, ok, ...(error ? { error } : {}) });
       else if (!ok) sendError(conn.ws, error, { verb });
     };
-    if (!conn.actionOk()) return reply(false, 'acting too fast');
+    const accountId = conn.account?.id ?? conn.player?.accountId;
+    if (!conn.actionOk() || (accountId != null && !accountActionOk(accountId))) {
+      return reply(false, 'acting too fast');
+    }
     if (verb === undefined) return reply(false, 'action requires a verb');
     const r = runtime.act(conn.player, verb, msg.args);
     reply(r.ok, r.error);
@@ -841,7 +904,10 @@ export function createGameServer(options = {}) {
       });
       lastTick = performance.now();
       tickTimer = setInterval(tick, 1000 / cfg.tickHz);
-      saveTimer = setInterval(() => persist([...players.values()]), cfg.saveIntervalMs);
+      saveTimer = setInterval(() => {
+        persist([...players.values()]);
+        pruneAccountActionBuckets();
+      }, cfg.saveIntervalMs);
       heartbeatTimer = setInterval(() => {
         for (const ws of wss.clients) {
           if (ws.isAlive === false) {
@@ -863,6 +929,8 @@ export function createGameServer(options = {}) {
         clearInterval(heartbeatTimer);
         if (typeof unsubscribeModeration === 'function') unsubscribeModeration();
         if (typeof unsubscribeSessionEnd === 'function') unsubscribeSessionEnd();
+        if (typeof unsubscribeAccountDelete === 'function') unsubscribeAccountDelete();
+        accountActionBuckets.clear();
         persist([...players.values()]);
         const done = [...sockets].map(
           (ws) =>
