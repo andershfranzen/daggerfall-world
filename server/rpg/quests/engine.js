@@ -825,6 +825,57 @@ function perform(run, a, st, t) {
       host.placed(inst);
       return done();
     }
+    case 'playSound': {
+      // PlaySound: plays when the task fires, then every N minutes until M plays. The schedule lives in the task's
+      // action state (st), so it survives a save or restart and stops with the task or the quest.
+      const times = Math.max(1, g.times);
+      st.played ??= 0;
+      if (st.played === 0 || (g.minutes > 0 && run.now >= st.next)) {
+        st.played++;
+        st.next = run.now + g.minutes;
+        host.sound?.(inst, { sound: g.sound });
+      }
+      if (st.played >= times) {
+        delete st.played;
+        delete st.next;
+        return done();
+      }
+      return undefined;
+    }
+    case 'playSong':
+      host.sound?.(inst, { song: g.song });
+      return done();
+    case 'addDialog':
+    case 'dialogLink': {
+      const refs = g.refs.map((r) => ({ kind: r.kind, key: key(r.symbol) }));
+      if (a.name === 'addDialog') {
+        const topics = (inst.dialog ??= []);
+        for (const r of refs) if (!topics.some((x) => x.kind === r.kind && x.key === r.key)) topics.push(r);
+      } else if (refs.length > 1) {
+        const links = (inst.dialogLinks ??= []);
+        const sig = JSON.stringify(refs);
+        if (!links.some((l) => JSON.stringify(l) === sig)) links.push(refs);
+      }
+      return done();
+    }
+    case 'rumorMill': {
+      const id = messageId(g.id);
+      const rumours = (inst.rumours ??= []);
+      // Text resolved once (like log entries), so reading rumours later never advances the instance's PRNG.
+      if (id && !rumours.some((r) => r.id === id)) rumours.push({ id, text: host.text(inst, id) ?? '' });
+      return done();
+    }
+    case 'muteNpc': {
+      const p = inst.people[key(g.person)];
+      if (p) p.muted = true;
+      return done();
+    }
+    case 'addQuestor':
+    case 'dropQuestor': {
+      const p = inst.people[key(g.person)];
+      if (p && !p.questor) p.addedQuestor = g.add;
+      return done();
+    }
     case 'pcAt': {
       const pl = inst.places[key(g.place)];
       if (pl && host.isAt(pl)) {

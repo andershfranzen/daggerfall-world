@@ -147,6 +147,10 @@ export function install(api) {
         api.message(`${ev.title}: ${RESULT[ev.result] ?? ev.result}.`, { kind: 'quest' });
         rerender();
         break;
+      case 'questSound':
+        // Classic `play sound` (DAGGER.SND index ev.sound) or `play song` (ev.song): audio only, no journal entry
+        // or toast. The audio module owns playback.
+        break;
       case 'questCatalog':
         ui.report = ev.report;
         ui.showReport = true;

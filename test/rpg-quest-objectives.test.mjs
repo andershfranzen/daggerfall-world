@@ -229,7 +229,7 @@ test('new opcode lines compile to their engine actions', () => {
     'add _P.00_ face saying 1012': ['addFace', 'exact'],
     'drop _P.00_ face': ['dropFace', 'exact'],
     'location marker _L.00_': ['locationMarker', 'ignored'],
-    'play sound 11146 every 1 minutes 1 times': ['playSound', 'ignored'],
+    'play sound 11146 every 1 minutes 1 times': ['playSound', 'approx'],
   };
   for (const [line, [name, status]] of Object.entries(cases)) {
     const a = compileAction(line);
