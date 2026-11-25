@@ -6,9 +6,12 @@
 import { getItemArtSource } from './inventory/icons.js';
 import { slotAt, DOLL_WIDTH, DOLL_HEIGHT } from './inventory/paperdoll.js';
 import {
-  TABS, SLOT_ORDER, SLOT_PART, pendingLabel, itemsForTab, carriedWeight, maxEncumbrance, armorValues, describe, primaryAction, tabOf,
-  fitsSlot, isWearable, hasUsePower, jewelSlots, slotLabel, compareItem, conditionPct, conditionLabel, needsCare, kindOf,
+  TABS, SLOT_ORDER, SLOT_PART, pendingLabel, itemsForTab, matchesQuery, carriedWeight, maxEncumbrance, armorValues, describe, primaryAction, tabOf,
+  fitsSlot, isWearable, hasUsePower, jewelSlots, slotLabel, compareItem, conditionPct, conditionLabel, needsCare, kindOf, itemCharges,
 } from './inventory/model.js';
+
+const ALL_TAB = Object.freeze({ id: 'all', label: 'All' });
+const PANEL_TABS = Object.freeze([ALL_TAB, ...TABS]);
 
 const REPAIR_PANEL = 'townServices';
 
@@ -164,7 +167,7 @@ export function install(api) {
     ui.selected = id;
     ui.dropQty = 1;
     const it = rpg()?.inventory?.find((i) => i.id === id);
-    if (it && !ui.slotFilter) ui.tab = tabOf(it);
+    if (it && !ui.slotFilter && ui.tab !== 'all') ui.tab = tabOf(it);
     if (ui.status?.kind !== 'pending') ui.status = null;
     rerender();
     if (focus) queueMicrotask(() => {
@@ -249,6 +252,9 @@ export function install(api) {
           else { ui.slotFilter = ui.slotFilter === slot ? null : slot; ui.listScroll = 0; rerender(); }
         },
         onkeydown: (e) => {
+          if (e.key === 'Home') { e.preventDefault(); focusKey(`slot-${slots[0]}`); return; }
+          if (e.key === 'End') { e.preventDefault(); focusKey(`slot-${slots[slots.length - 1]}`); return; }
+          if (e.key === 'Enter' && it && state === 'selected') { e.preventDefault(); runPrimary(it); return; }
           const dir = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
           if (!dir) return;
           e.preventDefault();
@@ -308,33 +314,34 @@ export function install(api) {
   // ---------------------------------------------------------------- pack (right)
 
   function pack(r, sel, cmp) {
-    return el('section', { class: 'inv-pack', 'aria-label': 'Pack' }, tabs(r), filterRow(), listView(r), inspector(r, sel, cmp));
+    return el('section', { class: 'inv-pack', 'aria-label': 'Pack' }, tabs(r), filterRow(r), listView(r), inspector(r, sel, cmp));
   }
 
   function tabs(r) {
     const bar = el('div', { class: 'inv-tabs', role: 'tablist', 'aria-label': 'Item categories' });
     const go = (id) => { ui.tab = id; ui.slotFilter = null; ui.listScroll = 0; rerender(); focusKey(`#inv-tab-${id}`); };
-    TABS.forEach((t, i) => {
-      const n = (r.inventory || []).filter((it) => tabOf(it) === t.id).length;
+    const inv = r.inventory || [];
+    PANEL_TABS.forEach((t, i) => {
+      const n = t.id === 'all' ? inv.length : inv.filter((it) => tabOf(it) === t.id).length;
       const on = !ui.slotFilter && ui.tab === t.id;
       bar.append(el('button', {
         type: 'button', role: 'tab', id: `inv-tab-${t.id}`, 'aria-selected': on ? 'true' : 'false',
         'aria-controls': 'inv-list', tabindex: (ui.slotFilter ? i === 0 : on) ? 0 : -1, class: 'inv-tab',
         onclick: () => go(t.id),
         onkeydown: (e) => {
-          const map = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1 };
+          const map = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: PANEL_TABS.length - 1 };
           if (!(e.key in map)) return;
           e.preventDefault();
-          go(TABS[(map[e.key] + TABS.length) % TABS.length].id);
+          go(PANEL_TABS[(map[e.key] + PANEL_TABS.length) % PANEL_TABS.length].id);
         },
       }, el('span', { class: 'inv-tab-name', text: t.label }), el('span', { class: 'inv-tab-n', text: String(n) })));
     });
     return bar;
   }
 
-  function filterRow() {
+  function filterRow(r) {
     const search = el('input', {
-      type: 'search', class: 'inv-search', placeholder: 'Find an item…', 'aria-label': 'Find items by name', value: ui.query,
+      type: 'search', class: 'inv-search', placeholder: 'Search name, material, skill, magic…', 'aria-label': 'Search carried items', value: ui.query,
       'data-focus-key': 'inv-search', 'aria-controls': 'inv-list',
       oninput: (e) => {
         ui.query = e.target.value;
@@ -344,10 +351,38 @@ export function install(api) {
         if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
       },
       onkeydown: (e) => {
-        if (e.key === 'ArrowDown') { e.preventDefault(); container?.querySelector('.inv-row')?.focus(); }
+        if (e.key === 'Escape' && ui.query) {
+          e.preventDefault();
+          e.stopPropagation();
+          ui.query = '';
+          ui.listScroll = 0;
+          rerender();
+          focusKey('inv-search');
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          container?.querySelector('.inv-row')?.focus();
+        } else if (e.key === 'Enter') {
+          const first = visibleItems(r)[0];
+          if (first) { e.preventDefault(); select(first.id); }
+        }
       },
     });
-    const row = el('div', { class: 'inv-filter' }, search);
+    const wrap = el('div', { class: 'inv-search-wrap' }, search,
+      ui.query ? el('button', {
+        type: 'button', class: 'inv-search-clear', 'aria-label': 'Clear search', 'data-focus-key': 'search-clear',
+        onclick: () => { ui.query = ''; ui.listScroll = 0; rerender(); focusKey('inv-search'); },
+      }, '×') : null);
+    const row = el('div', { class: 'inv-filter' }, wrap);
+    if (ui.query.trim() && !ui.slotFilter && ui.tab !== 'all') {
+      const allCount = itemsForTab(r.inventory, 'all', ui.query).length;
+      const tabCount = itemsForTab(r.inventory, ui.tab, ui.query).length;
+      if (allCount > tabCount) {
+        row.append(el('button', {
+          type: 'button', class: 'inv-chip inv-chip-btn', 'data-focus-key': 'search-all',
+          onclick: () => { ui.tab = 'all'; ui.listScroll = 0; rerender(); focusKey('inv-search'); },
+        }, `${allCount} in All`));
+      }
+    }
     if (ui.slotFilter) {
       row.append(el('span', { class: 'inv-chip' }, `Fits: ${slotLabel(ui.slotFilter)}`,
         el('button', { type: 'button', class: 'inv-chip-x', 'aria-label': 'Show all items again', 'data-focus-key': 'chip-clear',
@@ -358,8 +393,7 @@ export function install(api) {
 
   function visibleItems(r) {
     if (!ui.slotFilter) return itemsForTab(r.inventory, ui.tab, ui.query);
-    const q = ui.query.trim().toLowerCase();
-    return r.inventory.filter((i) => fitsSlot(i, ui.slotFilter) && (!q || String(i.name).toLowerCase().includes(q)))
+    return r.inventory.filter((i) => fitsSlot(i, ui.slotFilter) && matchesQuery(i, ui.query))
       .sort((a, b) => (b.equipped ? 1 : 0) - (a.equipped ? 1 : 0) || String(a.name).localeCompare(String(b.name)));
   }
 
@@ -367,7 +401,7 @@ export function install(api) {
     const items = visibleItems(r);
     const list = el('ul', {
       class: 'inv-list', id: 'inv-list', role: 'listbox',
-      'aria-label': ui.slotFilter ? `Items that fit ${slotLabel(ui.slotFilter)}` : TABS.find((t) => t.id === ui.tab)?.label,
+      'aria-label': ui.slotFilter ? `Items that fit ${slotLabel(ui.slotFilter)}` : PANEL_TABS.find((t) => t.id === ui.tab)?.label,
     });
     if (!items.length) {
       list.append(el('li', { class: 'inv-empty', role: 'presentation', text: ui.query ? 'No matching items.' : ui.slotFilter ? `You carry nothing for the ${slotLabel(ui.slotFilter).toLowerCase()}.` : 'Nothing here.' }));
@@ -378,7 +412,13 @@ export function install(api) {
       const selected = it.id === ui.selected;
       const pct = conditionPct(it);
       const broken = pct === 0;
-      const meta = [kindOf(it), it.conjuredUntil ? 'Conjured' : null, keyStat(it), pct != null && pct < 100 ? `${conditionLabel(it)} ${pct}%` : null].filter(Boolean).join(' · ');
+      const ch = itemCharges(it);
+      const meta = [
+        kindOf(it),
+        it.conjuredUntil ? 'Conjured' : null,
+        keyStat(it),
+        ch ? `${ch.current}/${ch.max} chg` : (pct != null && pct < 100 ? `${conditionLabel(it)} ${pct}%` : null),
+      ].filter(Boolean).join(' · ');
       const moveTo = (k) => { const next = items[Math.max(0, Math.min(items.length - 1, k))]; if (next) select(next.id); };
       list.append(el('li', {
         role: 'option', class: `inv-row${broken ? ' inv-row-broken' : ''}`, 'data-item-id': it.id, 'data-focus-key': `item-${it.id}`,
@@ -392,6 +432,8 @@ export function install(api) {
           if (e.key in map) { e.preventDefault(); moveTo(map[e.key]); }
           else if (e.key === 'Enter') { e.preventDefault(); if (!selected) select(it.id); else runPrimary(it); }
           else if (e.key === ' ') { e.preventDefault(); select(it.id); }
+          else if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); select(it.id, { focus: false }); runPrimary(it); }
+          else if (e.key === 'Escape' && ui.slotFilter) { e.preventDefault(); e.stopPropagation(); const s = ui.slotFilter; ui.slotFilter = null; rerender(); focusKey(`slot-${s}`); }
         },
       },
       iconImg(it, 'md'),
@@ -451,30 +493,54 @@ export function install(api) {
   }
 
   function comparison(cmp, it) {
-    const sec = el('div', { class: 'inv-compare', 'aria-label': cmp.mode === 'equip' ? 'Compared with what you wear' : 'If you remove it' });
+    const sec = el('div', { class: 'inv-compare', 'aria-label': cmp.mode === 'equip' ? 'Equip comparison' : 'Unequip comparison' });
+    const slotText = slotLabel(cmp.slot);
     if (cmp.mode === 'equip') {
-      sec.append(el('p', { class: 'inv-compare-head' },
-        cmp.replaces.length
-          ? ['Replaces ', ...cmp.replaces.flatMap((r, i) => [i ? ' and ' : '', el('strong', { text: r.name })]), ` (${slotLabel(cmp.slot).toLowerCase()})`]
-          : `Goes on the empty ${slotLabel(cmp.slot).toLowerCase()} slot`));
-      if (cmp.rows.length) {
-        const t = el('table', { class: 'inv-compare-table' },
-          el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, el('span', { class: 'inv-sr', text: 'Stat' })), el('th', { scope: 'col', text: 'Now' }), el('th', { scope: 'col', text: 'This' }), el('th', { scope: 'col', text: 'Change' }))));
-        const tb = el('tbody');
-        for (const [label, cur, next, change, sense] of cmp.rows) {
-          tb.append(el('tr', {}, el('th', { scope: 'row', text: label }), el('td', { text: cur }), el('td', { text: next }),
-            el('td', { class: sense > 0 ? 'inv-up' : sense < 0 ? 'inv-down' : '', text: change })));
-        }
-        t.append(tb);
-        sec.append(t);
-      }
+      const currentName = cmp.replaces.length ? cmp.replaces.map((r) => r.name).join(' + ') : `Empty ${slotText.toLowerCase()}`;
+      sec.append(
+        el('div', { class: 'inv-compare-versus' },
+          el('div', { class: 'inv-compare-side' },
+            el('span', { class: 'inv-compare-tag', text: `Equipped · ${slotText}` }),
+            el('span', { class: `inv-compare-name${cmp.replaces.length ? '' : ' inv-compare-empty'}`, text: currentName })),
+          el('span', { class: 'inv-compare-arrow', 'aria-hidden': 'true', text: '→' }),
+          el('div', { class: 'inv-compare-side' },
+            el('span', { class: 'inv-compare-tag', text: 'Equipping' }),
+            el('span', { class: 'inv-compare-name inv-compare-next', text: it.name }))),
+      );
     } else {
-      sec.append(el('p', { class: 'inv-compare-head', text: `Removing it leaves the ${slotLabel(cmp.slot).toLowerCase()} empty.` }));
+      sec.append(
+        el('div', { class: 'inv-compare-versus' },
+          el('div', { class: 'inv-compare-side' },
+            el('span', { class: 'inv-compare-tag', text: `Equipped · ${slotText}` }),
+            el('span', { class: 'inv-compare-name', text: it.name })),
+          el('span', { class: 'inv-compare-arrow', 'aria-hidden': 'true', text: '→' }),
+          el('div', { class: 'inv-compare-side' },
+            el('span', { class: 'inv-compare-tag', text: 'After removing' }),
+            el('span', { class: 'inv-compare-name inv-compare-empty', text: `Empty ${slotText.toLowerCase()}` }))),
+      );
+    }
+    if (cmp.rows.length) {
+      const t = el('table', { class: 'inv-compare-table' },
+        el('thead', {}, el('tr', {},
+          el('th', { scope: 'col' }, el('span', { class: 'inv-sr', text: 'Stat' })),
+          el('th', { scope: 'col', text: 'Now' }),
+          el('th', { scope: 'col', text: cmp.mode === 'equip' ? 'This' : 'After' }),
+          el('th', { scope: 'col', text: 'Delta' }))));
+      const tb = el('tbody');
+      for (const [label, cur, next, change, sense] of cmp.rows) {
+        tb.append(el('tr', {},
+          el('th', { scope: 'row', text: label }),
+          el('td', { text: cur }),
+          el('td', { text: next }),
+          el('td', { class: sense > 0 ? 'inv-up' : sense < 0 ? 'inv-down' : '', text: change })));
+      }
+      t.append(tb);
+      sec.append(el('div', { class: 'inv-compare-wrap' }, t));
     }
     if (cmp.armor.length) {
       const ul = el('ul', { class: 'inv-armor-change', 'aria-label': 'Armor rating changes' });
       for (const [, label, b, a] of cmp.armor) {
-        ul.append(el('li', {}, `${label} armor `, el('span', { text: `${b} → ${a}` }),
+        ul.append(el('li', {}, `${label} AC `, el('span', { text: `${b} → ${a}` }),
           el('span', { class: `inv-delta ${a > b ? 'inv-up' : 'inv-down'}`, text: `${a > b ? '+' : '−'}${Math.abs(a - b)}` })));
       }
       sec.append(ul);
