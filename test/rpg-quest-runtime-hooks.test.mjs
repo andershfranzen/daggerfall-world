@@ -9,6 +9,8 @@ import { parseQuest } from '../server/rpg/quests/script.js';
 import { analyseQuest, createInstance, updateQuest } from '../server/rpg/quests/engine.js';
 import { compileAction } from '../server/rpg/quests/actions.js';
 import { metaFromName } from '../server/rpg/quests/catalog.js';
+import { clipsForEvent } from '../client/gameplay/atmosphere/playlists.js';
+import { install as installNpcs } from '../server/rpg/npcs.js';
 
 /** SYNTHETIC: a sound every 10 minutes 5 times, conversation hooks, and a 25-minute clock that ends the quest. */
 const HOOKS = `
@@ -175,4 +177,42 @@ test('quest sounds reach only the owner and end with the quest; conversation hoo
   assert.equal(w.events(p, 'questSound').length, plays, 'no sound after the quest ended');
   assert.equal(w.events(other, 'questSound').length, 0, 'other players never hear it');
   assert.deepEqual(w.rt.ctx.services.quests.talk(p).rumours, [], 'rumours leave with the quest');
+});
+
+test('atmosphere maps questSound events to self clips and NPCs consume quest rumours and mute flags', () => {
+  assert.deepEqual(clipsForEvent({ kind: 'questSound', sound: 72 }), [{ clip: 72, self: true }]);
+  assert.deepEqual(clipsForEvent({ kind: 'questSound', song: 'Tavern' }), []);
+
+  const players = new Map();
+  const sent = new Map();
+  let talkHook = { rumours: [{ uid: 'q1', id: 1030, text: 'A rare quest rumour circulates.' }], topics: [], links: [], muted: [], questors: [] };
+  const rt = createRpgRuntime({
+    players,
+    features: [
+      (ctx) => { ctx.services.quests = { talk: (p) => (p.id === 1 ? talkHook : { rumours: [], topics: [], links: [], muted: [], questors: [] }) }; },
+      (ctx) => installNpcs(ctx, {}),
+    ],
+    save() {},
+    send: (p, msg) => { if (!sent.has(p.id)) sent.set(p.id, []); sent.get(p.id).push(msg); },
+    now: () => 1000,
+    log: { error() {}, warn() {}, info() {} },
+  });
+  const p = { id: 1, name: 'Rhea', x: 0, z: 0, yaw: 0, rpg: { gold: 0, location: 'town:Daggerfall/Gothway Garden', character: { name: 'Rhea', level: 1, gender: 'Female' } } };
+  players.set(1, p);
+  rt.join(p);
+  const npc = [...rt.entities.values()].find((e) => e.kind === 'npc');
+  assert.ok(npc, 'starter town has an NPC');
+  npc.sourced = true;
+  p.x = npc.x;
+  p.z = npc.z;
+  ok(rt.act(p, 'npc.talk', { targetId: npc.id }));
+  const dlg = (sent.get(1) || []).filter((m) => m.type === 'gameEvent' && m.event.kind === 'dialogue').at(-1)?.event;
+  assert.ok(dlg?.session, 'dialogue session opened');
+  ok(rt.act(p, 'npc.topic', { targetId: npc.id, session: dlg.session, topic: 'rumours' }));
+  const rum = (sent.get(1) || []).filter((m) => m.type === 'gameEvent' && m.event.kind === 'dialogue').at(-1)?.event;
+  assert.equal(rum.text, 'A rare quest rumour circulates.');
+
+  talkHook = { ...talkHook, muted: [{ uid: 'q1', key: 'x', name: npc.name, entityId: npc.id, individual: null }] };
+  const muted = rt.act(p, 'npc.talk', { targetId: npc.id });
+  assert.equal(muted.ok, false);
 });

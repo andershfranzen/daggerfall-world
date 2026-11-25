@@ -636,9 +636,13 @@ export function install(ctx, options = {}) {
     ctx.notify(p, { kind: 'dialogue.end', npcId: s.npcId, silent: true });
   });
 
+  const questTalk = (p) => (typeof services.quests?.talk === 'function' ? services.quests.talk(p) : null);
+  const matchesQuestNpc = (e, who) => (who.entityId && who.entityId === e.id) || (who.individual != null && e.faction === who.individual);
+
   ctx.onAction('npc.talk', (p, args) => {
     ensureState(p);
     const e = nearNpc(p, args);
+    if (questTalk(p)?.muted?.some((m) => matchesQuestNpc(e, m))) fail(`${e.name} has nothing to say to you.`);
     const token = `${(++tokenSeq).toString(36)}.${hash32(`${p.id}:${e.id}:${ctx.now()}`).toString(36)}`;
     sessions.set(p.id, { npcId: e.id, token, at: ctx.now(), mode: 'talk', counter: 0, lastText: '', tone: 'normal', refusals: 0 });
     e.yaw = Math.atan2(p.x - e.x, -(p.z - e.z)); // turn to face the speaker (yaw 0 = -z)
@@ -666,7 +670,10 @@ export function install(ctx, options = {}) {
     const role = roleDef(e);
     const topic = args.topic;
     if (hostile(p, e)) fail(`${e.name} refuses to speak with you.`);
-    if (typeof topic !== 'string' || !role.topics.includes(topic)) fail(`${e.name} has nothing to say about that.`);
+    const qt = questTalk(p);
+    if (qt?.muted?.some((m) => matchesQuestNpc(e, m))) fail(`${e.name} has nothing to say to you.`);
+    const extraQuestor = !!qt?.questors?.some((q) => matchesQuestNpc(e, q));
+    if (typeof topic !== 'string' || (!role.topics.includes(topic) && !(topic === 'work' && extraQuestor))) fail(`${e.name} has nothing to say about that.`);
     s.counter++;
     s.mode = topic === 'trade' ? 'trade' : 'talk';
     const seed = hash32(e.id) + s.counter + Math.floor(ctx.now() / 600_000);
@@ -676,11 +683,16 @@ export function install(ctx, options = {}) {
       text = refused;
       extra.noAsk = true;
     } else if (topic === 'news' || topic === 'rumours') {
-      const tale = places && (e.sourced || e.mobile) ? taleFor(p, e, topic) : null;
-      if (tale) {
-        text = tale.text;
-        extra.learned = learnSpecs(p, tale.town, [tale.place.spec]);
-      } else text = pick(LINES[topic], seed);
+      const qRumours = topic === 'rumours' && qt?.rumours?.length ? qt.rumours.filter((r) => r.text) : [];
+      if (qRumours.length) {
+        text = qRumours[seed % qRumours.length].text;
+      } else {
+        const tale = places && (e.sourced || e.mobile) ? taleFor(p, e, topic) : null;
+        if (tale) {
+          text = tale.text;
+          extra.learned = learnSpecs(p, tale.town, [tale.place.spec]);
+        } else text = pick(LINES[topic], seed);
+      }
     } else if (topic === 'inn' || (topic === 'directions' && (e.sourced || e.mobile))) {
       const d = directionsFrom(e, topic === 'inn', true);
       text = d.text;
@@ -716,8 +728,8 @@ export function install(ctx, options = {}) {
         if (lead?.spec) extra.learned = learnSpecs(p, lead.town, [lead.spec]);
         extra.journal = false;
       }
-      else if (!e.questGiver) text = LINES.work.none;
-      else if (e.guild && !memberAt(p, e)) { text = LINES.work.outsider; extra.journal = false; }
+      else if (!e.questGiver && !extraQuestor) text = LINES.work.none;
+      else if (e.guild && !extraQuestor && !memberAt(p, e)) { text = LINES.work.outsider; extra.journal = false; }
       else {
         text = e.guild ? LINES.work.member : LINES.work.giver;
         ctx.emit('npcWork', { player: p, entity: e });

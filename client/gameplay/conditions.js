@@ -107,7 +107,7 @@ export function install(api) {
     if (ev?.kind !== 'condition') return;
     if (ev.status) S.status = ev.status;
     if (ev.change === 'status') S.report = ev.text;
-    else if (!['symptom', 'sunlight'].includes(ev.change)) ask();
+    else if (!['symptom', 'sunlight', 'holy'].includes(ev.change)) ask();
     if (api.panel === PANEL) api.refreshPanel?.(PANEL);
   });
   return { healthView: (s) => healthView(api.state, s ?? S.status, S.minutes) };

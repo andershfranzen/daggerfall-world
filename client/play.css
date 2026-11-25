@@ -154,18 +154,29 @@ input[type="text"]:focus { outline: 2px solid var(--gold); outline-offset: 1px; 
 .drop[data-state="error"] { border-color: var(--ember); }
 .drop[data-state="error"] .note { color: #f0a080; }
 .drop[data-state="dragover"] { border-color: var(--gold-hi); background: rgb(214 168 74 / 0.12); }
-.drop-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.drop-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .drop-cache {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   margin-top: 10px;
   font-size: 0.84rem;
+  text-transform: none;
+  letter-spacing: 0;
   color: var(--ink-dim);
   cursor: pointer;
 }
 .drop-cache input { margin: 3px 0 0; accent-color: var(--gold); }
-.btn.btn-quiet { background: transparent; box-shadow: none; color: var(--ink-dim); }
+.drop-link {
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ink-dim);
+  text-decoration: underline;
+  cursor: pointer;
+}
 
 .btn {
   display: inline-flex;

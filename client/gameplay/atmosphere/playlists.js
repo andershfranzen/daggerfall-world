@@ -254,6 +254,8 @@ export function clipsForEvent(ev, { selfId = null, rand = Math.random } = {}) {
       return [{ clip: CLIP.SplashLarge, self: me(ev.playerId) || ev.playerId === undefined }];
     case 'journal': case 'quest':
       return [{ clip: CLIP.PageTurn, self: true }];
+    case 'questSound':
+      return Number.isInteger(ev.sound) ? [{ clip: ev.sound, self: true }] : [];
     case 'travel':
       return [{ clip: CLIP.AnimalHorse, self: true }];
     default:

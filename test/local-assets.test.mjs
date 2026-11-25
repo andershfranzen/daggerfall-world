@@ -2,7 +2,7 @@
 // Fixture data only: synthetic files named like Daggerfall archives, never real game content.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, readFileSync, truncateSync, readdirSync, readlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, readFileSync, truncateSync, readdirSync, readlinkSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
@@ -18,7 +18,7 @@ const bytes = (n, seed) => Buffer.from(Array.from({ length: n }, (_, i) => (i * 
 const ARCH = bytes(5000, 1);
 
 before(async () => {
-  tmp = mkdtempSync(join(tmpdir(), 'dfw-local-assets-'));
+  tmp = realpathSync(mkdtempSync(join(tmpdir(), 'dfw-local-assets-')));
   arena2 = join(tmp, 'install', 'arena2');
   mkdirSync(join(arena2, 'books'), { recursive: true });
   writeFileSync(join(arena2, 'ARCH3D.BSA'), ARCH);
