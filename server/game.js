@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer } from 'ws';
 import { openStore, CorruptCharacterError } from './db.js';
+import { openSqliteChatLog, createChatLogService } from './chat-log.js';
+import { createSceneSpatialIndex } from './scale/spatial-grid.js';
 import { createSiteHandler } from './static.js';
 import { handlePublicWorldMap, PUBLIC_MAP_PATH } from './public-world-map.js';
 import { createLocalAssets } from './local-assets.js';
@@ -44,7 +46,12 @@ export const DEFAULTS = Object.freeze({
   stateHeartbeatMs: 1000, // unchanged `state` per location is resent at most this often
   inputTimeoutMs: 400, // stop moving if the client stops refreshing input
   worldHalfExtent: 512, // positions are clamped to [-extent, extent] on x and z
-  maxPlayers: 32,
+  maxPlayers: 2000, // 0 or Infinity = uncapped single world
+  aoiThreshold: 64, // activate spatial AOI culling once a single scene exceeds this many players
+  aoiRadius: 128,
+  maxVisiblePeers: 64,
+  worldBus: null,
+  chatLog: null,
   joinTimeoutMs: 10_000,
   saveIntervalMs: 5_000,
   heartbeatMs: 15_000,
@@ -195,6 +202,10 @@ export function createGameServer(options = {}) {
   let lastTick = performance.now();
   let closing = null;
 
+  const chatLogStore = cfg.chatLog ?? (store.db ? openSqliteChatLog(store.db) : null);
+  const chatLog = chatLogStore ? createChatLogService(chatLogStore) : null;
+  const spatialIndex = createSceneSpatialIndex({ viewRadius: cfg.aoiRadius, maxVisiblePeers: cfg.maxVisiblePeers });
+
   const runtime = createRpgRuntime({
     players,
     features: cfg.features ?? PRODUCTION_FEATURES,
@@ -214,6 +225,7 @@ export function createGameServer(options = {}) {
       wodAssets,
       // Moderation hook for chat features (party/regional/global). Guests are never muted here.
       isMuted: (p) => !!(accounts?.isMuted && p?.accountId != null && accounts.isMuted(p.accountId)),
+      ...(chatLog ? { logChat: chatLog.logChat, queryChat: chatLog.queryChat, recentChat: chatLog.recentChat } : {}),
     },
   });
   const services = runtime.ctx.services;
@@ -272,7 +284,9 @@ export function createGameServer(options = {}) {
 
   const http = createServer((req, res) => {
     const path = req.url.split('?')[0];
-    if (path === PUBLIC_MAP_PATH) return handlePublicWorldMap(req, res, players, services.travel, services.sailing);
+    if (path === PUBLIC_MAP_PATH) {
+      return handlePublicWorldMap(req, res, players, services.travel, services.sailing, cfg.worldBus ? { worldBus: cfg.worldBus } : undefined);
+    }
     if (path === WORLDDATA_PATH || path.startsWith(WORLDDATA_PATH + '/')) {
       handleWorldDataHttp(services.worldData?.ready, req, res);
       return;
@@ -392,18 +406,38 @@ export function createGameServer(options = {}) {
       return o;
     };
     for (const q of lastState.keys()) if (players.get(q.id) !== q) lastState.delete(q);
-    for (const [, group] of groups) {
+    for (const [scene, group] of groups) {
       const loc = runtime.locationOf(group[0]);
       // A player still on their loading screen (`arriving`) sees themselves, but nobody else sees them yet.
-      const local = group.filter((q) => !q.arriving).map(publicOf);
+      const visibleGroup = group.filter((q) => !q.arriving);
+      const useAoi = cfg.aoiThreshold > 0 && visibleGroup.length > cfg.aoiThreshold;
+      if (useAoi) {
+        const activeIds = new Set();
+        for (const q of visibleGroup) {
+          activeIds.add(q.id);
+          spatialIndex.upsert(scene, q);
+        }
+        const grid = spatialIndex.gridOf(scene);
+        if (grid && grid.size > activeIds.size) {
+          for (const id of [...grid.ids()]) if (!activeIds.has(id)) spatialIndex.remove(id);
+        }
+      }
+      const local = useAoi ? null : visibleGroup.map(publicOf);
       let shared = null;
       for (const p of group) {
         const across = view ? view.across(p) : [];
-        const mine = p.arriving ? local.concat(publicOf(p)) : local;
+        let mine;
+        if (useAoi) {
+          const priorityIds = typeof services.partyOf === 'function' ? (services.partyOf(p)?.memberIds ?? []) : [];
+          const nearby = spatialIndex.query(scene, p, { priorityIds });
+          mine = [publicOf(p), ...nearby.map(publicOf)];
+        } else {
+          mine = p.arriving ? local.concat(publicOf(p)) : local;
+        }
         const list = across.length
           ? mine.concat(across.map(({ player, x, z }) => ({ ...publicOf(player), x: r3(x), z: r3(z), across: true })))
           : mine;
-        const full = () => (list === local ? (shared ??= stateData(loc, local)) : stateData(loc, list));
+        const full = () => (!useAoi && list === local ? (shared ??= stateData(loc, local)) : stateData(loc, list));
         const prev = lastState.get(p);
         if (p.delta) {
           // The same socket still shows this location: send what changed, if anything.
@@ -692,6 +726,11 @@ export function createGameServer(options = {}) {
     }
   }
 
+  function serverFull() {
+    const limit = cfg.maxPlayers === 0 ? Number.POSITIVE_INFINITY : cfg.maxPlayers;
+    return players.size >= limit;
+  }
+
   function handleJoin(conn, msg) {
     // `arrival: true`: the client holds a loading screen after the welcome and sends {type:'arrived'} once its
     // place is complete (client/main.js). Until then others do not see this player and monsters ignore them.
@@ -726,7 +765,7 @@ export function createGameServer(options = {}) {
           `invalid name: 1-${cfg.maxNameLength} letters, digits, spaces, _ ' - (must start with a letter or digit)`
         );
       }
-      if (players.size >= cfg.maxPlayers) return fatal(ws, CLOSE.FULL, 'server full');
+      if (serverFull()) return fatal(ws, CLOSE.FULL, 'server full');
       ({ row, token } = store.create(name));
     }
     admit(conn, row, { token }, { accountId: null });
@@ -741,7 +780,7 @@ export function createGameServer(options = {}) {
     let row = loadCharacter(ws, () => store.findByAccount(account.id));
     if (row === undefined) return;
     if (!row) {
-      if (players.size >= cfg.maxPlayers) return fatal(ws, CLOSE.FULL, 'server full');
+      if (serverFull()) return fatal(ws, CLOSE.FULL, 'server full');
       if (msg.claimToken !== undefined && msg.claimToken !== null) {
         const t = msg.claimToken;
         row = typeof t === 'string' && TOKEN_RE.test(t) ? loadCharacter(ws, () => store.claimGuest(account.id, account.username, t, name)) : null;
@@ -787,7 +826,7 @@ export function createGameServer(options = {}) {
       runtime.sync();
       return;
     }
-    if (players.size >= cfg.maxPlayers) return fatal(ws, CLOSE.FULL, 'server full');
+    if (serverFull()) return fatal(ws, CLOSE.FULL, 'server full');
 
     clearTimeout(conn.joinTimer);
     const orphan = orphans.get(row.id);
@@ -862,10 +901,17 @@ export function createGameServer(options = {}) {
     // boundary within the same range (server/rpg/peers.js). Indoors stays private to the room.
     const sceneOf = runtime.sceneOf ?? runtime.locationOf;
     const scene = sceneOf(p);
-    const data = JSON.stringify({ type: 'chat', name: p.name, text });
-    const near = new Set((services.peerView?.across(p) ?? []).map((a) => a.player));
-    for (const q of players.values()) {
-      if ((sceneOf(q) === scene || near.has(q)) && q.ws.readyState === q.ws.OPEN) q.ws.send(data);
+    const channel = msg.channel === 'shout' || msg.channel === 'yell' ? 'shout' : 'say';
+    services.logChat?.(p, { channel, location: scene, text });
+    const data = JSON.stringify({ type: 'chat', name: p.name, text, ...(channel === 'shout' ? { channel: 'shout' } : {}) });
+    const audience = typeof services.chatAudience === 'function'
+      ? services.chatAudience(p, channel)
+      : (() => {
+          const near = new Set((services.peerView?.across(p) ?? []).map((a) => a.player));
+          return [...players.values()].filter((q) => sceneOf(q) === scene || near.has(q));
+        })();
+    for (const q of audience) {
+      if (q.ws.readyState === q.ws.OPEN) q.ws.send(data);
     }
   }
 
@@ -888,6 +934,7 @@ export function createGameServer(options = {}) {
   return {
     config: cfg,
     runtime,
+    chatLog,
     localAssets: Object.freeze({ enabled: localAssets.enabled, dir: localAssets.dir, reason: localAssets.reason }),
     /** Public summary of an account's character, or null. */
     characterForAccount(accountId) {

@@ -13,6 +13,7 @@
     "test": "node --test --test-concurrency=2 test/*.test.mjs"
   },
   "dependencies": {
+    "pg": "^8.23.1",
     "ws": "^8.23.0"
   }
 }

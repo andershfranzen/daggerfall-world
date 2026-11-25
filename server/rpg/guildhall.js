@@ -600,6 +600,12 @@ export function install(ctx, options = {}) {
         text,
         at: now(),
       };
+      ctx.services?.logChat?.(p, {
+        channel: 'order',
+        location: p?.rpg?.location ?? '',
+        groupId: ord.id,
+        text,
+      });
       for (const m of Object.values(ord.members)) {
         const live = online(m.id);
         if (live) ctx.notify(live, ev);
@@ -625,6 +631,12 @@ export function install(ctx, options = {}) {
       text,
       at: now(),
     };
+    ctx.services?.logChat?.(p, {
+      channel: 'guild',
+      location: p?.rpg?.location ?? '',
+      groupId: variant != null ? `${group}:${variant}` : group,
+      text,
+    });
     for (const q of ctx.players?.values?.() ?? []) {
       const qm = q?.rpg?.guilds?.[group];
       if (!qm) continue;

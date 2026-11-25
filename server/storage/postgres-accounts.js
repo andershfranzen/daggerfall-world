@@ -18,6 +18,7 @@ function normAccount(row) {
     username: row.username,
     username_key: row.username_key,
     password_hash: row.password_hash,
+    recovery_hash: row.recovery_hash ?? null,
     created_at: Number(row.created_at),
     last_login_at: toNum(row.last_login_at),
     muted_until: toNum(row.muted_until),

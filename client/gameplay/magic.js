@@ -272,15 +272,27 @@ export function install(api) {
   (document.getElementById('hud') ?? document.body).append(chip);
   chip.addEventListener('click', () => api.openPanel('spellbook'));
 
+  function readyTrapSpell() {
+    const r = magicOf(api.state).readySpell;
+    return r && typeof r === 'object' && r.name ? r : null;
+  }
   function selectedSpell() {
     const id = magicOf(api.state).selected;
     return id ? catalogue?.find((s) => String(s.id) === id) ?? null : null;
   }
   function updateChip() {
-    const sp = selectedSpell();
+    const free = readyTrapSpell();
+    const sp = free ?? selectedSpell();
     chip.replaceChildren();
     chip.hidden = !sp || (screen !== null && screen !== 'game');
     if (!sp) return;
+    if (free) {
+      chip.dataset.short = 'false';
+      chip.title = `Ready free spell (${free.name}) — V to cast for 0 magicka`;
+      chip.append(el('span', { class: 'mg-chip-name', text: free.name }), el('span', { class: 'mg-chip-cost', text: 'FREE' }), el('kbd', { text: 'V' }));
+      return;
+    }
+    chip.title = 'Readied spell — V to cast, B for spellbook';
     const cost = magickaCost(sp, statsOf(api.state)?.skills);
     const mana = statsOf(api.state)?.magicka;
     chip.dataset.short = String(Number.isFinite(mana) && mana < cost);
@@ -289,6 +301,10 @@ export function install(api) {
 
   // ---------------------------------------------------------------- intents
   function castSelected(spellId) {
+    if (!spellId && readyTrapSpell()) {
+      api.act('magic.castFree', {});
+      return;
+    }
     const sp = spellId ? catalogue?.find((s) => String(s.id) === String(spellId)) : selectedSpell();
     if (!sp) { api.message('No spell is readied. Open the spellbook (B) to choose one.'); return; }
     const args = { spellId: String(sp.id) };

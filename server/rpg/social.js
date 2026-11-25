@@ -551,6 +551,15 @@ export function install(ctx) {
       ? findWhisperTarget(ctx.players, p, { target: args.target, targetId: args.targetId })
       : null;
     const recipients = chatAudience(p, channel, { recipient: whisperTo });
+    const party = channel === 'party' ? partyOfPlayer(p) : null;
+    ctx.services.logChat?.(p, {
+      channel,
+      location: locationOf(p),
+      targetPlayerId: whisperTo?.id ?? null,
+      targetName: whisperTo?.name ?? null,
+      groupId: party?.id ?? null,
+      text,
+    });
     const event = {
       kind: 'chat',
       channel,

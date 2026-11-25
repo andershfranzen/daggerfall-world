@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   username TEXT NOT NULL,
   username_key TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
+  recovery_hash TEXT,
   created_at BIGINT NOT NULL,
   last_login_at BIGINT,
   muted_until BIGINT,
@@ -90,6 +91,37 @@ CREATE TABLE IF NOT EXISTS moderation_log (
 CREATE INDEX IF NOT EXISTS moderation_log_account_idx
   ON moderation_log (account_id, id DESC);
 
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS recovery_hash TEXT;
+
+-- ---------------------------------------------------------------- persistent chat log
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id BIGSERIAL PRIMARY KEY,
+  created_at BIGINT NOT NULL,
+  channel TEXT NOT NULL,
+  location TEXT NOT NULL DEFAULT '',
+  sender_player_id BIGINT,
+  sender_account_id TEXT,
+  sender_name TEXT NOT NULL,
+  target_player_id BIGINT,
+  target_name TEXT,
+  group_id TEXT,
+  body TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at
+  ON chat_messages (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_sender_account_created
+  ON chat_messages (sender_account_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_sender_name_created
+  ON chat_messages (LOWER(sender_name), created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_created
+  ON chat_messages (channel, created_at DESC);
+
 INSERT INTO schema_migrations (version, name)
-VALUES (2, 'initial_postgres_schema')
+VALUES (2, 'initial_postgres_schema'),
+       (3, 'account_recovery_and_chat_log')
 ON CONFLICT (version) DO NOTHING;

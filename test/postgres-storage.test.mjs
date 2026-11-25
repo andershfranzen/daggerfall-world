@@ -706,12 +706,18 @@ describe('PostgreSQL schema & storage factory', () => {
     await pgAcc.close();
   });
 
-  it('throws a clear helpful error when DATABASE_URL is set and pg is not installed', async () => {
+  it('throws a clear error when DATABASE_URL is set and pg is absent or unreachable', async () => {
+    let hasPg = true;
+    try { await import('pg'); } catch { hasPg = false; }
     await assert.rejects(
-      () => openGameStorage({ databaseUrl: 'postgresql://localhost:5432/dfw', env: {} }),
+      () => openGameStorage({ databaseUrl: 'postgresql://127.0.0.1:1/dfw', env: {} }),
       (err) => {
-        assert.equal(err.code, 'PG_DRIVER_MISSING');
-        assert.match(err.message, /npm install pg/);
+        if (!hasPg) {
+          assert.equal(err.code, 'PG_DRIVER_MISSING');
+          assert.match(err.message, /npm install pg/);
+        } else {
+          assert.ok(err instanceof Error);
+        }
         return true;
       },
     );
