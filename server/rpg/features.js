@@ -8,6 +8,7 @@ import { install as interiors } from './interiors.js';
 import { install as containers } from './containers.js';
 import { install as npcs } from './npcs.js';
 import { install as guilds } from './guilds.js';
+import { install as guildhall } from './guildhall.js';
 import { install as townServices } from './townServices.js';
 import { install as economy } from './economy.js';
 import { install as combat } from './combat.js';
@@ -43,6 +44,7 @@ export const features = [
   { name: 'containers', install: containers }, // shared treasure, furniture, bookshelves (package 7)
   { name: 'npcs', install: npcs },
   { name: 'guilds', install: guilds }, // after npcs: per-hall guildRank, any-faction reputation (package 15)
+  { name: 'guildhall', install: guildhall }, // classic guild overview/chat/resign + player-founded orders
   { name: 'townServices', install: townServices },
   { name: 'economy', install: economy }, // shop shelves, regional prices (after npcs: uses services.shopLedger)
   { name: 'combat', install: combat },
