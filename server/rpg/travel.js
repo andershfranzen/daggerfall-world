@@ -38,8 +38,9 @@ import { fastTravelMinutes, freeTavernRooms } from '../../client/gameplay/guilds
 
 export const name = 'travel';
 
-// Legacy string ids awaiting conversion. Converted discoveries are bounded by the catalogue itself.
-const MAX_DISCOVERED = 4000;
+// Legacy string ids awaiting conversion. Exceeds the entire 15,251-location Iliac Bay catalogue so no
+// legacy discovery list is truncated before MAPS.BSA migration converts it to compact `found` storage.
+const MAX_DISCOVERED = 16384;
 const MAX_POSITIONS = 64;
 const TRAVEL_COOLDOWN_MS = 1500;
 const r3 = (v) => Math.round(v * 1000) / 1000;
@@ -290,8 +291,9 @@ export function install(ctx, { loadWorld = loadWorldFromDir } = {}) {
     discover(p, id) {
       const entry = world?.catalog.get(id);
       if (!entry) return false;
-      ctx.dirty(p);
-      return discover(ensure(p), entry);
+      const added = discover(ensure(p), entry);
+      if (added) ctx.dirty(p);
+      return added;
     },
     /** Journey quote to any catalogued place, revealed or not (quest clocks; never used to move a player). */
     estimate(p, id, options) {

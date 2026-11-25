@@ -61,23 +61,162 @@ export function entryOf(catalog, id, hint = null) {
 
 // ------------------------------------------------------------------ discoveries
 
+export const BITSET_PREFIX = 'b:';
+/** Regions above this many entries auto-compact to a base64 bitset so all 15,251 Iliac Bay records fit in a few KB. */
+export const BITSET_THRESHOLD = 512;
+const MAX_LOCATION_INDEX = 65535;
+const MAX_BITSET_BYTES = (MAX_LOCATION_INDEX + 1) >> 3; // 8192 bytes
+
+const B64_TABLE = new Int8Array(128).fill(-1);
+{
+  const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  for (let i = 0; i < alpha.length; i++) B64_TABLE[alpha.charCodeAt(i)] = i;
+}
+const NIBBLE_POP = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4];
+
+function bytesToBitset(bytes) {
+  let len = bytes.length;
+  while (len > 0 && bytes[len - 1] === 0) len--;
+  if (len === 0) return '';
+  let bin = '';
+  for (let i = 0; i < len; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, Math.min(len, i + 0x8000)));
+  }
+  return BITSET_PREFIX + btoa(bin);
+}
+
+function decodeBitset(str) {
+  if (typeof str !== 'string' || !str.startsWith(BITSET_PREFIX)) return null;
+  const raw = str.slice(BITSET_PREFIX.length);
+  if (!raw) return new Uint8Array(0);
+  let bin;
+  try {
+    bin = atob(raw);
+  } catch {
+    return null;
+  }
+  if (bin.length > MAX_BITSET_BYTES) return null;
+  let len = bin.length;
+  while (len > 0 && bin.charCodeAt(len - 1) === 0) len--;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/** Encode an iterable of location indices in [0, 65535] into a compact `'b:<base64>'` bitset. */
+export function encodeFoundBitset(indices) {
+  let max = -1;
+  for (const idx of indices) {
+    if (Number.isInteger(idx) && idx >= 0 && idx <= MAX_LOCATION_INDEX && idx > max) max = idx;
+  }
+  if (max < 0) return '';
+  const bytes = new Uint8Array((max >> 3) + 1);
+  for (const idx of indices) {
+    if (Number.isInteger(idx) && idx >= 0 && idx <= MAX_LOCATION_INDEX) bytes[idx >> 3] |= 1 << (idx & 7);
+  }
+  return bytesToBitset(bytes);
+}
+
+/** O(1) bit check directly on a `'b:<base64>'` bitset string. */
+function bitsetHas(str, index) {
+  if (!Number.isInteger(index) || index < 0 || index > MAX_LOCATION_INDEX) return false;
+  const byteIdx = index >> 3;
+  const quad = Math.floor(byteIdx / 3);
+  const off = BITSET_PREFIX.length + quad * 4;
+  if (off + 3 >= str.length) return false;
+  const c0 = str.charCodeAt(off), c1 = str.charCodeAt(off + 1), c2 = str.charCodeAt(off + 2), c3 = str.charCodeAt(off + 3);
+  const v0 = c0 < 128 ? B64_TABLE[c0] : -1;
+  const v1 = c1 < 128 ? B64_TABLE[c1] : -1;
+  if (v0 < 0 || v1 < 0) return false;
+  const rem = byteIdx % 3;
+  let byte;
+  if (rem === 0) {
+    byte = (v0 << 2) | (v1 >>> 4);
+  } else {
+    if (c2 === 61 /* '=' */) return false;
+    const v2 = c2 < 128 ? B64_TABLE[c2] : -1;
+    if (v2 < 0) return false;
+    if (rem === 1) {
+      byte = ((v1 & 0x0f) << 4) | (v2 >>> 2);
+    } else {
+      if (c3 === 61 /* '=' */) return false;
+      const v3 = c3 < 128 ? B64_TABLE[c3] : -1;
+      if (v3 < 0) return false;
+      byte = ((v2 & 0x03) << 6) | v3;
+    }
+  }
+  return ((byte >>> (index & 7)) & 1) !== 0;
+}
+
+function bitsetAdd(str, index) {
+  const prev = decodeBitset(str) ?? new Uint8Array(0);
+  const byteIdx = index >> 3;
+  const bytes = byteIdx >= prev.length ? new Uint8Array(byteIdx + 1) : prev;
+  if (bytes !== prev) bytes.set(prev);
+  bytes[byteIdx] |= 1 << (index & 7);
+  return bytesToBitset(bytes);
+}
+
+function bitsetCount(str) {
+  const bytes = decodeBitset(str);
+  if (!bytes) return 0;
+  let n = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    n += NIBBLE_POP[b & 0x0f] + NIBBLE_POP[b >>> 4];
+  }
+  return n;
+}
+
 /**
- * Personal discoveries: `{ [regionIndex]: sorted locationIndex[] }`. Every one of the 15,251
- * records fits in well under 64 KB (the 4,052 initially hidden ones in about 18 KB).
+ * Personal discoveries: `{ [regionIndex]: sorted locationIndex[] | 'b:<base64>' }`.
+ * Small regions stay sorted index arrays for readability and legacy test compatibility;
+ * regions above `BITSET_THRESHOLD` (512) auto-compact to a base64 bitset so all 15,251
+ * Iliac Bay records persist cleanly well within `MAX_RPG_BYTES`.
  */
 export function normalizeFound(raw) {
   const out = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   for (const [k, list] of Object.entries(raw)) {
-    if (!NUMERIC.test(k) || !REGION_NAMES[Number(k)] || !Array.isArray(list)) continue;
-    const clean = [...new Set(list.filter(i => Number.isInteger(i) && i >= 0 && i < 65536))].sort((a, b) => a - b);
-    if (clean.length) out[k] = clean;
+    if (!NUMERIC.test(k) || !REGION_NAMES[Number(k)]) continue;
+    if (Array.isArray(list)) {
+      const clean = [...new Set(list.filter(i => Number.isInteger(i) && i >= 0 && i <= MAX_LOCATION_INDEX))].sort((a, b) => a - b);
+      if (clean.length > BITSET_THRESHOLD) out[k] = encodeFoundBitset(clean);
+      else if (clean.length) out[k] = clean;
+    } else if (typeof list === 'string' && list.startsWith(BITSET_PREFIX)) {
+      const bytes = decodeBitset(list);
+      if (bytes && bytes.length) out[k] = bytesToBitset(bytes);
+    }
+  }
+  return out;
+}
+
+/** Total number of personally discovered records across both array and bitset regions. */
+export function countFound(found) {
+  if (!found || typeof found !== 'object' || Array.isArray(found)) return 0;
+  let total = 0;
+  for (const v of Object.values(found)) {
+    if (Array.isArray(v)) total += v.length;
+    else if (typeof v === 'string' && v.startsWith(BITSET_PREFIX)) total += bitsetCount(v);
+  }
+  return total;
+}
+
+/** Compact every region above `threshold` (default 0: all regions) into a base64 bitset. */
+export function compactFound(found, { threshold = 0 } = {}) {
+  const out = normalizeFound(found);
+  for (const [k, v] of Object.entries(out)) {
+    if (Array.isArray(v) && v.length > threshold) out[k] = encodeFoundBitset(v);
   }
   return out;
 }
 
 export function hasFound(found, entry) {
+  if (!Number.isInteger(entry?.regionIndex) || !Number.isInteger(entry?.index) || entry.index < 0 || entry.index > MAX_LOCATION_INDEX) {
+    return false;
+  }
   const list = found?.[entry.regionIndex];
+  if (typeof list === 'string' && list.startsWith(BITSET_PREFIX)) return bitsetHas(list, entry.index);
   if (!Array.isArray(list)) return false;
   // Sorted: binary search.
   let lo = 0, hi = list.length - 1;
@@ -92,12 +231,20 @@ export function hasFound(found, entry) {
 
 /** Adds an entry; returns true when it was new. */
 export function addFound(found, entry) {
-  if (!Number.isInteger(entry?.regionIndex) || !Number.isInteger(entry?.index)) return false;
+  if (!Number.isInteger(entry?.regionIndex) || !Number.isInteger(entry?.index) || entry.index < 0 || entry.index > MAX_LOCATION_INDEX) {
+    return false;
+  }
   if (hasFound(found, entry)) return false;
-  const list = (found[entry.regionIndex] ??= []);
+  const cur = found[entry.regionIndex];
+  if (typeof cur === 'string' && cur.startsWith(BITSET_PREFIX)) {
+    found[entry.regionIndex] = bitsetAdd(cur, entry.index);
+    return true;
+  }
+  const list = Array.isArray(cur) ? cur : (found[entry.regionIndex] = []);
   let at = list.length;
   while (at > 0 && list[at - 1] > entry.index) at--;
   list.splice(at, 0, entry.index);
+  if (list.length > BITSET_THRESHOLD) found[entry.regionIndex] = encodeFoundBitset(list);
   return true;
 }
 

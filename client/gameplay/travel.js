@@ -19,7 +19,7 @@ import {
 import { CLASSIC_STARTERS } from './travel/classic.js';
 import { hasFreeShipPassage, quoteJourney, normalizeOptions } from './travel/journey.js';
 import { fastTravelMinutes, freeTavernRooms } from './guilds/perks.js';
-import { hasFound, regionNameOf } from './travel/identity.js';
+import { countFound, hasFound, regionNameOf } from './travel/identity.js';
 import {
   MapImages, OVERVIEW_IMG, PICKER_IMG, regionMapCorner, REGION_MAP_W, REGION_MAP_H,
   regionMapNames, regionMapScale, regionMapFor,
@@ -768,7 +768,7 @@ export function install(api) {
         // on every state message (moving townsfolk send several a second), and replacing the buttons
         // under the pointer would swallow a player's click.
         const c = character();
-        const foundCount = Object.values(t.found ?? {}).reduce((n, v) => n + (Array.isArray(v) ? v.length : 0), 0);
+        const foundCount = countFound(t.found);
         const key = JSON.stringify([
           S.query, S.filter, S.region, S.mapIndex, S.selected?.id ?? null, cur, !!S.seaPixel, c?.gold ?? null, foundCount,
           t.discovered?.length ?? 0, t.options ?? null, t.server ?? null, hasFreeShipPassage(c), S.options ?? null,
