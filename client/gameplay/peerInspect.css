@@ -1,0 +1,329 @@
+/* Classic Paper Doll Peer Inspector (client/gameplay/peerInspect.js).
+ * Scoped strictly under .pi-* classes matching Daggerfall World's dark slate /
+ * bevelled steel / sapphire pixel HUD tokens.
+ */
+
+.pi-root {
+  color: var(--text, #dde3ec);
+  font: 15px/1.45 var(--pixel, ui-monospace, monospace);
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pi-root > *,
+.pi-layout > *,
+.pi-info-col > * {
+  min-width: 0;
+}
+
+.pi-live {
+  margin: 0;
+  min-height: 1.2em;
+  color: var(--blue-hi, #b6dcff);
+  font-size: 0.85rem;
+}
+.pi-live:empty {
+  display: none;
+}
+
+.pi-label {
+  display: block;
+  font: 400 0.68rem/1.2 var(--caps, var(--pixel, ui-monospace, monospace));
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--steel-hi, #a9b4c6);
+}
+
+.pi-selector {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--slate, #131923);
+  border: 2px solid;
+  border-color: var(--steel-1, #485262) var(--steel-3, #262c36) var(--steel-3, #262c36) var(--steel-1, #485262);
+  box-shadow: 0 0 0 1px var(--edge, #030407);
+}
+
+.pi-peer-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.pi-peer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.55rem;
+  font: inherit;
+  font-size: 0.86rem;
+  color: var(--text, #dde3ec);
+  background: #1b2331;
+  border: 2px solid;
+  border-color: var(--steel-1, #485262) var(--steel-3, #262c36) var(--steel-3, #262c36) var(--steel-1, #485262);
+  cursor: pointer;
+}
+.pi-peer-btn:hover {
+  background: #232d3f;
+}
+.pi-peer-btn.is-active {
+  color: #fff;
+  background: var(--face-sapphire, linear-gradient(#2e6cc0 0 50%, #1c4a8e 50% 100%));
+  border-color: #9fd0ff var(--blue-lo, #0b2147) var(--blue-lo, #0b2147) #9fd0ff;
+}
+
+.pi-tag {
+  font-size: 0.78rem;
+  color: var(--blue-hi, #b6dcff);
+}
+
+.pi-empty,
+.pi-note {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--text-2, #aab4c4);
+}
+
+/* Two-column layout: Paper Doll left, Identity + Visible Gear right */
+.pi-layout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.pi-doll-col {
+  margin: 0;
+  display: grid;
+  gap: 0.45rem;
+  justify-items: center;
+  padding: 0.65rem;
+  background: var(--slate, #131923);
+  border: 2px solid;
+  border-color: var(--steel-1, #485262) var(--steel-3, #262c36) var(--steel-3, #262c36) var(--steel-1, #485262);
+  box-shadow: 0 0 0 1px var(--edge, #030407), inset 0 1px 0 rgba(169, 180, 198, 0.16);
+}
+
+.pi-doll-frame {
+  padding: 4px;
+  background: #0b0f17;
+  border: 2px solid;
+  border-color: var(--steel-3, #262c36) var(--steel-1, #485262) var(--steel-1, #485262) var(--steel-3, #262c36);
+}
+
+.pi-doll-canvas {
+  display: block;
+  width: 220px;
+  height: 368px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: #0f1520;
+}
+
+.pi-doll-cap {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-3, #7d889c);
+  text-align: center;
+  max-width: 224px;
+}
+
+.pi-info-col {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.pi-header {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--slate, #131923);
+  border: 2px solid;
+  border-color: var(--steel-1, #485262) var(--steel-3, #262c36) var(--steel-3, #262c36) var(--steel-1, #485262);
+  box-shadow: 0 0 0 1px var(--edge, #030407), inset 0 1px 0 rgba(169, 180, 198, 0.16);
+}
+
+.pi-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.pi-name {
+  margin: 0;
+  font: 600 1.1rem/1.2 var(--pixel, ui-monospace, monospace);
+  color: var(--text, #dde3ec);
+  letter-spacing: 0.04em;
+  text-shadow: var(--shadow-text, 2px 2px 0 #000);
+}
+
+.pi-order-tag {
+  padding: 0.08rem 0.4rem;
+  font-size: 0.8rem;
+  color: var(--blue-hi, #b6dcff);
+  background: #172742;
+  border: 1px solid #3c69a8;
+}
+
+.pi-identity {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--text-2, #aab4c4);
+}
+
+.pi-guild-title {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--blue-hi, #b6dcff);
+}
+
+.pi-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.pi-badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid var(--steel-1, #485262);
+  background: #1b2331;
+  color: var(--text, #dde3ec);
+}
+.pi-badge-info {
+  border-color: #4f86c6;
+  background: #162944;
+  color: #b6dcff;
+}
+.pi-badge-accent {
+  border-color: #c89f54;
+  background: #332713;
+  color: #f4d898;
+}
+.pi-badge-warn {
+  border-color: #c9793a;
+  background: #362010;
+  color: #ffc896;
+}
+.pi-badge-danger {
+  border-color: #b5454b;
+  background: #381518;
+  color: #ffb8bc;
+}
+.pi-badge-muted {
+  border-color: var(--steel-3, #262c36);
+  color: var(--text-3, #7d889c);
+}
+
+.pi-gear {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--slate, #131923);
+  border: 2px solid;
+  border-color: var(--steel-1, #485262) var(--steel-3, #262c36) var(--steel-3, #262c36) var(--steel-1, #485262);
+  box-shadow: 0 0 0 1px var(--edge, #030407);
+}
+
+.pi-section-h {
+  margin: 0;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--steel-3, #262c36);
+  font: 600 0.86rem/1.2 var(--caps, var(--pixel, ui-monospace, monospace));
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--steel-hi, #a9b4c6);
+}
+
+.pi-gear-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.pi-gear-row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 9rem) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.22rem 0.35rem;
+  border-bottom: 1px solid rgba(72, 82, 98, 0.25);
+  font-size: 0.86rem;
+}
+.pi-gear-row:last-child {
+  border-bottom: 0;
+}
+.pi-gear-row.is-highlighted {
+  background: rgba(46, 108, 192, 0.24);
+  outline: 1px solid #4f86c6;
+}
+
+.pi-gear-slot {
+  color: var(--steel-hi, #a9b4c6);
+  font-size: 0.8rem;
+}
+
+.pi-gear-val {
+  color: var(--text, #dde3ec);
+}
+
+.pi-gear-meta {
+  color: var(--text-2, #aab4c4);
+  font-size: 0.8rem;
+}
+
+.pi-muted {
+  color: var(--text-3, #7d889c);
+}
+
+.pi-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.pi-btn {
+  padding: 0.4rem 0.75rem;
+  font: inherit;
+  font-size: 0.86rem;
+  color: var(--text, #dde3ec);
+  background: #1d2635;
+  border: 2px solid;
+  border-color: var(--steel-1, #485262) var(--steel-3, #262c36) var(--steel-3, #262c36) var(--steel-1, #485262);
+  box-shadow: 0 0 0 1px var(--edge, #030407);
+  cursor: pointer;
+}
+.pi-btn:hover:not(:disabled) {
+  background: #273347;
+}
+.pi-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pi-btn-primary {
+  color: #fff;
+  background: var(--face-sapphire, linear-gradient(#2e6cc0 0 50%, #1c4a8e 50% 100%));
+  border-color: #9fd0ff var(--blue-lo, #0b2147) var(--blue-lo, #0b2147) #9fd0ff;
+}
+
+@media (max-width: 640px) {
+  .pi-layout {
+    grid-template-columns: 1fr;
+  }
+  .pi-doll-canvas {
+    width: 165px;
+    height: 276px;
+  }
+  .pi-gear-row {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+}
