@@ -303,13 +303,42 @@ test('repair: interrupting returns the item unrepaired; no refund; broken pack/e
   assert.equal(it.condition, cond);
   assert.equal(p.rpg.gold, 100 - cost);
 
-  // Equipped items must be unequipped; an undamaged item is refused.
+});
+
+test('repair: an equipped item is taken off as it is left; a failed save rolls back gold, slot and ticket', async () => {
+  let failing = false;
+  const w = world({ failSave: () => failing });
+  const p = w.join(1);
+  await w.settle(GG);
   const armour = p.rpg.inventory.find((i) => i.equipped && i.group !== 'weapon');
-  if (armour) {
-    w.rt.ctx.services.damageItem(p, armour.id, 1);
-    const a2 = p.rpg.inventory.find((i) => i.id === armour.id);
-    if (a2.equipped) assert.match(w.act(p, 'repair.leave', { counterId: 'b:2,1:15', itemId: armour.id, cost: repairCost(a2, 19) }).error, /Unequip/);
-  }
+  assert.ok(armour, 'the starter kit wears armour');
+  const slot = armour.equipped;
+  w.rt.ctx.services.damageItem(p, armour.id, 1);
+  const worn = p.rpg.inventory.find((i) => i.id === armour.id);
+  assert.equal(worn.equipped, slot, 'still worn after the damage');
+  p.rpg.gold = 500;
+  at(p, -10, 19);
+  const cost = repairCost(worn, 19);
+  const before = JSON.stringify({ inv: p.rpg.inventory, eq: p.rpg.equipment, gold: p.rpg.gold, ts: p.rpg.townServices });
+
+  failing = true;
+  assert.equal(w.act(p, 'repair.leave', { counterId: 'b:2,1:15', itemId: armour.id, cost, requestId: 'eqp-0001' }).ok, false);
+  assert.equal(JSON.stringify({ inv: p.rpg.inventory, eq: p.rpg.equipment, gold: p.rpg.gold, ts: p.rpg.townServices }), before,
+    'still worn, still paid for, no ticket, request id free');
+
+  failing = false;
+  assert.equal(w.act(p, 'repair.leave', { counterId: 'b:2,1:15', itemId: armour.id, cost, requestId: 'eqp-0001' }).ok, true, 'the retry succeeds');
+  assert.equal(p.rpg.inventory.some((i) => i.id === armour.id), false, 'the smith has it');
+  assert.equal(p.rpg.equipment[slot], undefined, 'the slot is empty');
+  assert.equal(p.rpg.gold, 500 - cost);
+  const ticket = p.rpg.townServices.repairs[0];
+  assert.equal(ticket.item.id, armour.id);
+
+  w.advanceGameMinutes(ticket.readyAt - ticket.leftAt + 1);
+  assert.equal(w.act(p, 'repair.collect', { counterId: 'b:2,1:15', ticket: ticket.ticket }).ok, true);
+  const back = p.rpg.inventory.find((i) => i.id === armour.id);
+  assert.equal(back.condition, back.maxCondition);
+  assert.equal(back.equipped, undefined, 'it comes back in the pack, not worn');
 });
 
 test('repair at a smith NPC requires conversation range', async () => {

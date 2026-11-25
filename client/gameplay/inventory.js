@@ -435,7 +435,7 @@ export function install(api) {
     if (needsCare(it)) {
       box.append(el('p', { class: 'inv-care' },
         pct === 0 ? 'Broken: it cannot be worn until a smith repairs it. ' : 'Worn out: a smith can restore it. ',
-        it.equipped ? 'Remove it before leaving it for repair. ' : '',
+        it.equipped ? 'Leaving it with a smith takes it off. ' : '',
         el('button', { type: 'button', class: 'inv-link', 'data-focus-key': 'open-repairs', onclick: () => api.openPanel(REPAIR_PANEL) }, 'Open Bank & Repairs')));
     }
     if (isWearable(it)) {

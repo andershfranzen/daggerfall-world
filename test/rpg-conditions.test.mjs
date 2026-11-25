@@ -181,6 +181,10 @@ describe('supernatural infections and curses', () => {
     assert.equal(st.sun, 2, 'remainder carried');
     out = M.advance(st, 10, { rng: Math.random, sunMinutes: 0 });
     assert.equal(out.find((e) => e.type === 'vitals'), undefined, 'no burn in shade');
+    out = M.advance(st, 10, { rng: Math.random, holyMinutes: 10 });
+    assert.equal(out.find((e) => e.type === 'vitals').health, 24, '12 health per 4 minutes on holy ground');
+    assert.equal(out.find((e) => e.type === 'vitals').magicka, 0, 'the curse brings no light/darkness magery (career-only in DFU)');
+    assert.equal(st.holy, 2, 'remainder carried');
     assert.equal(M.cure(st, 'vampirism'), 1);
     assert.equal(st.previousClanFactionId, 157);
     assert.equal(M.attributePenalty(st, 'Strength'), 0);
@@ -361,6 +365,38 @@ describe('runtime: exposure, clocks, cures and isolation', () => {
     assert.equal(t.S.restPrevented(p), null);
     assert.equal(t.S.cureCondition(p, 'vampirism'), 1);
     assert.equal(t.S.conditionStatus(p).previousClanFactionId, 150);
+  });
+
+  test('vampire: holy ground burns 12 health per 4 minutes in a temple or Fighter Trainers hall, day or night', () => {
+    const t = stack();
+    const p = t.join(1);
+    const mortal = t.join(2);
+    const TEMPLE = 'interior:Daggerfall/Gothway Garden/7';
+    const TRAINERS = 'interior:Daggerfall/Gothway Garden/8';
+    const SHOP = 'interior:Daggerfall/Gothway Garden/9';
+    const metas = { [TEMPLE]: { buildingType: 14 }, [TRAINERS]: { buildingType: 11, factionId: 849 }, [SHOP]: { buildingType: 9, factionId: 0 } };
+    t.S.portals = { ...(t.S.portals ?? {}), into: (loc) => (metas[loc] ? { meta: metas[loc] } : null) };
+    t.S.deploySupernatural(p, 'vampirism', { clan: 150 });
+    while (!t.S.worldClock().isNight) t.pass(30); // night: sunlight plays no part
+    for (const q of [p, mortal]) q.rpg.location = TEMPLE;
+    t.pass(1);
+    const hp0 = p.rpg.character.health;
+    const mortal0 = mortal.rpg.character.health;
+    t.pass(8);
+    assert.equal(hp0 - p.rpg.character.health, 24, 'two holy rounds in 8 minutes');
+    assert.ok(t.events(1, 'holy').length > 0, 'the vampire is told why');
+    assert.equal(mortal.rpg.character.health, mortal0, 'a mortal is not harmed');
+    p.rpg.location = TRAINERS;
+    t.pass(1);
+    const hp1 = p.rpg.character.health;
+    t.pass(4);
+    assert.equal(hp1 - p.rpg.character.health, 12, 'a Fighter Trainers hall is holy ground (PlayerEnterExit)');
+    p.rpg.location = SHOP;
+    t.pass(1);
+    const hp2 = p.rpg.character.health;
+    t.pass(8);
+    assert.equal(p.rpg.character.health, hp2, 'an ordinary shop is not');
+    assert.equal(p.rpg.conditions.holy, 0, 'leaving holy ground clears the remainder');
   });
 
   test('vampire awakening retries a failed save without charging the personal fortnight twice', () => {

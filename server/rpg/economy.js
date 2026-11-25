@@ -132,7 +132,10 @@ export function install(ctx) {
     if (ev) ctx.notify(p, ev);
     // A reconnect (or restart) inside the shop finds its basket where it left it.
     const shop = ev ? ledger()?.peek(location) : null;
-    if (shop && basketOf(shop, p.id)?.lines.size) sendBasket(p, location);
+    if (shop && basketOf(shop, p.id)?.lines.size) {
+      sendBasket(p, location);
+      talkBack(p, location); // a conversation opened before this announce shows the checkout reply now
+    }
   }
 
   /** The shelf `n` the player stands at, the shop's keeper and the ledger, validated. */
@@ -221,7 +224,9 @@ export function install(ctx) {
 
   services.shopBasketFor = (p, keeper) => {
     const location = ctx.location(p);
-    if (!keeper || keeper.location !== location || !shelvesAt(location)) return null;
+    // No shelves check: right after a reconnect the interior survey (shelves) can still be pending while the keeper
+    // and the ledger's basket are already live; the keeper match below is what ties the basket to this conversation.
+    if (!keeper || keeper.location !== location) return null;
     const L = ledger();
     if (!L || L.keeperAt(location)?.id !== keeper.id) return null;
     const shop = L.peek(location);

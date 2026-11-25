@@ -452,7 +452,6 @@ export function install(ctx, options = {}) {
     for (const item of items) {
       const refusal = repairRefusal(item);
       if (refusal) fail(refusal);
-      if (item.equipped) fail(`Unequip ${item.name} first.`);
     }
     if (ts.repairs.length + items.length > MAX_REPAIRS) fail('You already have too many items with smiths.');
     const rank = typeof services.guildRank === 'function' ? services.guildRank(p, 'fighters') : null;
@@ -466,7 +465,8 @@ export function install(ctx, options = {}) {
     services.takeGold(p, cost);
     const minutes = repairBatchMinutes(items);
     const tickets = items.map((item, i) => {
-      const rec = services.takeItem(p, item.id, 1);
+      // An equipped item is taken off as it is handed over; the action's rollback re-equips it on failure.
+      const rec = services.takeItem(p, item.id, 1, { allowEquipped: true });
       if (!rec || rec.id !== item.id) fail('The smith could not take that item.');
       const ticket = { ticket: `rp${(++ts.seq).toString(36)}`, counterId: counter.id, town: place.town, shop: counter.name, item: rec, cost: costs[i], leftAt: now, readyAt: now + minutes[i] };
       ts.repairs.push(ticket);
