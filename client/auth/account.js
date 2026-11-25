@@ -6,6 +6,8 @@
 //   bootstrap /api/me and after every sign-in / sign-out. `document.body.dataset.account` mirrors it
 //   ('pending' | 'in' | 'out') so the shell and CSS can gate entry.
 // - window.dfwAccount = { user, ready: Promise<user|null>, refresh(), logout() } for the shell.
+// - Stays in step with other tabs (BroadcastChannel) and re-checks /api/me when the tab becomes
+//   visible again, so a sign-out elsewhere or an expired session shows up without a reload.
 //
 // Mount point: the landing panel (#screen-landing .panel), before the join form; else <body>.
 
@@ -281,6 +283,7 @@ async function onSubmit(ev) {
     const data = await api(reg ? '/api/register' : '/api/login', creds);
     setBusy(false);
     setUser(data.user);
+    announce();
     feedback(reg ? `Welcome, ${data.user.username}. Your account is ready.` : `Welcome back, ${data.user.username}.`, 'ok');
     root.querySelector('button')?.focus();
   } catch (err) {
@@ -304,6 +307,7 @@ async function onLogout() {
     setBusy(false);
     mode = 'signin';
     setUser(null);
+    announce();
     feedback('You have logged out.', 'ok');
     refs.username?.focus();
   } catch (err) {
@@ -322,6 +326,32 @@ async function refresh() {
   }
   return user;
 }
+
+// Cross-tab and expiry sync. Only a definite answer from /api/me changes state: a network blip
+// must never sign the player out (that would also drop them out of the world).
+const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('dfw-account') : null;
+function announce() {
+  try { channel?.postMessage('changed'); } catch {}
+}
+
+async function sync() {
+  if (busy || !bootstrapped) return;
+  let data;
+  try {
+    data = await api('/api/me');
+  } catch {
+    return;
+  }
+  const next = data.user ?? null;
+  if ((next?.id ?? null) === (user?.id ?? null)) return; // unchanged: keep anything typed in the form
+  if (!next) mode = 'signin';
+  setUser(next, { muted: data.muted ?? null });
+  feedback(next ? `Signed in as ${next.username} in another tab.` : 'You were signed out, in another tab or because your session ended.', 'info');
+}
+channel?.addEventListener('message', sync);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') sync();
+});
 
 function mount() {
   if (!document.querySelector(`link[href="${STYLE_HREF}"]`)) {

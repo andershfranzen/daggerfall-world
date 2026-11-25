@@ -5,6 +5,7 @@
 import { Identity, cleanDisplayName, nameProblem } from './lib/identity.js';
 import { selectArena2, readDroppedEntries } from './lib/files.js';
 import { discoverInstalledArena2, isLoopbackPage } from './lib/local-assets.js';
+import { createArena2Store, folderPermission, readDirectoryHandle } from './lib/arena2-store.js';
 import { Connection, CLOSE, describeClose } from './lib/net.js';
 import { Predictor, SnapshotBuffer, InputSender, wrapAngle, clamp } from './lib/motion.js';
 import { indoorFloor, groundFor, offsetGround, layersHeightAt } from './lib/ground.js';
@@ -28,6 +29,7 @@ const ui = {
   landing: $('screen-landing'), loading: $('screen-loading'), failure: $('screen-failure'), hud: $('hud'),
   form: $('join-form'), name: $('name-input'), nameNote: $('name-note'),
   drop: $('data-drop'), pick: $('data-pick'), dataStatus: $('data-status'), dataInput: $('data-input'),
+  resume: $('data-resume'), forget: $('data-forget'), cacheBox: $('data-cache'), cacheField: $('data-cache-field'), cacheStatus: $('data-cache-status'),
   enter: $('enter-btn'), formError: $('form-error'),
   nameField: $('name-field'), accountGate: $('account-gate'),
   loadingTitle: $('loading-title'), steps: $('loading-steps'), loadingDetail: $('loading-detail'), loadingCancel: $('loading-cancel'),
@@ -186,8 +188,9 @@ function describeData(sel) {
     ui.dataStatus.textContent = sel.problem;
     return;
   }
-  const where = sel.dir ? `“${sel.dir}”` : 'the selected folder';
+  const where = sel.source === 'cache' ? 'the copy saved in this browser' : sel.dir ? `“${sel.dir}”` : 'the selected folder';
   ui.drop.dataset.source = sel.source || 'folder';
+  ui.cacheField.hidden = sel.source === 'installed'; // the server's own files are never copied
   if (sel.source === 'installed' && !sel.missing.length) {
     ui.drop.dataset.state = 'ready';
     ui.dataStatus.textContent = `Installed game files ready — ${sel.files.length} files from ARENA2 on this computer.`;
@@ -198,7 +201,7 @@ function describeData(sel) {
     ui.drop.dataset.state = 'ready';
     ui.dataStatus.textContent = `Ready: ${sel.files.length} files from ${where}.`;
   }
-  ui.pick.textContent = 'Choose a different folder…';
+  ui.pick.textContent = 'Change folder…';
 }
 
 // Bumped by every data source (folder pick, drop, installed discovery) so a slow discovery
@@ -218,6 +221,9 @@ function acceptData(items, source = 'folder') {
     if (!sel.problem) {
       api.files = sel.files;
       api.emit('assets', sel.files);
+      savedFolder = null; // a working folder supersedes a pending "Resume saved folder"
+      ui.resume.hidden = true;
+      cacheSelection();
     }
   }
   ui.formError.hidden = true;
@@ -231,7 +237,7 @@ function sameFiles(a, b) {
   return b.every((f) => set.has(key(f)));
 }
 
-ui.pick.addEventListener('click', () => ui.dataInput.click());
+ui.pick.addEventListener('click', pickFolder);
 
 // Localhost only: adopt the server operator's installed ARENA2 (server/local-assets.js) through the
 // same acceptData path a folder pick uses. Metadata only; bytes are read lazily by the game readers.
@@ -245,11 +251,175 @@ async function discoverInstalledData() {
   refreshLanding();
   if (seq !== dataSeq || S.data) return; // the player chose or dropped a folder meanwhile
   if (!found) {
-    ui.dataStatus.textContent = 'Select the ARENA2 folder from your Daggerfall install, or the install folder that contains it. You can also drop the folder here.';
+    ui.dataStatus.textContent = DATA_PROMPT;
     return;
   }
   acceptData(found.files, 'installed');
 }
+
+// ------------------------------------------------ saved folder and local copy (lib/arena2-store.js)
+// Both live only in this browser (IndexedDB / origin private file system); nothing is uploaded.
+
+const DATA_PROMPT = 'Select the ARENA2 folder from your Daggerfall install, or the install folder that contains it. You can also drop the folder here.';
+const arena2Store = createArena2Store();
+const canPickDir = typeof window.showDirectoryPicker === 'function';
+const KEEP_COPY = 'dfw.arena2.keepCopy'; // per-browser preference only
+let savedFolder = null; // { handle, name } waiting for a "Resume" click to grant permission
+let caching = null; // AbortController of the copy in progress
+let cacheRun = Promise.resolve();
+
+const setCacheStatus = (text) => (ui.cacheStatus.textContent = text);
+function keepCopyPref() {
+  try {
+    const v = localStorage.getItem(KEEP_COPY);
+    if (v !== null) return v === '1';
+  } catch {}
+  return !canPickDir; // browsers without saved folder handles rely on the copy; Chromium opts in
+}
+ui.cacheBox.checked = keepCopyPref();
+
+async function refreshSaved() {
+  const [folder, cache] = await Promise.all([arena2Store.loadSavedFolder(), arena2Store.cacheInfo()]);
+  ui.forget.hidden = !folder && !cache;
+}
+
+async function stopCaching() {
+  caching?.abort();
+  await cacheRun;
+}
+
+/** Copy the current selection into this browser when the player opted in. */
+function cacheSelection() {
+  const sel = S.data;
+  if (!ui.cacheBox.checked || !sel || sel.problem || sel.source === 'installed' || sel.source === 'cache') return;
+  caching?.abort();
+  const ctl = (caching = new AbortController());
+  const prev = cacheRun;
+  const total = sel.files.length;
+  cacheRun = (async () => {
+    await prev; // one copy at a time: an aborted run clears its files before the next writes
+    if (ctl.signal.aborted) return;
+    setCacheStatus(`Saving a copy in this browser… 0 of ${total} files`);
+    const res = await arena2Store.cacheFiles(sel.files, {
+      dir: sel.dir, signal: ctl.signal,
+      onProgress: ({ stored }) => setCacheStatus(`Saving a copy in this browser… ${stored} of ${total} files`),
+    });
+    if (caching === ctl) caching = null;
+    if (res.ok) setCacheStatus('Saved a copy in this browser. Next time the world loads without choosing the folder.');
+    else if (res.reason === 'quota') setCacheStatus('Not enough browser storage for a copy. You can still play; you will choose the folder again next visit.');
+    else if (res.reason !== 'aborted') setCacheStatus('Could not save a copy in this browser. You can still play.');
+    await refreshSaved();
+  })();
+}
+
+/** The cached files are about to be deleted: stop using them. */
+function dropCachedData() {
+  if (S.data?.source !== 'cache') return;
+  dataSeq++;
+  S.data = null;
+  api.files = [];
+  delete ui.drop.dataset.source;
+  ui.drop.dataset.state = 'empty';
+  ui.dataStatus.textContent = DATA_PROMPT;
+  ui.pick.textContent = 'Choose ARENA2 folder…';
+  refreshLanding();
+}
+
+ui.cacheBox.addEventListener('change', async () => {
+  try { localStorage.setItem(KEEP_COPY, ui.cacheBox.checked ? '1' : '0'); } catch {}
+  if (ui.cacheBox.checked) return cacheSelection();
+  await stopCaching();
+  dropCachedData();
+  await arena2Store.clearCache();
+  setCacheStatus('');
+  refreshSaved();
+});
+
+/** Read a directory handle (picked now or saved earlier) and remember it on success. */
+async function useHandle(handle) {
+  const seq = ++dataSeq;
+  ui.dataStatus.textContent = `Reading “${handle.name}”…`;
+  let entries;
+  try {
+    entries = await readDirectoryHandle(handle);
+  } catch (err) {
+    if (seq !== dataSeq) return;
+    ui.drop.dataset.state = 'error';
+    ui.dataStatus.textContent = `Could not read “${handle.name}” (${err.message}). Choose the folder again.`;
+    return;
+  }
+  if (seq !== dataSeq) return; // the player chose something else meanwhile
+  acceptData(entries);
+  if (S.data.problem) return;
+  await arena2Store.saveHandle(handle).catch(() => {});
+  refreshSaved();
+}
+
+/** Folder picker: a saved-able directory handle on Chromium, <input webkitdirectory> elsewhere. */
+async function pickFolder() {
+  if (!canPickDir) return ui.dataInput.click();
+  let handle;
+  try {
+    handle = await window.showDirectoryPicker({ id: 'dfw-arena2', mode: 'read' });
+  } catch (err) {
+    if (err?.name !== 'AbortError') ui.dataInput.click(); // e.g. blocked in a frame: classic picker
+    return;
+  }
+  await useHandle(handle);
+}
+
+/** Return visit: the local copy first (fastest), else the saved folder handle. */
+async function restoreSavedData() {
+  const seq = dataSeq;
+  const stale = () => seq !== dataSeq || !!S.data; // installed files, a pick or a drop won
+  if (await arena2Store.cacheInfo()) {
+    if (stale()) return refreshSaved();
+    ui.dataStatus.textContent = 'Loading the copy saved in this browser…';
+    const entries = await arena2Store.loadCache();
+    if (stale()) return refreshSaved();
+    if (entries) {
+      acceptData(entries, 'cache');
+      return refreshSaved();
+    }
+    await arena2Store.clearCache();
+    ui.dataStatus.textContent = DATA_PROMPT;
+    setCacheStatus('The copy saved in this browser was incomplete and has been removed.');
+  }
+  const saved = canPickDir ? await arena2Store.loadSavedFolder() : null;
+  if (saved && !stale()) {
+    const perm = await folderPermission(saved.handle);
+    if (stale()) return refreshSaved();
+    if (perm === 'granted') {
+      await useHandle(saved.handle);
+    } else if (perm === 'prompt') {
+      savedFolder = saved;
+      ui.resume.textContent = `Resume saved folder (${saved.name})`;
+      ui.resume.hidden = false;
+      ui.dataStatus.textContent = `Your browser needs permission to read “${saved.name}” again. Click Resume, or choose another folder.`;
+    } else {
+      ui.dataStatus.textContent = `This browser blocked access to “${saved.name}”. Choose the folder again.`;
+    }
+  }
+  refreshSaved();
+}
+
+ui.resume.addEventListener('click', async () => {
+  const saved = savedFolder;
+  if (!saved) return;
+  if ((await folderPermission(saved.handle, { request: true })) === 'granted') return useHandle(saved.handle);
+  ui.dataStatus.textContent = `Permission to read “${saved.name}” was not given. Click Resume to try again, or choose the folder.`;
+});
+
+ui.forget.addEventListener('click', async () => {
+  await stopCaching();
+  await arena2Store.forget();
+  savedFolder = null;
+  ui.resume.hidden = true;
+  dropCachedData();
+  setCacheStatus('Forgot the saved folder and deleted the copy from this browser.');
+  await refreshSaved();
+  ui.pick.focus();
+});
 ui.dataInput.addEventListener('change', () => {
   if (ui.dataInput.files && ui.dataInput.files.length) acceptData(ui.dataInput.files);
   ui.dataInput.value = '';
@@ -604,7 +774,7 @@ ui.loadingCancel.addEventListener('click', () => {
 ui.failRetry.addEventListener('click', () => S.failureRetry?.());
 ui.failFolder.addEventListener('click', () => {
   showScreen('landing');
-  ui.dataInput.click();
+  pickFolder();
 });
 ui.failBack.addEventListener('click', () => showScreen('landing'));
 
@@ -1534,7 +1704,7 @@ setConn('idle');
 (ui.name.value ? ui.pick : ui.name).focus();
 requestAnimationFrame(frame);
 loadAccounts();
-discoverInstalledData();
+discoverInstalledData().then(restoreSavedData);
 
 // Gameplay features (client/gameplay/features.js manifest). Failures are isolated per feature.
 featuresReady = (async () => {
