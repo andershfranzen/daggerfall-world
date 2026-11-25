@@ -413,56 +413,9 @@ function readBody(req, limit) {
   });
 }
 
-// ---------------------------------------------------------------- service
+// ---------------------------------------------------------------- shared runtime helpers
 
-export function createAccounts(options = {}) {
-  const cfg = { ...ACCOUNT_DEFAULTS, ...options, limits: { ...ACCOUNT_DEFAULTS.limits, ...options.limits } };
-  const now = cfg.now;
-  const store = options.store ?? openAccountStore(cfg.dbPath);
-  const mod = moderation(store, now);
-  const cookieName = cfg.secureCookies ? COOKIE_SECURE : COOKIE_INSECURE;
-  const limiters = Object.fromEntries(
-    Object.entries(cfg.limits).map(([k, [max, win]]) => [k, createLimiter(max, win, now)])
-  );
-  // Constant-cost dummy for unknown account names, so login timing does not reveal which names exist.
-  const dummyHash = hashPassword(randomBytes(16).toString('hex'), cfg.scrypt);
-
-  // Moderation fan-out. PRAGMA data_version changes when another connection (the CLI) commits.
-  const listeners = new Set();
-  let lastLogId = Number(store.q.logMax.get().id);
-  let lastDataVersion = Number(Object.values(store.q.dataVersion.get())[0]);
-  function drainModeration() {
-    if (!store.db.isOpen) return;
-    const rows = store.q.logSince.all(lastLogId);
-    for (const row of rows) {
-      lastLogId = Number(row.id);
-      if (row.action !== 'ban' && row.action !== 'revoke') continue;
-      const event = { accountId: Number(row.account_id), action: row.action };
-      for (const fn of listeners) {
-        try {
-          fn(event);
-        } catch (err) {
-          console.error('[accounts] moderation listener failed:', err.message);
-        }
-      }
-    }
-  }
-  const pollTimer = cfg.moderationPollMs > 0
-    ? setInterval(() => {
-        if (!store.db.isOpen) return;
-        const v = Number(Object.values(store.q.dataVersion.get())[0]);
-        if (v !== lastDataVersion) {
-          lastDataVersion = v;
-          drainModeration();
-        }
-      }, cfg.moderationPollMs)
-    : null;
-  pollTimer?.unref();
-  const sweepTimer = setInterval(() => {
-    if (store.db.isOpen) store.q.sessExpire.run(now());
-  }, 3600_000);
-  sweepTimer.unref();
-
+function createHttpHelpers(cfg, cookieName) {
   function clientIp(req) {
     if (cfg.trustProxy) {
       const xff = req.headers['x-forwarded-for'];
@@ -504,6 +457,181 @@ export function createAccounts(options = {}) {
     return t && TOKEN_RE.test(t) ? t : null;
   }
 
+  function limited(res, ms, message = 'Too many attempts. Please wait and try again.') {
+    sendJson(res, 429, { error: message }, { 'Retry-After': String(Math.max(1, Math.ceil(ms / 1000))) });
+  }
+
+  async function jsonBody(req) {
+    const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+    if (type !== 'application/json') throw Object.assign(new Error('expected application/json'), { status: 415 });
+    const text = await readBody(req, cfg.maxBodyBytes);
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw Object.assign(new Error('invalid JSON'), { status: 400 });
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw Object.assign(new Error('expected a JSON object'), { status: 400 });
+    }
+    return body;
+  }
+
+  return { clientIp, isHttps, sameOrigin, cookie, tokenFrom, limited, jsonBody };
+}
+
+function createSocketTracker(cfg) {
+  // Live upgraded sockets per session id, for the logout fallback. Entries leave on socket close.
+  const sessionSockets = new Map(); // sid -> Set<net.Socket>
+  const sessionListeners = new Set();
+  const deleteListeners = new Set();
+
+  function notifyAccountDelete(accountId, username) {
+    const event = { accountId, username };
+    for (const fn of deleteListeners) {
+      try {
+        fn(event);
+      } catch (err) {
+        console.error('[accounts] account delete listener failed:', err.message);
+      }
+    }
+  }
+
+  function trackSocket(sid, socket) {
+    if (!socket || typeof socket.once !== 'function' || socket.destroyed) return;
+    let set = sessionSockets.get(sid);
+    if (!set) sessionSockets.set(sid, (set = new Set()));
+    if (set.has(socket)) return;
+    set.add(socket);
+    socket.once('close', () => {
+      set.delete(socket);
+      if (!set.size && sessionSockets.get(sid) === set) sessionSockets.delete(sid);
+    });
+  }
+
+  // Unmasked server close frame (RFC 6455 §5.5.1). Node writes each frame atomically with respect
+  // to the ws library's own writes (both are synchronous socket.write calls on one thread).
+  function closeFrame(code, reason) {
+    const text = Buffer.from(reason, 'utf8').subarray(0, 123);
+    const frame = Buffer.alloc(4 + text.length);
+    frame[0] = 0x88;
+    frame[1] = 2 + text.length;
+    frame.writeUInt16BE(code, 2);
+    text.copy(frame, 4);
+    return frame;
+  }
+
+  function endSession(accountId, sid, reason) {
+    const sockets = sessionSockets.get(sid);
+    sessionSockets.delete(sid);
+    const event = { accountId, sessionKey: String(sid), reason };
+    if (sessionListeners.size) {
+      for (const fn of sessionListeners) {
+        try {
+          fn(event);
+        } catch (err) {
+          console.error('[accounts] session listener failed:', err.message);
+        }
+      }
+      return;
+    }
+    for (const socket of sockets ?? []) {
+      if (socket.destroyed) continue;
+      try {
+        if (socket.writable) socket.write(closeFrame(cfg.sessionEndCloseCode, 'signed out'));
+        socket.end();
+        setTimeout(() => socket.destroy(), 1000).unref();
+      } catch {
+        socket.destroy();
+      }
+    }
+  }
+
+  return { sessionSockets, sessionListeners, deleteListeners, notifyAccountDelete, trackSocket, endSession };
+}
+
+function createHttpDispatcher(routes, helpers, limiters, cfg) {
+  const { clientIp, isHttps, sameOrigin, limited } = helpers;
+  return async function handleHttp(req, res) {
+    try {
+      const path = String(req.url ?? '').split('?')[0];
+      const route = routes[path];
+      if (!route) return sendJson(res, 404, { error: 'not found' });
+      const fn = route[req.method];
+      if (!fn) return sendJson(res, 405, { error: 'method not allowed' }, { Allow: Object.keys(route).join(', ') });
+      const ip = clientIp(req);
+      const wait = limiters.api.hit(ip);
+      if (wait) return limited(res, wait, 'Too many requests. Please slow down.');
+      if (req.method === 'POST') {
+        if (!sameOrigin(req)) return sendJson(res, 403, { error: 'cross-origin request refused' });
+        if (cfg.secureCookies && cfg.requireHttps && !isHttps(req)) {
+          return sendJson(res, 403, { error: 'HTTPS required' });
+        }
+      }
+      await fn(req, res);
+    } catch (err) {
+      if (res.headersSent) return res.end();
+      if (err.status) return sendJson(res, err.status, { error: err.message });
+      console.error('[accounts] request failed:', err);
+      sendJson(res, 500, { error: 'internal error' });
+    }
+  };
+}
+
+// ---------------------------------------------------------------- service
+
+export function createAccounts(options = {}) {
+  const cfg = { ...ACCOUNT_DEFAULTS, ...options, limits: { ...ACCOUNT_DEFAULTS.limits, ...options.limits } };
+  const now = cfg.now;
+  const store = options.store ?? openAccountStore(cfg.dbPath);
+  const mod = moderation(store, now);
+  const cookieName = cfg.secureCookies ? COOKIE_SECURE : COOKIE_INSECURE;
+  const limiters = Object.fromEntries(
+    Object.entries(cfg.limits).map(([k, [max, win]]) => [k, createLimiter(max, win, now)])
+  );
+  // Constant-cost dummy for unknown account names, so login timing does not reveal which names exist.
+  const dummyHash = hashPassword(randomBytes(16).toString('hex'), cfg.scrypt);
+  const http = createHttpHelpers(cfg, cookieName);
+  const { clientIp, cookie, tokenFrom, limited, jsonBody } = http;
+  const tracker = createSocketTracker(cfg);
+  const { sessionSockets, sessionListeners, deleteListeners, notifyAccountDelete, trackSocket, endSession } = tracker;
+
+  // Moderation fan-out. PRAGMA data_version changes when another connection (the CLI) commits.
+  const listeners = new Set();
+  let lastLogId = Number(store.q.logMax.get().id);
+  let lastDataVersion = Number(Object.values(store.q.dataVersion.get())[0]);
+  function drainModeration() {
+    if (!store.db.isOpen) return;
+    const rows = store.q.logSince.all(lastLogId);
+    for (const row of rows) {
+      lastLogId = Number(row.id);
+      if (row.action !== 'ban' && row.action !== 'revoke') continue;
+      const event = { accountId: Number(row.account_id), action: row.action };
+      for (const fn of listeners) {
+        try {
+          fn(event);
+        } catch (err) {
+          console.error('[accounts] moderation listener failed:', err.message);
+        }
+      }
+    }
+  }
+  const pollTimer = cfg.moderationPollMs > 0
+    ? setInterval(() => {
+        if (!store.db.isOpen) return;
+        const v = Number(Object.values(store.q.dataVersion.get())[0]);
+        if (v !== lastDataVersion) {
+          lastDataVersion = v;
+          drainModeration();
+        }
+      }, cfg.moderationPollMs)
+    : null;
+  pollTimer?.unref();
+  const sweepTimer = setInterval(() => {
+    if (store.db.isOpen) store.q.sessExpire.run(now());
+  }, 3600_000);
+  sweepTimer.unref();
+
   /** Session lookup shared by /api/me and the WebSocket upgrade. Applies sliding renewal. */
   function sessionFor(req) {
     const token = tokenFrom(req);
@@ -532,26 +660,6 @@ export function createAccounts(options = {}) {
       store.q.touchLogin.run(t, accountId);
     });
     return cookie(token, Math.floor(cfg.sessionTtlMs / 1000));
-  }
-
-  function limited(res, ms, message = 'Too many attempts. Please wait and try again.') {
-    sendJson(res, 429, { error: message }, { 'Retry-After': String(Math.max(1, Math.ceil(ms / 1000))) });
-  }
-
-  async function jsonBody(req) {
-    const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
-    if (type !== 'application/json') throw Object.assign(new Error('expected application/json'), { status: 415 });
-    const text = await readBody(req, cfg.maxBodyBytes);
-    let body;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      throw Object.assign(new Error('invalid JSON'), { status: 400 });
-    }
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      throw Object.assign(new Error('expected a JSON object'), { status: 400 });
-    }
-    return body;
   }
 
   function mutedPayload(id) {
@@ -795,72 +903,6 @@ export function createAccounts(options = {}) {
     sendJson(res, 200, { user: s ? s.user : null, ...(muted ? { muted } : {}) }, headers);
   }
 
-  // Live upgraded sockets per session id, for the logout fallback. Entries leave on socket close.
-  const sessionSockets = new Map(); // sid -> Set<net.Socket>
-  const sessionListeners = new Set();
-  const deleteListeners = new Set();
-
-  function notifyAccountDelete(accountId, username) {
-    const event = { accountId, username };
-    for (const fn of deleteListeners) {
-      try {
-        fn(event);
-      } catch (err) {
-        console.error('[accounts] account delete listener failed:', err.message);
-      }
-    }
-  }
-
-  function trackSocket(sid, socket) {
-    if (!socket || typeof socket.once !== 'function' || socket.destroyed) return;
-    let set = sessionSockets.get(sid);
-    if (!set) sessionSockets.set(sid, (set = new Set()));
-    if (set.has(socket)) return;
-    set.add(socket);
-    socket.once('close', () => {
-      set.delete(socket);
-      if (!set.size && sessionSockets.get(sid) === set) sessionSockets.delete(sid);
-    });
-  }
-
-  // Unmasked server close frame (RFC 6455 §5.5.1). Node writes each frame atomically with respect
-  // to the ws library's own writes (both are synchronous socket.write calls on one thread).
-  function closeFrame(code, reason) {
-    const text = Buffer.from(reason, 'utf8').subarray(0, 123);
-    const frame = Buffer.alloc(4 + text.length);
-    frame[0] = 0x88;
-    frame[1] = 2 + text.length;
-    frame.writeUInt16BE(code, 2);
-    text.copy(frame, 4);
-    return frame;
-  }
-
-  function endSession(accountId, sid, reason) {
-    const sockets = sessionSockets.get(sid);
-    sessionSockets.delete(sid);
-    const event = { accountId, sessionKey: String(sid), reason };
-    if (sessionListeners.size) {
-      for (const fn of sessionListeners) {
-        try {
-          fn(event);
-        } catch (err) {
-          console.error('[accounts] session listener failed:', err.message);
-        }
-      }
-      return;
-    }
-    for (const socket of sockets ?? []) {
-      if (socket.destroyed) continue;
-      try {
-        if (socket.writable) socket.write(closeFrame(cfg.sessionEndCloseCode, 'signed out'));
-        socket.end();
-        setTimeout(() => socket.destroy(), 1000).unref();
-      } catch {
-        socket.destroy();
-      }
-    }
-  }
-
   const routes = {
     '/api/me': { GET: me, HEAD: me },
     '/api/register': { POST: register },
@@ -874,34 +916,12 @@ export function createAccounts(options = {}) {
     '/api/recover': { POST: recover },
   };
 
-  async function handleHttp(req, res) {
-    try {
-      const path = String(req.url ?? '').split('?')[0];
-      const route = routes[path];
-      if (!route) return sendJson(res, 404, { error: 'not found' });
-      const fn = route[req.method];
-      if (!fn) return sendJson(res, 405, { error: 'method not allowed' }, { Allow: Object.keys(route).join(', ') });
-      const ip = clientIp(req);
-      const wait = limiters.api.hit(ip);
-      if (wait) return limited(res, wait, 'Too many requests. Please slow down.');
-      if (req.method === 'POST') {
-        if (!sameOrigin(req)) return sendJson(res, 403, { error: 'cross-origin request refused' });
-        if (cfg.secureCookies && cfg.requireHttps && !isHttps(req)) {
-          return sendJson(res, 403, { error: 'HTTPS required' });
-        }
-      }
-      await fn(req, res);
-    } catch (err) {
-      if (res.headersSent) return res.end();
-      if (err.status) return sendJson(res, err.status, { error: err.message });
-      console.error('[accounts] request failed:', err);
-      sendJson(res, 500, { error: 'internal error' });
-    }
-  }
+  const handleHttp = createHttpDispatcher(routes, http, limiters, cfg);
 
   return {
     config: cfg,
     cookieName,
+    store,
     handleHttp,
     resolveUpgrade(req) {
       try {
@@ -971,6 +991,465 @@ export function createAccounts(options = {}) {
       deleteListeners.clear();
       sessionSockets.clear();
       store.close();
+    },
+  };
+}
+
+// ---------------------------------------------------------------- PostgreSQL accounts service
+
+export async function createPostgresAccounts(options = {}) {
+  const cfg = {
+    ...ACCOUNT_DEFAULTS,
+    ...options,
+    backend: 'postgres',
+    limits: { ...ACCOUNT_DEFAULTS.limits, ...options.limits },
+  };
+  const now = cfg.now;
+  const ownsStore = !options.store;
+  const store =
+    options.store ??
+    (await (await import('./storage/postgres-accounts.js')).openPostgresAccountStore({
+      connectionString: options.connectionString ?? options.databaseUrl,
+      pool: options.pool ?? null,
+      poolOptions: options.poolOptions,
+      applySchema: options.applySchema ?? true,
+      schemaSql: options.schemaSql ?? null,
+      now,
+    }));
+
+  const cookieName = cfg.secureCookies ? COOKIE_SECURE : COOKIE_INSECURE;
+  const limiters = Object.fromEntries(
+    Object.entries(cfg.limits).map(([k, [max, win]]) => [k, createLimiter(max, win, now)]),
+  );
+  const dummyHash = hashPassword(randomBytes(16).toString('hex'), cfg.scrypt);
+  const http = createHttpHelpers(cfg, cookieName);
+  const { clientIp, cookie, tokenFrom, limited, jsonBody } = http;
+  const tracker = createSocketTracker(cfg);
+  const { sessionSockets, sessionListeners, deleteListeners, notifyAccountDelete, trackSocket, endSession } = tracker;
+
+  // Synchronous mute cache hydrated on login, resolveUpgrade, /api/me, mute/unmute, and LISTEN/NOTIFY.
+  const muteCache = new Map(); // String(accountId) -> mutedUntil ms (FOREVER for permanent mute)
+  function setMuteCache(accountId, until) {
+    const key = String(accountId);
+    if (until == null) {
+      muteCache.delete(key);
+      return;
+    }
+    const n = Number(until);
+    if (!Number.isFinite(n) || n <= now()) {
+      muteCache.delete(key);
+      return;
+    }
+    muteCache.set(key, n);
+  }
+
+  // Real-time moderation fan-out via PostgreSQL LISTEN/NOTIFY (deduplicated by moderation_log.id).
+  const listeners = new Set();
+  const seenModIds = new Set();
+  function handleModerationEvent(ev) {
+    if (!ev || typeof ev !== 'object') return;
+    if (ev.id != null) {
+      const modId = Number(ev.id);
+      if (seenModIds.has(modId)) return;
+      seenModIds.add(modId);
+      if (seenModIds.size > 1000) {
+        const oldest = seenModIds.values().next().value;
+        seenModIds.delete(oldest);
+      }
+    }
+    const accountId = Number(ev.accountId);
+    if (ev.action === 'mute') {
+      setMuteCache(accountId, ev.until == null ? FOREVER : Number(ev.until));
+      return;
+    }
+    if (ev.action === 'unmute') {
+      setMuteCache(accountId, null);
+      return;
+    }
+    if (ev.action !== 'ban' && ev.action !== 'revoke') return;
+    const event = { accountId, action: ev.action };
+    for (const fn of listeners) {
+      try {
+        fn(event);
+      } catch (err) {
+        console.error('[accounts] moderation listener failed:', err.message);
+      }
+    }
+  }
+
+  let closed = false;
+  const unsubscribeListen =
+    typeof store.listenModeration === 'function' ? await store.listenModeration(handleModerationEvent) : null;
+
+  const sweepTimer = setInterval(() => {
+    if (!closed && typeof store.expireSessions === 'function') {
+      store.expireSessions(now()).catch(() => {});
+    }
+  }, 3600_000);
+  sweepTimer.unref();
+
+  async function sessionFor(req) {
+    const token = tokenFrom(req);
+    if (!token) return null;
+    const row = await store.getSession(sha256(token));
+    if (!row) return null;
+    const t = now();
+    if (row.expires_at <= t || row.banned_at != null) {
+      await store.deleteSessionById(row.sid);
+      return null;
+    }
+    let renewed = false;
+    if (t - row.last_seen_at >= cfg.sessionRenewAfterMs) {
+      await store.touchSession(row.sid, t, t + cfg.sessionTtlMs);
+      renewed = true;
+    }
+    return {
+      token,
+      renewed,
+      sid: Number(row.sid),
+      mutedUntil: row.muted_until,
+      user: { id: Number(row.id), username: row.username },
+    };
+  }
+
+  async function startSession(accountId) {
+    const token = randomBytes(32).toString('base64url');
+    await store.createSession(accountId, sha256(token), {
+      ts: now(),
+      ttlMs: cfg.sessionTtlMs,
+      maxSessions: cfg.maxSessionsPerAccount,
+    });
+    return cookie(token, Math.floor(cfg.sessionTtlMs / 1000));
+  }
+
+  async function mutedPayload(id, preloadedUntil = undefined) {
+    const until = preloadedUntil !== undefined ? preloadedUntil : await store.getMuteUntil(id);
+    setMuteCache(id, until);
+    if (until == null || until <= now()) return null;
+    return { until: until === FOREVER ? null : until };
+  }
+
+  async function register(req, res) {
+    const ip = clientIp(req);
+    const body = await jsonBody(req);
+    const { username, password } = body;
+    const uProblem = usernameProblem(username);
+    if (uProblem) return sendJson(res, 400, { error: uProblem, field: 'username' });
+    const pProblem = passwordProblem(password, username, cfg);
+    if (pProblem) return sendJson(res, 400, { error: pProblem, field: 'password' });
+    const wait = limiters.register.check(ip);
+    if (wait) return limited(res, wait, 'Too many new accounts from this network. Please try again later.');
+    if (await store.find(username)) {
+      return sendJson(res, 409, { error: 'That account name is taken.', field: 'username' });
+    }
+    const hash = await hashPassword(password, cfg.scrypt);
+    const recoveryCode = generateRecoveryCode();
+    const recoveryHash = hashRecoveryCode(recoveryCode);
+    let acc;
+    try {
+      acc = await store.createAccount(username, hash, now(), recoveryHash);
+    } catch (err) {
+      if (err.code === '23505' || /UNIQUE|duplicate key/i.test(err.message)) {
+        return sendJson(res, 409, { error: 'That account name is taken.', field: 'username' });
+      }
+      throw err;
+    }
+    limiters.register.hit(ip);
+    const id = Number(acc.id);
+    setMuteCache(id, null);
+    const setCookie = await startSession(id);
+    sendJson(res, 201, { user: { id, username: acc.username }, recoveryCode }, { 'Set-Cookie': setCookie });
+  }
+
+  async function login(req, res) {
+    const ip = clientIp(req);
+    const body = await jsonBody(req);
+    const { username, password } = body;
+    if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
+      return sendJson(res, 400, { error: 'Enter your account name and password.' });
+    }
+    if (username.length > 64 || password.length > cfg.maxPasswordLength * 4) {
+      return sendJson(res, 401, { error: 'Incorrect account name or password.' });
+    }
+    const key = usernameKey(username);
+    const wait = limiters.login.hit(ip) || limiters.loginName.check(key);
+    if (wait) return limited(res, wait);
+    const acc = await store.find(username);
+    const ok = acc
+      ? await verifyPassword(password, acc.password_hash)
+      : (await verifyPassword(password, await dummyHash), false);
+    if (!ok) {
+      limiters.loginName.hit(key);
+      return sendJson(res, 401, { error: 'Incorrect account name or password.' });
+    }
+    if (acc.banned_at != null) {
+      return sendJson(res, 403, {
+        error: acc.ban_reason ? `This account is banned: ${acc.ban_reason}` : 'This account is banned.',
+      });
+    }
+    limiters.loginName.reset(key);
+    setMuteCache(acc.id, acc.muted_until);
+    const setCookie = await startSession(acc.id);
+    sendJson(res, 200, { user: { id: acc.id, username: acc.username } }, { 'Set-Cookie': setCookie });
+  }
+
+  async function logout(req, res) {
+    const token = tokenFrom(req);
+    if (token) {
+      const tokenHash = sha256(token);
+      const row = await store.getSession(tokenHash);
+      await store.deleteSessionByToken(tokenHash);
+      if (row) endSession(Number(row.id), Number(row.sid), 'logout');
+    }
+    sendJson(res, 200, { user: null }, { 'Set-Cookie': cookie('', 0) });
+  }
+
+  async function logoutAll(req, res) {
+    const s = await sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const { sids, logId } = await store.revokeAccountSessions(s.user.id, {
+      reason: 'self logout-all',
+      actor: 'self',
+      ts: now(),
+    });
+    handleModerationEvent({ id: logId, accountId: s.user.id, action: 'revoke' });
+    for (const sid of sids) endSession(s.user.id, sid, 'logout-all');
+    sendJson(res, 200, { user: null, revokedSessions: sids.length }, { 'Set-Cookie': cookie('', 0) });
+  }
+
+  async function verifyCurrentPassword(req, res, s, rawPassword, field = 'password') {
+    if (typeof rawPassword !== 'string' || !rawPassword) {
+      sendJson(res, 400, { error: 'Enter your current password.', field });
+      return null;
+    }
+    if (rawPassword.length > cfg.maxPasswordLength * 4) {
+      sendJson(res, 401, { error: 'Current password is incorrect.', field });
+      return null;
+    }
+    const key = String(s.user.id);
+    const wait = limiters.password.check(key);
+    if (wait) {
+      limited(res, wait);
+      return null;
+    }
+    const acc = await store.get(s.user.id);
+    if (!acc || acc.banned_at != null) {
+      sendJson(res, 401, { error: 'Sign in first.' });
+      return null;
+    }
+    const ok = await verifyPassword(rawPassword, acc.password_hash);
+    if (!ok) {
+      limiters.password.hit(key);
+      sendJson(res, 401, { error: 'Current password is incorrect.', field });
+      return null;
+    }
+    limiters.password.reset(key);
+    return acc;
+  }
+
+  async function changePassword(req, res) {
+    const s = await sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const body = await jsonBody(req);
+    const { currentPassword, newPassword } = body;
+    const acc = await verifyCurrentPassword(req, res, s, currentPassword, 'currentPassword');
+    if (!acc) return;
+    const pProblem = passwordProblem(newPassword, acc.username, cfg);
+    if (pProblem) return sendJson(res, 400, { error: pProblem, field: 'newPassword' });
+    const newHash = await hashPassword(newPassword, cfg.scrypt);
+    const otherSids = await store.changePasswordAndRevokeOthers(acc.id, newHash, s.sid);
+    for (const sid of otherSids) endSession(acc.id, sid, 'password_change');
+    sendJson(res, 200, { ok: true, user: s.user, revokedSessions: otherSids.length });
+  }
+
+  async function rotateRecoveryCode(req, res) {
+    const s = await sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const body = await jsonBody(req);
+    const acc = await verifyCurrentPassword(req, res, s, body.password ?? body.currentPassword, 'password');
+    if (!acc) return;
+    const recoveryCode = generateRecoveryCode();
+    await store.setRecoveryHash(acc.id, hashRecoveryCode(recoveryCode));
+    sendJson(res, 200, { recoveryCode });
+  }
+
+  async function clearRecoveryCode(req, res) {
+    const s = await sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const body = await jsonBody(req);
+    const acc = await verifyCurrentPassword(req, res, s, body.password ?? body.currentPassword, 'password');
+    if (!acc) return;
+    await store.setRecoveryHash(acc.id, null);
+    sendJson(res, 200, { cleared: true });
+  }
+
+  async function deleteAccount(req, res) {
+    const s = await sessionFor(req);
+    if (!s) return sendJson(res, 401, { error: 'Sign in first.' });
+    const body = await jsonBody(req);
+    const acc = await verifyCurrentPassword(req, res, s, body.password ?? body.currentPassword, 'password');
+    if (!acc) return;
+    const sids = await store.deleteAccountAndSessions(acc.id);
+    setMuteCache(acc.id, null);
+    notifyAccountDelete(acc.id, acc.username);
+    for (const sid of sids) endSession(acc.id, sid, 'account_deleted');
+    sendJson(res, 200, { deleted: true, user: null }, { 'Set-Cookie': cookie('', 0) });
+  }
+
+  async function recover(req, res) {
+    const ip = clientIp(req);
+    const body = await jsonBody(req);
+    const { username, recoveryCode, newPassword } = body;
+    if (
+      typeof username !== 'string' || !username ||
+      typeof recoveryCode !== 'string' || !recoveryCode ||
+      typeof newPassword !== 'string' || !newPassword
+    ) {
+      return sendJson(res, 400, { error: 'Enter your account name, recovery code, and new password.' });
+    }
+    const pProblem = passwordProblem(newPassword, username, cfg);
+    if (pProblem) return sendJson(res, 400, { error: pProblem, field: 'newPassword' });
+    if (username.length > 64 || recoveryCode.length > 128) {
+      return sendJson(res, 401, { error: 'Incorrect account name or recovery code.' });
+    }
+    const key = usernameKey(username);
+    const wait = limiters.recover.hit(ip) || limiters.recoverName.check(key);
+    if (wait) return limited(res, wait);
+    const acc = await store.find(username);
+    const ok = verifyRecoveryCode(recoveryCode, acc?.recovery_hash ?? null);
+    if (!ok) {
+      limiters.recoverName.hit(key);
+      return sendJson(res, 401, { error: 'Incorrect account name or recovery code.' });
+    }
+    if (acc.banned_at != null) {
+      return sendJson(res, 403, {
+        error: acc.ban_reason ? `This account is banned: ${acc.ban_reason}` : 'This account is banned.',
+      });
+    }
+    limiters.recoverName.reset(key);
+    const newHash = await hashPassword(newPassword, cfg.scrypt);
+    const nextCode = generateRecoveryCode();
+    const nextHash = hashRecoveryCode(nextCode);
+    const { sids: oldSids, logId } = await store.recoverAccount(acc.id, newHash, nextHash, { ts: now() });
+    handleModerationEvent({ id: logId, accountId: acc.id, action: 'revoke' });
+    for (const sid of oldSids) endSession(acc.id, sid, 'recovery');
+    setMuteCache(acc.id, acc.muted_until);
+    const setCookie = await startSession(acc.id);
+    sendJson(
+      res,
+      200,
+      { user: { id: acc.id, username: acc.username }, recoveryCode: nextCode },
+      { 'Set-Cookie': setCookie },
+    );
+  }
+
+  async function me(req, res) {
+    const s = await sessionFor(req);
+    const headers = {};
+    if (!s && tokenFrom(req)) headers['Set-Cookie'] = cookie('', 0); // drop a dead cookie
+    if (s?.renewed) headers['Set-Cookie'] = cookie(s.token, Math.floor(cfg.sessionTtlMs / 1000));
+    const muted = s ? await mutedPayload(s.user.id, s.mutedUntil) : null;
+    sendJson(res, 200, { user: s ? s.user : null, ...(muted ? { muted } : {}) }, headers);
+  }
+
+  const routes = {
+    '/api/me': { GET: me, HEAD: me },
+    '/api/register': { POST: register },
+    '/api/login': { POST: login },
+    '/api/logout': { POST: logout },
+    '/api/logout-all': { POST: logoutAll },
+    '/api/password': { POST: changePassword },
+    '/api/delete-account': { POST: deleteAccount },
+    '/api/recovery-code': { POST: rotateRecoveryCode },
+    '/api/clear-recovery': { POST: clearRecoveryCode },
+    '/api/recover': { POST: recover },
+  };
+
+  const handleHttp = createHttpDispatcher(routes, http, limiters, cfg);
+
+  return {
+    config: cfg,
+    cookieName,
+    store,
+    handleHttp,
+    async resolveUpgrade(req) {
+      try {
+        const s = await sessionFor(req);
+        if (!s) return null;
+        const mutedUntil = s.mutedUntil !== undefined ? s.mutedUntil : await store.getMuteUntil(s.user.id);
+        setMuteCache(s.user.id, mutedUntil);
+        trackSocket(s.sid, req.socket);
+        return { ...s.user, sessionKey: String(s.sid) };
+      } catch (err) {
+        console.error('[accounts] session lookup failed:', err.message);
+        return null;
+      }
+    },
+    isMuted(accountId) {
+      const key = String(accountId);
+      const until = muteCache.get(key);
+      if (until == null) return false;
+      if (until <= now()) {
+        muteCache.delete(key);
+        return false;
+      }
+      return true;
+    },
+    onSessionEnd(fn) {
+      sessionListeners.add(fn);
+      return () => sessionListeners.delete(fn);
+    },
+    onAccountDelete(fn) {
+      deleteListeners.add(fn);
+      return () => deleteListeners.delete(fn);
+    },
+    onModeration(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    async mute(name, opts) {
+      const r = await store.mute(name, opts);
+      handleModerationEvent({ id: r.logId, accountId: r.id, action: 'mute', until: r.mutedUntil });
+      return r;
+    },
+    async unmute(name, opts) {
+      const r = await store.unmute(name, opts);
+      handleModerationEvent({ id: r.logId, accountId: r.id, action: 'unmute' });
+      return r;
+    },
+    async ban(name, opts) {
+      const r = await store.ban(name, opts);
+      handleModerationEvent({ id: r.logId, accountId: r.id, action: 'ban' });
+      return r;
+    },
+    async unban(name, opts) {
+      return store.unban(name, opts);
+    },
+    async revokeSessions(name, opts) {
+      const r = await store.revokeSessions(name, opts);
+      handleModerationEvent({ id: r.logId, accountId: r.id, action: 'revoke' });
+      return r;
+    },
+    async find(name) {
+      const a = await store.find(name);
+      return a && { id: a.id, username: a.username };
+    },
+    async close() {
+      if (closed) return;
+      closed = true;
+      clearInterval(sweepTimer);
+      if (typeof unsubscribeListen === 'function') {
+        await unsubscribeListen();
+      }
+      listeners.clear();
+      sessionListeners.clear();
+      deleteListeners.clear();
+      sessionSockets.clear();
+      muteCache.clear();
+      seenModIds.clear();
+      if (ownsStore && typeof store.close === 'function') {
+        await store.close();
+      }
     },
   };
 }

@@ -38,6 +38,7 @@ function normSession(row) {
     id: Number(row.id),
     username: row.username,
     banned_at: toNum(row.banned_at),
+    ...(row.muted_until !== undefined ? { muted_until: toNum(row.muted_until) } : {}),
   };
 }
 
@@ -195,7 +196,24 @@ export async function openPostgresAccountStore(options = {}) {
     find,
     get,
 
-    async createAccount(username, passwordHash, ts = now()) {
+    async createAccount(username, passwordHash, tsOrOptions = now(), recoveryHashArg = undefined) {
+      let ts = now();
+      let recoveryHash = recoveryHashArg;
+      if (tsOrOptions && typeof tsOrOptions === 'object') {
+        ts = tsOrOptions.ts ?? now();
+        recoveryHash = tsOrOptions.recoveryHash;
+      } else if (tsOrOptions !== undefined) {
+        ts = tsOrOptions;
+      }
+      if (recoveryHash !== undefined && recoveryHash !== null) {
+        const { rows } = await pool.query(
+          `INSERT INTO accounts (username, username_key, password_hash, created_at, recovery_hash)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING *`,
+          [username, usernameKey(username), passwordHash, ts, recoveryHash],
+        );
+        return normAccount(rows[0]);
+      }
       const { rows } = await pool.query(
         `INSERT INTO accounts (username, username_key, password_hash, created_at)
          VALUES ($1, $2, $3, $4)
@@ -218,6 +236,35 @@ export async function openPostgresAccountStore(options = {}) {
 
     async touchLogin(accountId, ts = now()) {
       await pool.query('UPDATE accounts SET last_login_at = $1 WHERE id = $2', [ts, accountId]);
+    },
+
+    async setPassword(accountId, passwordHash) {
+      const res = await pool.query(
+        'UPDATE accounts SET password_hash = $1 WHERE id = $2',
+        [passwordHash, accountId],
+      );
+      return Number(res.rowCount ?? 0);
+    },
+
+    async setRecoveryHash(accountId, recoveryHash) {
+      const res = await pool.query(
+        'UPDATE accounts SET recovery_hash = $1 WHERE id = $2',
+        [recoveryHash ?? null, accountId],
+      );
+      return Number(res.rowCount ?? 0);
+    },
+
+    async setPasswordAndRecovery(accountId, passwordHash, recoveryHash) {
+      const res = await pool.query(
+        'UPDATE accounts SET password_hash = $1, recovery_hash = $2 WHERE id = $3',
+        [passwordHash, recoveryHash ?? null, accountId],
+      );
+      return Number(res.rowCount ?? 0);
+    },
+
+    async deleteAccount(accountId) {
+      const res = await pool.query('DELETE FROM accounts WHERE id = $1', [accountId]);
+      return Number(res.rowCount ?? 0);
     },
 
     // ---------------------------------------------------------------- sessions
@@ -248,13 +295,29 @@ export async function openPostgresAccountStore(options = {}) {
 
     async getSession(tokenHash) {
       const { rows } = await pool.query(
-        `SELECT s.id AS sid, s.last_seen_at, s.expires_at, a.id, a.username, a.banned_at
+        `SELECT s.id AS sid, s.last_seen_at, s.expires_at, a.id, a.username, a.banned_at, a.muted_until
            FROM sessions s
            JOIN accounts a ON a.id = s.account_id
           WHERE s.token_hash = $1`,
         [tokenHash],
       );
       return normSession(rows[0]);
+    },
+
+    async listSessionIds(accountId) {
+      const { rows } = await pool.query(
+        'SELECT id FROM sessions WHERE account_id = $1',
+        [accountId],
+      );
+      return rows.map((r) => Number(r.id));
+    },
+
+    async listOtherSessionIds(accountId, keepSid) {
+      const { rows } = await pool.query(
+        'SELECT id FROM sessions WHERE account_id = $1 AND id <> $2',
+        [accountId, keepSid],
+      );
+      return rows.map((r) => Number(r.id));
     },
 
     async touchSession(sid, lastSeenAt, expiresAt) {
@@ -274,6 +337,14 @@ export async function openPostgresAccountStore(options = {}) {
       return Number(res.rowCount ?? 0);
     },
 
+    async deleteOtherSessions(accountId, keepSid) {
+      const res = await pool.query(
+        'DELETE FROM sessions WHERE account_id = $1 AND id <> $2',
+        [accountId, keepSid],
+      );
+      return Number(res.rowCount ?? 0);
+    },
+
     async deleteSessionsForAccount(accountId) {
       const res = await pool.query('DELETE FROM sessions WHERE account_id = $1', [accountId]);
       return Number(res.rowCount ?? 0);
@@ -284,11 +355,87 @@ export async function openPostgresAccountStore(options = {}) {
       return Number(res.rowCount ?? 0);
     },
 
+    // Atomic lifecycle helpers used by createPostgresAccounts HTTP handlers.
+
+    async changePasswordAndRevokeOthers(accountId, newPasswordHash, keepSid) {
+      return transaction(async (client) => {
+        await client.query('UPDATE accounts SET password_hash = $1 WHERE id = $2', [newPasswordHash, accountId]);
+        const { rows } = await client.query(
+          'SELECT id FROM sessions WHERE account_id = $1 AND id <> $2',
+          [accountId, keepSid],
+        );
+        await client.query('DELETE FROM sessions WHERE account_id = $1 AND id <> $2', [accountId, keepSid]);
+        return rows.map((r) => Number(r.id));
+      });
+    },
+
+    async deleteAccountAndSessions(accountId) {
+      return transaction(async (client) => {
+        const { rows } = await client.query('SELECT id FROM sessions WHERE account_id = $1', [accountId]);
+        await client.query('DELETE FROM accounts WHERE id = $1', [accountId]);
+        return rows.map((r) => Number(r.id));
+      });
+    },
+
+    async revokeAccountSessions(accountId, { reason = null, actor = 'self', ts = now() } = {}) {
+      return transaction(async (client) => {
+        const { rows: sessRows } = await client.query('SELECT id FROM sessions WHERE account_id = $1', [accountId]);
+        await client.query('DELETE FROM sessions WHERE account_id = $1', [accountId]);
+        const { rows: logRows } = await client.query(
+          `INSERT INTO moderation_log (account_id, action, reason, until, actor, at)
+           VALUES ($1, 'revoke', $2, NULL, $3, $4)
+           RETURNING id`,
+          [accountId, reason, actor, ts],
+        );
+        const logId = Number(logRows[0].id);
+        await notifyModeration(client, {
+          id: logId,
+          accountId: Number(accountId),
+          action: 'revoke',
+          reason,
+          actor,
+          at: ts,
+        });
+        return { sids: sessRows.map((r) => Number(r.id)), logId };
+      });
+    },
+
+    async recoverAccount(accountId, newPasswordHash, nextRecoveryHash, { ts = now() } = {}) {
+      return transaction(async (client) => {
+        const { rows: sessRows } = await client.query('SELECT id FROM sessions WHERE account_id = $1', [accountId]);
+        await client.query(
+          'UPDATE accounts SET password_hash = $1, recovery_hash = $2 WHERE id = $3',
+          [newPasswordHash, nextRecoveryHash, accountId],
+        );
+        await client.query('DELETE FROM sessions WHERE account_id = $1', [accountId]);
+        const { rows: logRows } = await client.query(
+          `INSERT INTO moderation_log (account_id, action, reason, until, actor, at)
+           VALUES ($1, 'revoke', $2, NULL, $3, $4)
+           RETURNING id`,
+          [accountId, 'password recovery', 'recovery', ts],
+        );
+        const logId = Number(logRows[0].id);
+        await notifyModeration(client, {
+          id: logId,
+          accountId: Number(accountId),
+          action: 'revoke',
+          reason: 'password recovery',
+          actor: 'recovery',
+          at: ts,
+        });
+        return { sids: sessRows.map((r) => Number(r.id)), logId };
+      });
+    },
+
     // ---------------------------------------------------------------- moderation + LISTEN/NOTIFY
 
     async muteOf(accountId) {
       const { rows } = await pool.query('SELECT muted_until FROM accounts WHERE id = $1', [accountId]);
       return rows[0] ? toNum(rows[0].muted_until) : null;
+    },
+
+    async getMuteUntil(accountId) {
+      return this.muteOf(accountId);
     },
 
     async isMuted(accountId, ts = now()) {
@@ -300,7 +447,7 @@ export async function openPostgresAccountStore(options = {}) {
       const acc = await requireAccount(name);
       const until = minutes == null ? FOREVER : ts + Math.round(minutes * 60_000);
       const loggedUntil = until === FOREVER ? null : until;
-      await transaction(async (client) => {
+      const logId = await transaction(async (client) => {
         await client.query(
           'UPDATE accounts SET muted_until = $1, mute_reason = $2 WHERE id = $3',
           [until, reason, acc.id],
@@ -311,8 +458,9 @@ export async function openPostgresAccountStore(options = {}) {
            RETURNING id`,
           [acc.id, reason, loggedUntil, actor, ts],
         );
+        const id = Number(rows[0].id);
         await notifyModeration(client, {
-          id: Number(rows[0].id),
+          id,
           accountId: acc.id,
           action: 'mute',
           reason,
@@ -320,13 +468,14 @@ export async function openPostgresAccountStore(options = {}) {
           actor,
           at: ts,
         });
+        return id;
       });
-      return { id: acc.id, username: acc.username, mutedUntil: loggedUntil };
+      return { id: acc.id, username: acc.username, mutedUntil: loggedUntil, logId };
     },
 
     async unmute(name, { actor = 'operator', ts = now() } = {}) {
       const acc = await requireAccount(name);
-      await transaction(async (client) => {
+      const logId = await transaction(async (client) => {
         await client.query(
           'UPDATE accounts SET muted_until = NULL, mute_reason = NULL WHERE id = $1',
           [acc.id],
@@ -337,20 +486,22 @@ export async function openPostgresAccountStore(options = {}) {
            RETURNING id`,
           [acc.id, actor, ts],
         );
+        const id = Number(rows[0].id);
         await notifyModeration(client, {
-          id: Number(rows[0].id),
+          id,
           accountId: acc.id,
           action: 'unmute',
           actor,
           at: ts,
         });
+        return id;
       });
-      return { id: acc.id, username: acc.username };
+      return { id: acc.id, username: acc.username, logId };
     },
 
     async ban(name, { reason = null, actor = 'operator', ts = now() } = {}) {
       const acc = await requireAccount(name);
-      await transaction(async (client) => {
+      const logId = await transaction(async (client) => {
         await client.query(
           'UPDATE accounts SET banned_at = $1, ban_reason = $2 WHERE id = $3',
           [ts, reason, acc.id],
@@ -362,21 +513,23 @@ export async function openPostgresAccountStore(options = {}) {
            RETURNING id`,
           [acc.id, reason, actor, ts],
         );
+        const id = Number(rows[0].id);
         await notifyModeration(client, {
-          id: Number(rows[0].id),
+          id,
           accountId: acc.id,
           action: 'ban',
           reason,
           actor,
           at: ts,
         });
+        return id;
       });
-      return { id: acc.id, username: acc.username };
+      return { id: acc.id, username: acc.username, logId };
     },
 
     async unban(name, { actor = 'operator', ts = now() } = {}) {
       const acc = await requireAccount(name);
-      await transaction(async (client) => {
+      const logId = await transaction(async (client) => {
         await client.query(
           'UPDATE accounts SET banned_at = NULL, ban_reason = NULL WHERE id = $1',
           [acc.id],
@@ -387,20 +540,22 @@ export async function openPostgresAccountStore(options = {}) {
            RETURNING id`,
           [acc.id, actor, ts],
         );
+        const id = Number(rows[0].id);
         await notifyModeration(client, {
-          id: Number(rows[0].id),
+          id,
           accountId: acc.id,
           action: 'unban',
           actor,
           at: ts,
         });
+        return id;
       });
-      return { id: acc.id, username: acc.username };
+      return { id: acc.id, username: acc.username, logId };
     },
 
     async revokeSessions(name, { actor = 'operator', ts = now() } = {}) {
       const acc = await requireAccount(name);
-      const revoked = await transaction(async (client) => {
+      const { revoked, logId } = await transaction(async (client) => {
         const res = await client.query('DELETE FROM sessions WHERE account_id = $1', [acc.id]);
         const { rows } = await client.query(
           `INSERT INTO moderation_log (account_id, action, reason, until, actor, at)
@@ -408,16 +563,17 @@ export async function openPostgresAccountStore(options = {}) {
            RETURNING id`,
           [acc.id, actor, ts],
         );
+        const id = Number(rows[0].id);
         await notifyModeration(client, {
-          id: Number(rows[0].id),
+          id,
           accountId: acc.id,
           action: 'revoke',
           actor,
           at: ts,
         });
-        return Number(res.rowCount ?? 0);
+        return { revoked: Number(res.rowCount ?? 0), logId: id };
       });
-      return { id: acc.id, username: acc.username, revoked };
+      return { id: acc.id, username: acc.username, revoked, logId };
     },
 
     async moderationLogSince(lastId = 0) {

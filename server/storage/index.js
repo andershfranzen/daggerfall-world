@@ -2,7 +2,7 @@
 // switches to PostgreSQL when DATABASE_URL (or ACCOUNTS_DATABASE_URL) starts
 // with postgres:// or postgresql://, or when a pg Pool is explicitly injected.
 import { openStore } from '../db.js';
-import { openAccountStore, ACCOUNT_DEFAULTS } from '../accounts.js';
+import { openAccountStore, createPostgresAccounts, ACCOUNT_DEFAULTS } from '../accounts.js';
 import {
   openPostgresGameStore,
   createBufferedGameStore,
@@ -17,6 +17,7 @@ export {
   openPostgresGameStore,
   createBufferedGameStore,
   openPostgresAccountStore,
+  createPostgresAccounts,
   MODERATION_CHANNEL,
   loadSchemaSql,
 };
