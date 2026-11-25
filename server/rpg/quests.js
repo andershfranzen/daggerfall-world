@@ -468,6 +468,8 @@ export function install(ctx, opts = {}) {
         pendingStarts.get(p.id).push({ name, from: inst.uid });
       },
       video: (inst, n) => send({ kind: 'questVideo', uid: inst.uid, title: inst.title, video: n }),
+      // Classic 0x54 play sound (DAGGER.SND index) / Daggerfall Unity PlaySong: heard by the quest owner only.
+      sound: (inst, what) => send({ kind: 'questSound', uid: inst.uid, title: inst.title, ...what }),
       transfer: (inst, pl, marker) => questTransfer(p, inst, pl, marker),
       // Classic 0x1e with person -1 ("teleport pc to"): through the place's own door landing, once it is loaded.
       teleport: (inst, pl) => {
@@ -1622,6 +1624,30 @@ export function install(ctx, opts = {}) {
       return inst;
     },
     globals: (p) => ({ ...ensure(p).globals }),
+    /**
+     * Conversation hooks of `p`'s running quests for the NPC owner: rumours (add rumor mill), "tell me about" topics
+     * (add dialog) and their links (dialog link), people muted for this player (mute npc) and people who speak for a
+     * quest besides its giver (add … as questor). Names and texts are resolved for the player.
+     */
+    talk: (p) => {
+      const out = { rumours: [], topics: [], links: [], muted: [], questors: [] };
+      const nameOf = (inst, r) => {
+        const x = r.kind === 'place' ? inst.places[r.key] : r.kind === 'person' ? inst.people[r.key] : inst.items[r.key];
+        return x?.name ?? x?.site ?? x?.building ?? r.key;
+      };
+      for (const inst of ensure(p).active) {
+        const ref = (r) => ({ uid: inst.uid, kind: r.kind, key: r.key, name: nameOf(inst, r) });
+        for (const r of inst.rumours ?? []) out.rumours.push({ uid: inst.uid, id: r.id, text: r.text });
+        for (const r of inst.dialog ?? []) out.topics.push(ref(r));
+        for (const l of inst.dialogLinks ?? []) out.links.push(l.map(ref));
+        for (const [k, person] of Object.entries(inst.people)) {
+          const who = { uid: inst.uid, key: k, name: person.name, entityId: person.entityId ?? null, individual: person.individual ?? null };
+          if (person.muted) out.muted.push(who);
+          if (person.addedQuestor) out.questors.push(who);
+        }
+      }
+      return out;
+    },
     /**
      * Special triggers (package 19: Daedra summoning, invitations, cures). The trigger owner has already decided
      * eligibility; this runs the normal questOffer -> quest.accept/quest.refuse flow for one named quest.

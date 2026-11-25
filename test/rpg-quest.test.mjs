@@ -196,7 +196,7 @@ test('script parser reads resources, tasks and message variants', () => {
 test('unknown and unimplemented actions are inventoried, never treated as done', () => {
   assert.equal(compileAction('frobnicate the widget').name, 'unknown');
   assert.equal(compileAction('cast spell Shield on _giver_').status, 'unsupported');
-  assert.equal(compileAction('dialog link for location _a_ person _b_').status, 'ignored');
+  assert.equal(compileAction('dialog link for location _a_ person _b_').status, 'approx');
   const a = analyseQuest(parseQuest(UNSUPPORTED_FIXTURE));
   assert.equal(a.offerable, false);
   assert.ok(a.unsupported.some((u) => u.includes('frobnicate')));

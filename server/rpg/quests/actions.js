@@ -5,13 +5,21 @@
 //   exact    — implemented with the original semantics
 //   approx   — implemented, but the world model is simpler (e.g. a building is treated as
 //              its town because interiors are not modelled); listed in the quest's report
-//   ignored  — presentation only (dialogue links, faces, sounds); listed, never blocks
+//   ignored  — no runtime effect (location marker, create npc at); listed, never blocks
 //   unsupported — recognised but not implemented; the quest is not offered
 // A line that matches nothing is `unknown` and is treated like `unsupported`.
 
 const S = '([A-Za-z0-9_.-]+)'; // a symbol
 const N = '(-?\\d+)';
 const ID = '(\\d+|[A-Za-z]+)'; // message id or static message name
+
+/** "location _a_ person _b_ item _c_" -> [{kind:'place'|'person'|'item', symbol}], empty operands dropped. */
+function dialogRefs(text) {
+  const kinds = { location: 'place', person: 'person', item: 'item' };
+  return [...text.matchAll(/(location|person|item)\s+([A-Za-z0-9_.-]+)/gi)]
+    .filter((m) => !/^_missing/i.test(m[2]))
+    .map((m) => ({ kind: kinds[m[1].toLowerCase()], symbol: m[2] }));
+}
 
 /** [name, regex, kind, status, (m) => args] — order matters: first match wins. */
 const DEFS = [
@@ -90,20 +98,31 @@ const DEFS = [
   ['haveItem', `^have\\s+${S}\\s+set\\s+${S}$`, 'action', 'exact', (m) => ({ item: m[1], task: m[2] })],
   ['makePermanent', `^make\\s+${S}\\s+permanent$`, 'action', 'exact', (m) => ({ item: m[1] })],
 
-  // ---- presentation only
-  ['addDialog', `^add\\s+dialog\\b`, 'action', 'ignored', () => ({})],
-  ['dialogLink', `^dialog\\s+link\\b`, 'action', 'ignored', () => ({})],
+  // ---- conversation hooks: kept on the instance for the NPC owner (services.quests.talk)
+  // Classic 0x0a / 0x0b, Daggerfall Unity AddDialog / DialogLink: quest resources become "tell me about" topics, and
+  // linked resources are learned together. Operands the QBN leaves empty (-1) decode as _missing…_ and are dropped.
+  ['addDialog', `^add\\s+dialog\\s+for\\s+(.+)$`, 'action', 'approx', (m) => ({ refs: dialogRefs(m[1]) })],
+  ['dialogLink', `^dialog\\s+link\\s+for\\s+(.+)$`, 'action', 'approx', (m) => ({ refs: dialogRefs(m[1]) })],
   // Classic 0x37/0x38 and 0x3f/0x40 / Daggerfall Unity AddFace, DropFace (HUDEscortingNPCFaces): a person or foe
   // travelling with the player. Kept on the instance (`faces`) so the companion persists and is shown to its owner.
   ['addFoeFace', `^(add|drop)\\s+foe\\s+${S}\\s+face(?:\\s+saying\\s+(\\d+))?$`, 'action', 'exact', (m) => ({ add: m[1].toLowerCase() === 'add', foe: m[2], say: m[3] })],
   ['locationMarker', `^location\\s+marker\\b`, 'action', 'ignored', () => ({})],
   ['addFace', `^add\\s+${S}\\s+face(?:\\s+saying\\s+(\\d+))?$`, 'action', 'exact', (m) => ({ person: m[1], say: m[2] })],
   ['dropFace', `^drop\\s+${S}\\s+face$`, 'action', 'exact', (m) => ({ person: m[1] })],
-  ['addQuestor', `^add\\s+${S}\\s+as\\s+questor`, 'action', 'ignored', () => ({})],
-  ['dropQuestor', `^drop\\s+${S}\\s+as\\s+questor`, 'action', 'ignored', () => ({})],
-  ['rumorMill', `^rumor\\s+mill\\b`, 'action', 'ignored', () => ({})],
-  ['playSound', `^play\\s+(sound|song)\\b`, 'action', 'ignored', () => ({})],
-  ['muteNpc', `^mute\\s+npc\\b`, 'action', 'ignored', () => ({})],
+  // Classic 0x55 / 0x56, Daggerfall Unity AddQuestor / DropQuestor: the person speaks for the quest like its giver.
+  ['addQuestor', `^add\\s+${S}\\s+as\\s+questor$`, 'action', 'approx', (m) => ({ person: m[1], add: true })],
+  ['dropQuestor', `^drop\\s+${S}\\s+as\\s+questor$`, 'action', 'approx', (m) => ({ person: m[1], add: false })],
+  // Classic 0x26 / Daggerfall Unity RumorMill: a quest message joins the rumours townspeople tell the quest owner.
+  ['rumorMill', `^rumor\\s+mill\\s+${ID}$`, 'action', 'approx', (m) => ({ id: m[1] })],
+  // Classic 0x54 / Daggerfall Unity PlaySound: DAGGER.SND clip, replayed every N game minutes, M plays in all.
+  ['playSound', `^play\\s+sound\\s+(\\d+)(?:\\s+every\\s+(\\d+)\\s+minutes(?:\\s+(-?\\d+)\\s+times)?)?$`, 'action', 'approx',
+    (m) => ({ sound: +m[1], minutes: m[2] === undefined ? 0 : +m[2], times: m[3] === undefined ? 1 : +m[3] })],
+  // Daggerfall Unity PlaySong (script-only, no classic opcode): one named song for the owner.
+  ['playSong', `^play\\s+song\\s+${S}$`, 'action', 'approx', (m) => ({ song: m[1] })],
+  // Daggerfall Unity MuteNpc (script-only): the person stops offering conversation for this quest's owner.
+  ['muteNpc', `^mute\\s+npc\\s+${S}$`, 'action', 'approx', (m) => ({ person: m[1] })],
+  // Other spellings of the hooks above (named sounds, bare forms) stay harmless no-ops rather than blocking a quest.
+  ['hookOther', `^(add\\s+dialog|dialog\\s+link|rumor\\s+mill|play\\s+(sound|song)|mute\\s+npc|(add|drop)\\s+\\S+\\s+as\\s+questor)\\b`, 'action', 'ignored', () => ({})],
 
   // ---- recognised, not implemented
   ['playVideo', `^play\\s+video\\s+(\\d+)$`, 'action', 'exact', (m) => ({ video: +m[1] })],
