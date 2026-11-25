@@ -5,6 +5,7 @@ import { resolve, sep } from 'node:path';
 import { createGameServer, DEFAULTS } from './game.js';
 import { createAccounts, ACCOUNT_DEFAULTS } from './accounts.js';
 import { openPostgresChatLog } from './chat-log.js';
+import { openPostgresHiscoresStore } from './hiscores/postgres-store.js';
 import { isPostgresUrl, openPostgresGameStore, createBufferedGameStore } from './storage/index.js';
 import { CHAT_LIMITS } from './rpg/social/chat.js';
 
@@ -124,12 +125,14 @@ if (usingPostgresAccounts) {
 
 let gameStore = null;
 let chatLog = null;
+let hiscoresStore = null;
 if (usingPostgresGame) {
   try {
     const pgGame = await openPostgresGameStore({ connectionString: databaseUrl });
     gameStore = createBufferedGameStore(pgGame);
     await gameStore.preloadWorld();
     chatLog = await openPostgresChatLog(pgGame.pool);
+    hiscoresStore = await openPostgresHiscoresStore(pgGame.pool, { applySchema: false });
   } catch (err) {
     console.error(`failed to initialize PostgreSQL game store: ${err.message}`);
     await Promise.resolve(accounts.close()).catch(() => {});
@@ -141,6 +144,7 @@ const server = createGameServer({
   accounts,
   ...(gameStore ? { store: gameStore } : {}),
   ...(chatLog ? { chatLog } : {}),
+  ...(hiscoresStore ? { hiscoresStore } : {}),
   allowGuests,
   arena2Dir: arena2Dir(),
   wodPath: process.env.WOD_PATH || null,

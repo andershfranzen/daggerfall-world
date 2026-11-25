@@ -759,3 +759,57 @@
     grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
   }
 }
+
+/* Skill header spacing & classic guild list button styling */
+.hs-skill-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+}
+
+.hs-skill-val {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #dce9f9;
+}
+
+.hs-guild-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.hs-guild-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  background: rgba(12, 19, 28, 0.72);
+  border: 1px solid rgba(90, 122, 160, 0.24);
+  border-radius: 3px;
+}
+
+.hs-link-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: #8bc1ff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.hs-link-btn:hover,
+.hs-link-btn:focus-visible {
+  color: #c9e3ff;
+  text-decoration: underline;
+  outline: none;
+}

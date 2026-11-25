@@ -8,6 +8,7 @@ import {
   RAT_ARCHIVE, SPECTRAL_ARCHIVES, GUARD_ARCHIVE, TREASURE_ARCHIVE, TREASURE_ICONS,
   ENEMY_ARCHIVES, PERSON_ARCHIVES, mobileFor, corpseForArchive, peopleFor,
 } from './tables.js';
+import { resolvePeerAppearance } from './peerFigure.js';
 
 export function hash(s) {
   let h = 2166136261;
@@ -102,31 +103,12 @@ export function entityAppearance(e) {
 }
 
 /**
- * Appearance of a remote player from public peer fields. A readied player is
- * drawn from the class's armed archive (with attack records); otherwise from
- * the town-walker archive for their race and gender. Only identifiers travel:
- * pixels come from the local player's own files.
+ * Appearance of a remote player from public peer fields. Delegates to the gear-,
+ * class-, dungeon-, and defeated-aware classic Daggerfall figure resolver.
+ * Only identifiers travel: pixels come from the local player's own ARENA2 files.
  */
-export function peerAppearance(p) {
-  const beast = p.form === 'werewolf' ? 9 : p.form === 'wereboar' ? 14 : null;
-  if (beast !== null) {
-    const m = mobileFor(beast);
-    return finish({ archive: m.male, layout: 'enemy', record: 0, mobile: m, guard: false, personLike: false, corpse: m.corpse, readied: p.readied === true });
-  }
-  const seed = p.id ?? p.name ?? '';
-  const female = isFemale(p.gender, seed);
-  const readied = p.readied === true || p.readied === 'weapon' || !!p.readiedWeapon;
-  if (readied) {
-    const cls = mobileFor(p.className ?? p.class ?? null);
-    const m = cls && cls.humanoid ? cls : mobileFor(144);
-    const archive = female ? m.female : m.male;
-    return finish({ archive, layout: 'enemy', record: 0, mobile: m, guard: false, personLike: false, corpse: m.corpse, readied: true });
-  }
-  const set = peopleFor(p.race);
-  const list = female ? set.female : set.male;
-  const v = Number.isInteger(p.variant) ? p.variant : hash(seed) % list.length;
-  const archive = list[((v % list.length) + list.length) % list.length];
-  return finish({ archive, layout: 'person', record: 0, mobile: null, guard: false, personLike: true, corpse: null, readied: false });
+export function peerAppearance(p, opts = {}) {
+  return resolvePeerAppearance(p, opts);
 }
 
 function finish(a) {

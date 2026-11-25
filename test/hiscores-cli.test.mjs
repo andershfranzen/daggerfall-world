@@ -90,20 +90,24 @@ function createFixtureDbs() {
     1700000001000,
     1700000100000,
     JSON.stringify({
-      created: true,
-      className: 'Mage',
-      race: 'Breton',
-      level: 14,
-      skills: { Destruction: 85, Thaumaturgy: 72, LongBlade: 40 },
+      character: {
+        created: true,
+        className: 'Mage',
+        race: 'Breton',
+        level: 14,
+        skills: { Destruction: 85, Thaumaturgy: 72, 'Long Blade': 40 },
+      },
+      chronicles: {
+        questsCompleted: 18,
+        monstersSlain: 240,
+      },
       guilds: {
         mages: { rank: 6, title: 'Magus', variantName: 'Mages Guild' },
       },
       travel: { discovered: ['Daggerfall', 'Wayrest', 'Sentinel'], trips: 12 },
-      questsCompleted: 18,
-      monstersSlain: 240,
-      legal: { Daggerfall: { infamy: 15 } },
-      admiralty: { score: 420, rankTitle: 'Captain', shipsSunk: 5 },
-      playerGuild: { id: 'order-bay', tag: 'IBG', name: 'Iliac Bay Guard', rank: 'Grandmaster' },
+      law: { rep: { Daggerfall: -15 } },
+      admiralty: { standing: { Daggerfall: 210 }, log: { sunk: { pirate: 5 } } },
+      playerGuild: { id: 'order-bay', tag: 'IBG', name: 'Iliac Bay Guard', rank: 'Leader' },
     }),
   );
   insertLink.run('1', 1, 'aldric', 1700000001000);
@@ -115,20 +119,24 @@ function createFixtureDbs() {
     1700000002000,
     1700000200000,
     JSON.stringify({
-      created: true,
-      className: 'Ranger',
-      race: 'Redguard',
-      level: 11,
-      skills: { Archery: 90, LongBlade: 65, Stealth: 50 },
+      character: {
+        created: true,
+        className: 'Ranger',
+        race: 'Redguard',
+        level: 11,
+        skills: { Archery: 90, 'Long Blade': 65, Stealth: 50 },
+      },
+      chronicles: {
+        questsCompleted: 9,
+        monstersSlain: 310,
+      },
       guilds: {
         fighters: { rank: 5, title: 'Swordsman', variantName: 'Fighters Guild' },
       },
       travel: { discovered: ['Daggerfall', 'Betony'], trips: 8 },
-      questsCompleted: 9,
-      monstersSlain: 310,
-      legal: { Sentinel: { infamy: 60 } },
-      admiralty: { score: 900, rankTitle: 'Commodore', shipsSunk: 11 },
-      playerGuild: { id: 'order-corsairs', tag: 'CRS', name: 'Bay Corsairs', rank: 'Captain' },
+      law: { rep: { Sentinel: -60 } },
+      admiralty: { standing: { Sentinel: 400 }, log: { sunk: { pirate: 20 } } },
+      playerGuild: { id: 'order-corsairs', tag: 'CRS', name: 'Bay Corsairs', rank: 'Leader' },
     }),
   );
   insertLink.run('2', 2, 'lyra', 1700000002000);
@@ -141,11 +149,13 @@ function createFixtureDbs() {
     1700000003000,
     1700000300000,
     JSON.stringify({
-      created: true,
-      className: 'Mage',
-      race: 'Breton',
-      level: 99,
-      skills: { Destruction: 100 },
+      character: {
+        created: true,
+        className: 'Mage',
+        race: 'Breton',
+        level: 99,
+        skills: { Destruction: 100 },
+      },
     }),
   );
   insertLink.run('3', 3, 'banned_cheater', 1700000003000);
@@ -156,7 +166,9 @@ function createFixtureDbs() {
       id: 'order-bay',
       name: 'Iliac Bay Guard',
       tag: 'IBG',
+      leaderId: 1,
       leaderName: 'Aldric',
+      members: { '1': { id: 1, name: 'Aldric', rank: 'Leader' } },
       treasury: 50000,
       createdAt: 1700000001000,
     }),
@@ -169,7 +181,9 @@ function createFixtureDbs() {
       id: 'order-corsairs',
       name: 'Bay Corsairs',
       tag: 'CRS',
+      leaderId: 2,
       leaderName: 'Lyra',
+      members: { '2': { id: 2, name: 'Lyra', rank: 'Leader' } },
       treasury: 120000,
       createdAt: 1700000002000,
     }),

@@ -418,41 +418,76 @@ export function install(api, opts = {}) {
     const isBoard = sub === 'board' || (!sub && (ev.entries || ev.rows));
 
     if (isBoard) {
-      const entries = Array.isArray(ev.entries) ? ev.entries : (Array.isArray(ev.rows) ? ev.rows : []);
-      const pageSize = Number(ev.pageSize ?? ui.boardPageSize) || DEFAULT_PAGE_SIZE;
-      const total = Number(ev.total ?? ev.count ?? entries.length) || 0;
-      const page = Math.max(1, Number(ev.page ?? ui.boardPage) || 1);
-      const totalPages = Math.max(1, Number(ev.totalPages ?? Math.ceil(total / pageSize)) || 1);
-      ui.board = ev.board ?? ui.board;
+      const src = ev.data && typeof ev.data === 'object' ? ev.data : ev;
+      const entries = Array.isArray(src.entries) ? src.entries : (Array.isArray(src.rows) ? src.rows : []);
+      const pageSize = Number(src.limit ?? src.pageSize ?? ui.boardPageSize) || DEFAULT_PAGE_SIZE;
+      const total = Number(src.total ?? src.count ?? entries.length) || 0;
+      const page = Math.max(1, Number(src.page ?? ui.boardPage) || 1);
+      const totalPages = Math.max(1, Number(src.pages ?? src.totalPages ?? Math.ceil(total / pageSize)) || 1);
+      ui.board = src.board ?? ui.board;
       ui.boardPage = page;
       ui.boardPageSize = pageSize;
       ui.boardData = { board: ui.board, page, pageSize, total, totalPages, entries };
       ui.loading.board = false;
       ui.loadedAt.board = now();
     } else if (isPlayer) {
-      const profile = ev.player ?? ev.profile ?? null;
+      const rawProfile = ev.profile ?? ev.player ?? null;
       ui.loading.player = false;
       ui.loadedAt.player = now();
-      if (!profile || ev.notFound || ev.error) {
+      if (!rawProfile || ev.notFound || ev.error) {
         ui.playerData = null;
         ui.playerError = ev.error || `No chronicle found for "${ev.name ?? ui.playerQuery}".`;
         say(ui.playerError);
       } else {
-        ui.playerData = profile;
+        // Normalize both flat test profiles and canonical engine `{ player, summary, skills, guilds }` profiles.
+        const pl = rawProfile.player && typeof rawProfile.player === 'object' ? rawProfile.player : rawProfile;
+        const sm = rawProfile.summary && typeof rawProfile.summary === 'object' ? rawProfile.summary : {};
+        let guildsNorm = rawProfile.guilds ?? {};
+        if (Array.isArray(rawProfile.guilds)) {
+          guildsNorm = {};
+          for (const g of rawProfile.guilds) {
+            if (g?.group) guildsNorm[g.group] = { ...g, rankTitle: g.title ?? g.rankTitle };
+          }
+        }
+        const normalized = {
+          ...rawProfile,
+          ...pl,
+          orderTag: pl.orderTag ?? pl.order?.tag ?? null,
+          orderName: pl.orderName ?? pl.order?.name ?? null,
+          overallRank: sm.overallRank ?? rawProfile.overallRank ?? null,
+          levelRank: sm.levelRank ?? rawProfile.levelRank ?? null,
+          cartography: sm.placesDiscovered ?? rawProfile.cartography ?? 0,
+          questsCompleted: sm.questsCompleted ?? rawProfile.questsCompleted ?? 0,
+          monstersSlain: sm.monstersSlain ?? rawProfile.monstersSlain ?? 0,
+          infamy: sm.infamy ?? rawProfile.infamy ?? 0,
+          admiraltyScore: sm.admiraltyScore ?? rawProfile.admiraltyScore ?? 0,
+          core: rawProfile.core ?? {
+            overall: { score: pl.totalSkill ?? 0, rank: sm.overallRank ?? null },
+            level: { score: pl.level ?? 1, rank: sm.levelRank ?? null },
+            cartography: { score: sm.placesDiscovered ?? 0, total: sm.totalClassicPlaces ?? CARTOGRAPHY_TOTAL, rank: sm.explorationRank ?? null },
+            quests: { score: sm.questsCompleted ?? 0, rank: sm.questsRank ?? null },
+            slayer: { score: sm.monstersSlain ?? 0, rank: sm.slayerRank ?? null },
+            wanted: { score: sm.infamy ?? 0, rank: sm.wantedRank ?? null },
+            admiralty: { score: sm.admiraltyScore ?? 0, title: sm.admiraltyRankTitle ?? null, rank: sm.admiraltyRank ?? null },
+          },
+          guilds: guildsNorm,
+          skills: rawProfile.skills ?? pl.skills ?? [],
+        };
+        ui.playerData = normalized;
         ui.playerError = '';
-        if (profile.name) ui.playerQuery = profile.name;
+        if (normalized.name) ui.playerQuery = normalized.name;
       }
     } else if (isCompare) {
-      const cmp = ev.compare ?? ev;
+      const cmp = ev.comparison ?? ev.compare ?? ev;
       ui.loading.compare = false;
       ui.loadedAt.compare = now();
-      if (ev.error || (!cmp.a && !cmp.left) || (!cmp.b && !cmp.right)) {
+      if (ev.error || cmp?.ok === false || (!cmp.a && !cmp.left) || (!cmp.b && !cmp.right)) {
         ui.compareData = null;
         ui.compareError = ev.error || 'Could not compare those adventurers.';
         say(ui.compareError);
       } else {
-        const left = cmp.a ?? cmp.left;
-        const right = cmp.b ?? cmp.right;
+        const left = cmp.a?.player ? { ...cmp.a, ...cmp.a.player } : (cmp.a ?? cmp.left);
+        const right = cmp.b?.player ? { ...cmp.b, ...cmp.b.player } : (cmp.b ?? cmp.right);
         const computed = computeCompareRows(left, right);
         ui.compareData = {
           left,
@@ -463,13 +498,15 @@ export function install(api, opts = {}) {
         ui.compareError = '';
       }
     } else if (isOrders) {
-      const src = Array.isArray(ev.orders) ? { entries: ev.orders } : (ev.orders ?? ev);
+      const src = ev.data && typeof ev.data === 'object'
+        ? ev.data
+        : (Array.isArray(ev.orders) ? { entries: ev.orders } : (ev.orders ?? ev));
       const entries = Array.isArray(src.entries) ? src.entries : (Array.isArray(ev.entries) ? ev.entries : []);
-      const pageSize = Number(ev.pageSize ?? src.pageSize ?? ui.ordersPageSize) || DEFAULT_PAGE_SIZE;
-      const total = Number(ev.total ?? src.total ?? ev.count ?? entries.length) || 0;
-      const page = Math.max(1, Number(ev.page ?? src.page ?? ui.ordersPage) || 1);
-      const totalPages = Math.max(1, Number(ev.totalPages ?? src.totalPages ?? Math.ceil(total / pageSize)) || 1);
-      ui.ordersSort = ev.sort ?? src.sort ?? ui.ordersSort;
+      const pageSize = Number(src.limit ?? src.pageSize ?? ev.pageSize ?? ui.ordersPageSize) || DEFAULT_PAGE_SIZE;
+      const total = Number(src.total ?? ev.total ?? ev.count ?? entries.length) || 0;
+      const page = Math.max(1, Number(src.page ?? ev.page ?? ui.ordersPage) || 1);
+      const totalPages = Math.max(1, Number(src.pages ?? src.totalPages ?? ev.totalPages ?? Math.ceil(total / pageSize)) || 1);
+      ui.ordersSort = src.sort ?? ev.sort ?? ui.ordersSort;
       ui.ordersPage = page;
       ui.ordersPageSize = pageSize;
       ui.ordersData = { sort: ui.ordersSort, page, pageSize, total, totalPages, entries };

@@ -222,11 +222,20 @@ test('snapshots: per-location entities and peers, private fields stripped, uncha
   sent.length = 0;
   rt.sync();
   const appearance = sent.find(([id]) => id === 2)[1].peers[0];
-  assert.deepEqual(appearance, {
-    id: 1, name: 'P1', x: 0, z: 0, yaw: 0, moving: false, readied: true,
-    race: 'Breton', gender: 'Female', className: 'Spellsword',
-    weapon: { template: 'iron-longsword', name: 'Iron Longsword' },
-  });
+  assert.equal(appearance.id, 1);
+  assert.equal(appearance.name, 'P1');
+  assert.equal(appearance.readied, true);
+  assert.equal(appearance.race, 'Breton');
+  assert.equal(appearance.gender, 'Female');
+  assert.equal(appearance.className, 'Spellsword');
+  assert.equal(appearance.faceIndex, 3);
+  assert.equal(appearance.archetype, 'spellsword');
+  assert.deepEqual(appearance.weapon, { template: 'iron-longsword', name: 'Iron Longsword' });
+  assert.deepEqual(appearance.worn, { rightHand: { template: 'iron-longsword', name: 'Iron Longsword' } });
+  // Private character sheet fields never leak to peers.
+  for (const priv of ['attributes', 'skills', 'health', 'maxHealth', 'gold', 'inventory']) {
+    assert.equal(appearance[priv], undefined, `private field ${priv} must not leak`);
+  }
   a.rpg.character.race = { evil: true }; // non-string values are never forwarded
   sent.length = 0;
   rt.sync();

@@ -32,6 +32,7 @@ import { install as shipyard } from './shipyard.js';
 import { install as naval } from './naval.js';
 import { install as passage } from './passage.js';
 import { install as admiralty } from './admiralty.js';
+import { install as chronicles } from './chronicles.js';
 
 export const features = [
   { name: 'worldData', install: worldData },
@@ -68,6 +69,7 @@ export const features = [
   { name: 'naval', install: naval },
   { name: 'passage', install: passage },
   { name: 'admiralty', install: admiralty },
+  { name: 'chronicles', install: chronicles }, // Chronicles of the Iliac Bay (Hiscores stats, milestones & WS queries)
 ];
 
 export default features;

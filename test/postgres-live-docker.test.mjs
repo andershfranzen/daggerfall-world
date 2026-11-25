@@ -20,6 +20,7 @@ import { createGameServer, CLOSE } from '../server/game.js';
 import { openPostgresGameStore, createBufferedGameStore, createPgPool } from '../server/storage/postgres-game.js';
 import { openPostgresAccountStore } from '../server/storage/postgres-accounts.js';
 import { openPostgresChatLog } from '../server/chat-log.js';
+import { openPostgresHiscoresStore } from '../server/hiscores/postgres-store.js';
 import { createPostgresBus } from '../server/scale/world-bus.js';
 import { migrateSqliteToPostgres } from '../tools/migrate-to-postgres.mjs';
 
@@ -198,10 +199,12 @@ test('live PostgreSQL 17 full HTTP + WebSocket game server (zero SQLite): regist
     const store = createBufferedGameStore(pgGame);
     await store.preloadWorld();
     const chatLog = await openPostgresChatLog(pgGame.pool);
+    const hiscoresStore = await openPostgresHiscoresStore(pgGame.pool, { applySchema: false });
     const server = createGameServer({
       accounts,
       store,
       chatLog,
+      hiscoresStore,
       host: '127.0.0.1',
       port: 0,
     });
@@ -265,6 +268,32 @@ test('live PostgreSQL 17 full HTTP + WebSocket game server (zero SQLite): regist
       await new Promise((r) => setTimeout(r, 25));
     }
     assert.ok(chatRows.some((r) => r.sender_name === 'PgHeroine' && r.body.includes('Hail from live PostgreSQL 17!')), 'chat persisted in PG chat_messages');
+
+    // 5b. Sync character stats into PostgreSQL hiscores table & query live /api/hiscores
+    const livePlayer = stack1.server.runtime.ctx.players.get(persistedPlayerId);
+    livePlayer.rpg.character = {
+      ...(livePlayer.rpg.character ?? {}),
+      created: true,
+      race: 'High Elf',
+      gender: 'Female',
+      className: 'Mage',
+      level: 9,
+      skills: { ...(livePlayer.rpg.character?.skills ?? {}), Destruction: 88, Mysticism: 74 },
+    };
+    livePlayer.rpg.chronicles = { ...(livePlayer.rpg.chronicles ?? {}), hidden: false, monstersSlain: 42, questsCompleted: 7 };
+    await stack1.server.hiscores.syncPlayers([livePlayer]);
+
+    const hsRes = await fetch(`${stack1.base}/api/hiscores?board=slayer`);
+    assert.equal(hsRes.status, 200);
+    const hsBoard = await hsRes.json();
+    assert.equal(hsBoard.entries[0]?.name, 'PgHeroine');
+    assert.equal(hsBoard.entries[0]?.score, 42);
+
+    const hsPlayerRes = await fetch(`${stack1.base}/api/hiscores/player/PgHeroine`);
+    assert.equal(hsPlayerRes.status, 200);
+    const hsPlayer = await hsPlayerRes.json();
+    assert.equal(hsPlayer.player.className, 'Mage');
+    assert.equal(hsPlayer.skills.length, 35);
 
     // 6. Cleanly shut down server 1 (flushes buffered writes to Postgres)
     await stack1.server.close();

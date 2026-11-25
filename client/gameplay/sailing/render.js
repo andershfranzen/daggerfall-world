@@ -22,6 +22,7 @@ import { analyseDeck, deckSlot, modelTriangles, stripTriangles, triangleRuns, BO
 import { SeaPass } from './renderSea.js';
 import { SolidBatch, FxBatch, SHAPE, viewAxes } from './renderFx.js';
 import { buildLand, buildHarbour, landPatch, woodsLandSampler } from './renderCoast.js';
+import { createDeckPeerPass, shouldDrawCubeAvatarOnDeck } from './deckPeers.js';
 
 const SHIP_SLOTS = Object.freeze({ small: 1, large: 2 });
 const DRAW_RANGE = 3200;
@@ -643,8 +644,30 @@ export function installSailingRenderer(api, opts = {}) {
     }
   }
 
-  function drawCrew(gl, renderer, m, c) {
+  let deckPeerPass = null;
+  function getDeckPeerPass() {
+    if (!deckPeerPass && (api.actors?.library || api.actors?.dollLibrary)) {
+      deckPeerPass = createDeckPeerPass({
+        spriteLibrary: api.actors.library,
+        dollLibrary: api.actors.dollLibrary,
+      });
+    }
+    return deckPeerPass;
+  }
+
+  function drawCrew(gl, renderer, m, c, deckContacts) {
     if (!c.crew?.length) return;
+    const arena2Loaded = !!(api.files?.length || api.actors?.library?.index || api.actors?.dollLibrary?.hasFiles);
+    const pass = getDeckPeerPass();
+    if (pass && deckContacts) {
+      deckContacts.push({
+        id: c.id,
+        contactMatrix: m,
+        deckY: S.hulls.get(classHull(c.view.cls))?.analysis?.deckY ?? 6,
+        crew: c.crew.slice(0, 24),
+      });
+    }
+    if (!shouldDrawCubeAvatarOnDeck({ hasSprite: !!pass, arena2Loaded })) return;
     let avs = S.avatars.get(c.id);
     if (!avs) S.avatars.set(c.id, avs = new Map());
     const w = renderer.world;
@@ -709,6 +732,7 @@ export function installSailingRenderer(api, opts = {}) {
     drawRig(R.m4(), S.deck, { ...S.own, faction: 'player' }, S.own.id, f.chart.yaw);
     // Other hulls.
     const w = renderer.world;
+    const deckContacts = [];
     for (const it of list) {
       const { c, pose } = it;
       const hullRec = hullFor(classHull(c.view.cls));
@@ -726,7 +750,7 @@ export function installSailingRenderer(api, opts = {}) {
         renderer.drawMesh(g, null, R.f32(m));
         stats.hulls++;
         if (c.view.state !== 'wrecked') drawRig(m, hullRec.analysis, c.view, c.id, it.chart.yaw);
-        drawCrew(gl, renderer, m, c);
+        drawCrew(gl, renderer, m, c, deckContacts);
       } else if (hullRec === undefined || hullRec?.mesh === null) {
         // No model (no game files yet): a plain hull so the contact is still a ship on the sea.
         const h = pose.hull;
@@ -781,6 +805,16 @@ export function installSailingRenderer(api, opts = {}) {
       stats.balls++;
     }
     solids.draw(gl, renderer);
+    if (deckContacts.length && deckPeerPass) {
+      const peerStateById = new Map((api.state?.peers ?? []).map((p) => [String(p.id), p]));
+      deckPeerPass.update({
+        contacts: deckContacts,
+        camera: renderer.camera ?? { x: renderer.eye[0], y: renderer.eye[1], z: renderer.eye[2], yaw: 0, pitch: 0 },
+        now: S.frame.t,
+        peerStateById,
+      });
+      deckPeerPass.draw(gl, renderer, renderer.camera ?? { x: renderer.eye[0], y: renderer.eye[1], z: renderer.eye[2], yaw: 0, pitch: 0 });
+    }
     for (let i = 1; i < 4; i++) gl.disableVertexAttribArray(i);
     stats.solids = solids.n;
     S.stats = stats;

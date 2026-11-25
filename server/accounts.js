@@ -983,6 +983,10 @@ export function createAccounts(options = {}) {
       const a = store.find(name);
       return a && { id: a.id, username: a.username };
     },
+    listBannedAccountIds: () => {
+      if (!store.db?.isOpen) return [];
+      return store.db.prepare('SELECT id FROM accounts WHERE banned_at IS NOT NULL').all().map((r) => String(r.id));
+    },
     close() {
       clearInterval(pollTimer);
       clearInterval(sweepTimer);
@@ -1433,6 +1437,13 @@ export async function createPostgresAccounts(options = {}) {
     async find(name) {
       const a = await store.find(name);
       return a && { id: a.id, username: a.username };
+    },
+    async listBannedAccountIds() {
+      if (store.pool && typeof store.pool.query === 'function') {
+        const res = await store.pool.query('SELECT id FROM accounts WHERE banned_at IS NOT NULL');
+        return (res?.rows ?? []).map((r) => String(r.id));
+      }
+      return [];
     },
     async close() {
       if (closed) return;

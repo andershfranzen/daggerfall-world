@@ -352,16 +352,34 @@ function lookupCharacter(characterById, id) {
  */
 export function projectOrders(worldRows, characterById = new Map()) {
   if (!worldRows || typeof worldRows[Symbol.iterator] !== 'function') return [];
+  let charLookup = characterById;
+  if (Array.isArray(characterById)) {
+    const map = new Map();
+    for (const ch of characterById) {
+      if (!isObj(ch)) continue;
+      const cid = ch.playerId ?? ch.id;
+      if (cid != null) map.set(Number(cid), ch);
+    }
+    charLookup = map;
+  }
   const out = [];
 
   for (const row of worldRows) {
-    let key;
-    let rawVal;
+    let key = null;
+    let rawVal = null;
     if (Array.isArray(row)) {
       [key, rawVal] = row;
     } else if (isObj(row)) {
-      key = row.key ?? row.k;
-      rawVal = row.value ?? row.v;
+      if ('key' in row || 'k' in row) {
+        key = row.key ?? row.k;
+        rawVal = row.value ?? row.v;
+      } else if (typeof row.id === 'string' || typeof row.orderId === 'string') {
+        const oid = String(row.id ?? row.orderId).trim();
+        key = oid.startsWith(PGUILD_PREFIX) ? oid : `${PGUILD_PREFIX}${oid}`;
+        rawVal = row;
+      } else {
+        continue;
+      }
     } else {
       continue;
     }
@@ -376,22 +394,34 @@ export function projectOrders(worldRows, characterById = new Map()) {
     const rawMembers = isObj(val.members)
       ? Object.values(val.members)
       : (Array.isArray(val.members) ? val.members : []);
-    const members = rawMembers.filter((m) => isObj(m) && m.id != null && Number.isSafeInteger(Number(m.id)));
+    let members = rawMembers.filter((m) => isObj(m) && m.id != null && Number.isSafeInteger(Number(m.id)));
+    if (!members.length && charLookup) {
+      const iterable = typeof charLookup.values === 'function' ? charLookup.values() : Object.values(charLookup);
+      const inferred = [];
+      for (const ch of iterable) {
+        if (!isObj(ch) || ch.order?.id !== id) continue;
+        const cid = ch.playerId ?? ch.id;
+        if (cid == null || !Number.isSafeInteger(Number(cid))) continue;
+        inferred.push({ id: Number(cid), name: ch.name, rank: ch.order.rank || 'Member' });
+      }
+      members = inferred;
+    }
     if (!members.length) continue;
 
     const leaderId = val.leaderId != null && Number.isSafeInteger(Number(val.leaderId)) ? Number(val.leaderId) : null;
     const leaderMember = (leaderId != null ? members.find((m) => Number(m.id) === leaderId) : null)
       ?? members.find((m) => m.rank === 'Leader')
       ?? members[0];
-    const leaderChar = leaderMember ? lookupCharacter(characterById, Number(leaderMember.id)) : null;
-    const leaderName = (typeof leaderMember?.name === 'string' && leaderMember.name.trim())
+    const leaderChar = leaderMember ? lookupCharacter(charLookup, Number(leaderMember.id)) : null;
+    const leaderName = (typeof val.leaderName === 'string' && val.leaderName.trim())
+      || (typeof leaderMember?.name === 'string' && leaderMember.name.trim())
       || leaderChar?.name
       || 'Unknown';
 
     let combinedLevel = 0;
     let combinedTotalSkill = 0;
     for (const m of members) {
-      const ch = lookupCharacter(characterById, Number(m.id));
+      const ch = lookupCharacter(charLookup, Number(m.id));
       if (!ch) continue;
       combinedLevel += nonNegInt(ch.level);
       combinedTotalSkill += nonNegInt(ch.totalSkill);

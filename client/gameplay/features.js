@@ -16,6 +16,8 @@ import { install as magic } from './magic.js';
 import { install as quests } from './quests.js';
 import { install as social } from './social.js';
 import { install as guilds } from './guilds.js';
+import { install as hiscores } from './hiscores.js';
+import { install as peerInspect } from './peerInspect.js';
 import { install as atmosphere } from './atmosphere.js';
 import { install as scenery } from './scenery.js';
 import { install as water } from './water.js';
@@ -47,6 +49,8 @@ export const features = [
   { name: 'quests', install: quests },
   { name: 'social', install: social },
   { name: 'guilds', install: guilds },
+  { name: 'hiscores', install: hiscores },
+  { name: 'peerInspect', install: peerInspect },
   { name: 'atmosphere', install: atmosphere },
   { name: 'scenery', install: scenery },
   { name: 'water', install: water }, // dungeon water sheets, after collision (package 21)

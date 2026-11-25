@@ -25,8 +25,8 @@ export const VIEW_RANGE = 160;
 export const HYSTERESIS = 1.15;
 /** Upper bound on projected peers per viewer (bytes per player stay bounded in a crowd). */
 export const MAX_ACROSS = 24;
-/** Index lifetime: one broadcast and the rpg sync that follows it share one build. */
-const TTL_MS = 15;
+/** Index lifetime: one broadcast and the rpg sync that follows it share one build even under load. */
+const TTL_MS = 35;
 
 export const isExterior = (loc) => typeof loc === 'string' && (loc.startsWith('town:') || loc.startsWith('wilderness:'));
 

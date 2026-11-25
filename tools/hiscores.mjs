@@ -1291,6 +1291,14 @@ function renderPlayerText(profile) {
     ),
   );
 
+  const GUILD_LABELS = {
+    fighters: 'Fighters Guild',
+    mages: 'Mages Guild',
+    thieves: 'Thieves Guild',
+    brotherhood: 'Dark Brotherhood',
+    temple: 'Temple',
+    knights: 'Knightly Order',
+  };
   const guilds = Array.isArray(profile.guilds) ? profile.guilds : [];
   if (guilds.length > 0) {
     lines.push('');
@@ -1299,7 +1307,7 @@ function renderPlayerText(profile) {
       formatTable(
         ['Guild', 'Rank', 'Title', 'Board Rank'],
         guilds.map((g) => [
-          g.variantName || g.group,
+          g.variantName || GUILD_LABELS[g.group] || g.group,
           String(g.rank ?? 0),
           g.title ?? '-',
           formatRank(g.boardRank),

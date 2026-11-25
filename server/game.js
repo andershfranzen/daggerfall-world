@@ -8,6 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { WebSocketServer } from 'ws';
 import { openStore, CorruptCharacterError } from './db.js';
 import { openSqliteChatLog, createChatLogService } from './chat-log.js';
+import { createHiscoresService, isHiscoresPath } from './hiscores/index.js';
 import { createSceneSpatialIndex } from './scale/spatial-grid.js';
 import { createSiteHandler } from './static.js';
 import { handlePublicWorldMap, PUBLIC_MAP_PATH } from './public-world-map.js';
@@ -56,6 +57,8 @@ export const DEFAULTS = Object.freeze({
   saveIntervalMs: 5_000,
   heartbeatMs: 15_000,
   maxPayloadBytes: 4096,
+  wsBackpressureBytes: 256 * 1024, // skip transient state frames for slow WAN sockets above 256 KB queued
+  wsMaxBufferedBytes: 4 * 1024 * 1024, // disconnect chronically stalled sockets above 4 MB queued
   msgRatePerSec: 40, // token bucket for all messages
   msgBurst: 80,
   chatRatePerSec: 1,
@@ -204,12 +207,26 @@ export function createGameServer(options = {}) {
 
   const chatLogStore = cfg.chatLog ?? (store.db ? openSqliteChatLog(store.db) : null);
   const chatLog = chatLogStore ? createChatLogService(chatLogStore) : null;
+  const hiscores = cfg.hiscores === false
+    ? null
+    : (cfg.hiscores ?? createHiscoresService({
+      hiscoresStore: cfg.hiscoresStore ?? null,
+      gameStore: store,
+      accounts,
+      trustProxy: !!accounts?.config?.trustProxy,
+    }));
   const spatialIndex = createSceneSpatialIndex({ viewRadius: cfg.aoiRadius, maxVisiblePeers: cfg.maxVisiblePeers });
 
   const runtime = createRpgRuntime({
     players,
     features: cfg.features ?? PRODUCTION_FEATURES,
-    save: (list, world = []) => store.saveCharacters(list, world.map(([k, v]) => [k, typeof v === 'function' ? v() : v])),
+    save: (list, world = []) => {
+      const resolvedWorld = world.map(([k, v]) => [k, typeof v === 'function' ? v() : v]);
+      store.saveCharacters(list, resolvedWorld);
+      if (hiscores && (list?.length || resolvedWorld.length)) {
+        void hiscores.syncPlayers(list, resolvedWorld);
+      }
+    },
     worldStore: { load: (prefix) => store.loadWorld(prefix) },
     send: (p, msg) => send(p.ws, msg),
     dataPath: cfg.arena2Dir,
@@ -226,6 +243,7 @@ export function createGameServer(options = {}) {
       // Moderation hook for chat features (party/regional/global). Guests are never muted here.
       isMuted: (p) => !!(accounts?.isMuted && p?.accountId != null && accounts.isMuted(p.accountId)),
       ...(chatLog ? { logChat: chatLog.logChat, queryChat: chatLog.queryChat, recentChat: chatLog.recentChat } : {}),
+      ...(hiscores ? { hiscores } : {}),
     },
   });
   const services = runtime.ctx.services;
@@ -233,9 +251,12 @@ export function createGameServer(options = {}) {
 
   const unsubscribeModeration =
     typeof accounts?.onModeration === 'function'
-      ? accounts.onModeration(({ accountId } = {}) => {
+      ? accounts.onModeration(({ accountId, action } = {}) => {
           for (const c of conns) {
             if (c.account && String(c.account.id) === String(accountId)) fatal(c.ws, CLOSE.ACCOUNT, 'account access revoked');
+          }
+          if (hiscores && (action === 'ban' || action === 'unban')) {
+            void hiscores.rebuild();
           }
         })
       : null;
@@ -270,7 +291,10 @@ export function createGameServer(options = {}) {
             return Promise.resolve()
               .then(async () => {
                 const deletedId = await store.deleteForAccount(accountId);
-                if (deletedId != null) orphans.delete(deletedId);
+                if (deletedId != null) {
+                  orphans.delete(deletedId);
+                  if (hiscores) await hiscores.removePlayer(deletedId);
+                }
               })
               .catch((err) => {
                 console.error('[game] failed to delete character for deleted account:', err?.message ?? err);
@@ -281,7 +305,10 @@ export function createGameServer(options = {}) {
             if (row && typeof row.then === 'function') {
               return row
                 .then((resolved) => {
-                  if (resolved) orphans.delete(resolved.id);
+                  if (resolved) {
+                    orphans.delete(resolved.id);
+                    if (hiscores) void hiscores.removePlayer(resolved.id);
+                  }
                 })
                 .catch((err) => {
                   console.error('[game] failed to delete character for deleted account:', err?.message ?? err);
@@ -295,6 +322,7 @@ export function createGameServer(options = {}) {
                   store.db.prepare('DELETE FROM players WHERE id = ?').run(row.id);
                 });
               }
+              if (hiscores) void hiscores.removePlayer(row.id);
             }
           } catch (err) {
             console.error('[game] failed to delete character for deleted account:', err.message);
@@ -306,6 +334,16 @@ export function createGameServer(options = {}) {
     const path = req.url.split('?')[0];
     if (path === PUBLIC_MAP_PATH) {
       return handlePublicWorldMap(req, res, players, services.travel, services.sailing, cfg.worldBus ? { worldBus: cfg.worldBus } : undefined);
+    }
+    if (hiscores && isHiscoresPath(path)) {
+      Promise.resolve()
+        .then(() => hiscores.handleHttp(req, res))
+        .catch((err) => {
+          console.error('[game] hiscores request failed:', err);
+          if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end('{"error":"hiscores unavailable"}');
+        });
+      return;
     }
     if (path === WORLDDATA_PATH || path.startsWith(WORLDDATA_PATH + '/')) {
       handleWorldDataHttp(services.worldData?.ready, req, res);
@@ -480,14 +518,28 @@ export function createGameServer(options = {}) {
             if (known && now - prev.at < cfg.stateHeartbeatMs) continue;
             data = full();
           }
-          lastState.set(p, { ws: p.ws, location: loc, sent: new Map(list.map((o) => [o.id, o])), at: now });
-          if (p.ws.readyState === p.ws.OPEN) p.ws.send(data);
+          if (p.ws.readyState === p.ws.OPEN) {
+            if (p.ws.bufferedAmount > cfg.wsMaxBufferedBytes) {
+              fatal(p.ws, CLOSE.RATE_LIMIT, 'connection too slow');
+              continue;
+            }
+            if (p.ws.bufferedAmount > cfg.wsBackpressureBytes) continue;
+            lastState.set(p, { ws: p.ws, location: loc, sent: new Map(list.map((o) => [o.id, o])), at: now });
+            p.ws.send(data);
+          }
           continue;
         }
         const data = full();
         if (!force && prev && prev.data === data && now - prev.at < cfg.stateHeartbeatMs) continue;
-        lastState.set(p, { data, at: now });
-        if (p.ws.readyState === p.ws.OPEN) p.ws.send(data);
+        if (p.ws.readyState === p.ws.OPEN) {
+          if (p.ws.bufferedAmount > cfg.wsMaxBufferedBytes) {
+            fatal(p.ws, CLOSE.RATE_LIMIT, 'connection too slow');
+            continue;
+          }
+          if (p.ws.bufferedAmount > cfg.wsBackpressureBytes) continue;
+          lastState.set(p, { data, at: now });
+          p.ws.send(data);
+        }
       }
     }
   }
@@ -524,6 +576,7 @@ export function createGameServer(options = {}) {
   function saveNow(list) {
     store.saveCharacters(list);
     for (const p of list) p.dirty = false;
+    if (hiscores && list?.length) void hiscores.syncPlayers(list);
   }
 
   function persist(list) {
@@ -532,9 +585,11 @@ export function createGameServer(options = {}) {
     const world = runtime.takePendingWorld?.() ?? [];
     if (!dirty.length && !world.length) return;
     try {
-      store.saveCharacters(dirty, world.map(([k, v]) => [k, typeof v === 'function' ? v() : v]));
+      const resolvedWorld = world.map(([k, v]) => [k, typeof v === 'function' ? v() : v]);
+      store.saveCharacters(dirty, resolvedWorld);
       for (const p of dirty) p.dirty = false;
       for (const o of dirty) if (orphans.get(o.id) === o) orphans.delete(o.id);
+      if (hiscores) void hiscores.syncPlayers(dirty, resolvedWorld);
     } catch (err) {
       runtime.restorePendingWorld?.(world);
       console.error('[game] failed to save characters:', err.message);
@@ -988,6 +1043,7 @@ export function createGameServer(options = {}) {
     config: cfg,
     runtime,
     chatLog,
+    hiscores,
     localAssets: Object.freeze({ enabled: localAssets.enabled, dir: localAssets.dir, reason: localAssets.reason }),
     /** Public summary of an account's character, or null. */
     characterForAccount(accountId) {
@@ -1056,6 +1112,9 @@ export function createGameServer(options = {}) {
           http.closeAllConnections();
         });
         if (typeof store.flush === 'function') await store.flush();
+        if (hiscores && typeof hiscores.close === 'function') {
+          await hiscores.close();
+        }
         if (chatLogStore && typeof chatLogStore.close === 'function' && (!store.db || chatLogStore.db !== store.db)) {
           await chatLogStore.close();
         }

@@ -13,6 +13,9 @@ import { Occluder } from './actors/occlusion.js';
 import {
   entityAppearance, peerAppearance, facingIndex, animRecord, frameAt, AnimState, isDead, hasLoot,
 } from './actors/logic.js';
+import { PeerDollLibrary } from './actors/peerDollBillboard.js';
+import { resolvePeerBillboardItem } from './actors/peerHybrid.js';
+import { describePeerTarget, isPeerDefeated } from './actors/peerFigure.js';
 import { groundFor, layersHeightAt } from '../lib/ground.js';
 import { crossesDoor } from '../lib/arrival.js';
 import { SnapshotBuffer } from '../lib/motion.js';
@@ -46,7 +49,10 @@ function healthWord(hp, max) {
 /** Short status line for the crosshair readout. */
 export function describeTarget(info) {
   if (!info) return '';
-  if (info.kind === 'player') return info.readied ? 'Traveller · weapon readied' : 'Traveller';
+  if (info.kind === 'player') {
+    if (info.peerLabel) return info.peerLabel;
+    return info.readied ? 'Traveller · weapon readied' : 'Traveller';
+  }
   if (info.dead) return info.loot ? 'Corpse · something to take' : 'Corpse · searched';
   if (info.kind === 'loot' || info.kind === 'treasure') return info.loot ? 'Treasure' : 'Picked clean';
   if (info.kind === 'npc') {
@@ -59,13 +65,16 @@ export function describeTarget(info) {
 export class ActorController {
   /**
    * @param {object} api gameplay api (see docs/gameplay-protocol.md)
-   * @param {{ clock?: () => number }} opts clock in seconds (defaults to performance.now)
+   * @param {{ clock?: () => number, peerFigureMode?: 'hybrid'|'doll'|'classic8dir' }} opts clock in seconds
    */
-  constructor(api, { clock } = {}) {
+  constructor(api, { clock, peerFigureMode = 'hybrid' } = {}) {
     this.api = api;
     this.clock = clock ?? (() => performance.now() / 1000);
     this.library = new SpriteLibrary();
     this.library.onReady = () => { this.loaded = true; };
+    this.dollLibrary = new PeerDollLibrary();
+    this.dollLibrary.onReady = () => { this.loaded = true; };
+    this.peerFigureMode = peerFigureMode;
     this.pass = new SpritePass();
     this.views = new Map();
     this.items = [];
@@ -84,7 +93,9 @@ export class ActorController {
   }
 
   setFiles(files) {
-    this.library.setFiles(files ? Array.from(files) : null);
+    const list = files ? Array.from(files) : null;
+    this.library.setFiles(list);
+    this.dollLibrary.setFiles(list);
     for (const v of this.views.values()) v.entry = v.corpseEntry = null;
   }
 
@@ -152,7 +163,7 @@ export class ActorController {
 
   #upsert(key, source, data, now) {
     let v = this.views.get(key);
-    const app = source === 'peer' ? peerAppearance(data) : entityAppearance(data);
+    const app = source === 'peer' ? peerAppearance(data, { location: this.location }) : entityAppearance(data);
     if (!v) {
       v = { key, id: data.id, source, data, app, anim: new AnimState(), buf: new SnapshotBuffer(0.1), footY: null, x: data.x, z: data.z, yaw: data.yaw ?? 0, speed: 0, entry: null, corpseEntry: null, lootFlashAt: -Infinity };
       this.views.set(key, v);
@@ -210,7 +221,7 @@ export class ActorController {
       const g = typeof d.y === 'number' ? d.y : (this.ground?.heightAt(v.x, v.z, v.footY) ?? (v.source === 'peer' ? layersHeightAt(this.api.renderer?.layers, v.x, v.z) : null));
       v.footY = typeof d.y === 'number' ? d.y : settle(v.footY, g, dt);
       if (v.footY === null) v.footY = 0;
-      const dead = v.source === 'entity' && isDead(d);
+      const dead = v.source === 'entity' ? isDead(d) : isPeerDefeated(d);
       const moving = live ? live.moving : (s?.moving ?? !!d.moving) || v.speed > MOVING_SPEED;
       v.anim.observe({
         moving,
@@ -222,7 +233,17 @@ export class ActorController {
       if (coverage === 0) continue;
       if (!v.app || !camera) continue;
       if (Math.hypot(v.x - camera.x, v.z - camera.z) > DRAW_RANGE) continue;
-      const it = this.#resolve(v, camera, now);
+      const it = v.source === 'peer'
+        ? resolvePeerBillboardItem({
+          view: v,
+          camera,
+          now,
+          spriteLibrary: this.library,
+          dollLibrary: this.dollLibrary,
+          mode: this.peerFigureMode,
+          targetId: this.target,
+        })
+        : this.#resolve(v, camera, now);
       if (it) {
         it.coverage = coverage;
         // A mounted peer (server/rpg/mount.js) rides the classic horse flat.
@@ -348,7 +369,17 @@ export class ActorController {
   #info(v, distance) {
     const d = v.data;
     if (v.source === 'peer') {
-      return { id: v.id, kind: 'player', name: d.name ?? 'Traveller', distance, readied: !!v.app?.readied, dead: false, loot: false };
+      const defeated = isPeerDefeated(d);
+      return {
+        id: v.id,
+        kind: 'player',
+        name: d.name ?? 'Traveller',
+        distance,
+        readied: !!v.app?.readied,
+        dead: defeated,
+        loot: false,
+        peerLabel: describePeerTarget(d, v.app),
+      };
     }
     const dead = isDead(d);
     return {
@@ -394,6 +425,10 @@ export class ActorController {
       target: () => this.targetInfo,
       appearance: (id) => (this.views.get(`p:${id}`) ?? this.views.get(`e:${id}`))?.app ?? null,
       library: this.library,
+      dollLibrary: this.dollLibrary,
+      setPeerFigureMode: (mode) => {
+        if (mode === 'hybrid' || mode === 'doll' || mode === 'classic8dir') this.peerFigureMode = mode;
+      },
       update: (camera, dt, now, renderer, town) => this.update(camera, dt, now, renderer, town),
     };
   }
@@ -401,6 +436,7 @@ export class ActorController {
   dispose() {
     this.removePass?.();
     this.removePass = null;
+    this.dollLibrary?.dispose?.();
     this.renderer?.setActorSprites?.([]);
   }
 }

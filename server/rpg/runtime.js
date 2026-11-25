@@ -8,6 +8,7 @@
 //   - private `{type:'rpg'}` snapshots are diffed per client and only sent when their content changes.
 import { performance } from 'node:perf_hooks';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { projectPeerFigure } from './peerAppearance.js';
 
 export const DEFAULT_LOCATION = 'town:Daggerfall/Gothway Garden';
 
@@ -389,11 +390,25 @@ export function createRpgRuntime(opts) {
     // server/rpg/mount.js: a horse rider shows the horse flat; a cart driver has no classic peer art.
     if (!form && rpg.mount?.riding === true && rpg.mount.mode === 'cart') peer.transport = 'cart';
     else if (!form && rpg.mount?.riding === true) { peer.mounted = true; peer.coat = rpg.mount.coat === 1 ? 1 : 0; }
-    // Appearance identifiers only (actor sprites); the rest of the sheet stays private.
-    const ch = rpg.character;
-    if (ch && typeof ch === 'object') {
-      for (const k of PUBLIC_CHARACTER_FIELDS) {
-        if (typeof ch[k] === 'string' && ch[k].length <= 40) peer[k] = ch[k];
+    // Classic character figure & visible worn gear identifiers only (no private stats/pack contents).
+    const hasCharacter = rpg.character && typeof rpg.character === 'object';
+    if (hasCharacter) {
+      const orderTag = typeof rpg.playerGuild?.tag === 'string' && rpg.playerGuild.tag ? rpg.playerGuild.tag : undefined;
+      const fig = projectPeerFigure(p, { orderTag });
+      if (fig) {
+        for (const k of ['race', 'gender', 'className', 'faceIndex', 'level', 'archetype', 'orderTag', 'guildTitle']) {
+          if (fig[k] !== undefined && fig[k] !== null) peer[k] = fig[k];
+        }
+        if (fig.figure) {
+          peer.figure = fig.figure;
+          peer.armorTier = fig.figure.armorTier;
+          peer.wearingRobes = fig.figure.wearingRobes;
+          peer.wearingHeavyArmor = fig.figure.wearingHeavyArmor;
+          peer.hasShield = fig.figure.hasShield;
+          peer.weaponKind = fig.figure.weaponKind;
+          if (fig.figure.primaryDye) peer.primaryDye = fig.figure.primaryDye;
+          if (fig.figure.worn && Object.keys(fig.figure.worn).length) peer.worn = fig.figure.worn;
+        }
       }
     }
     const weaponId = rpg.equipment?.rightHand;
@@ -438,6 +453,8 @@ export function createRpgRuntime(opts) {
     return c;
   }
 
+  const MAX_RPG_PEERS_IN_CROWD = 64;
+
   // The snapshot's parts for `p` and its diff key, built from the cached JSON (no full snapshot is assembled).
   // Peer positions are left out of the key: they alone never trigger a resend.
   function viewOf(p, cache) {
@@ -445,7 +462,21 @@ export function createRpgRuntime(opts) {
     const c = locationCache(loc, cache);
     const scene = sceneOf(p);
     const ents = c.entities.filter(({ e }) => canSee(e, p));
-    const peers = c.peers.filter((q) => q.id !== p.id && q.scene === scene);
+    let peers = c.peers.filter((q) => q.id !== p.id && q.scene === scene);
+    if (peers.length > MAX_RPG_PEERS_IN_CROWD) {
+      const partyIds = new Set(ctx.services.partyOf?.(p)?.memberIds ?? []);
+      const px = p.x ?? 0;
+      const pz = p.z ?? 0;
+      peers = peers
+        .map((q) => {
+          const dx = (q.peer.x ?? 0) - px;
+          const dz = (q.peer.z ?? 0) - pz;
+          return { q, priority: partyIds.has(q.id) ? 0 : 1, d2: dx * dx + dz * dz };
+        })
+        .sort((a, b) => a.priority - b.priority || a.d2 - b.d2 || a.q.id - b.q.id)
+        .slice(0, MAX_RPG_PEERS_IN_CROWD)
+        .map((x) => x.q);
+    }
     // Outdoor players just across a boundary (server/rpg/peers.js): public appearance only, in p's frame.
     // Listed by id, not distance, so walking alone never changes the snapshot's diff key.
     const across = [...(ctx.services.peerView?.across(p) ?? [])]
