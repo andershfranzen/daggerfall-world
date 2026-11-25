@@ -55,11 +55,70 @@ function safeLookup(lookup, id) {
   }
 }
 
+function mergePlace(byPixel, place, count = 1, insideCount = place.inside ? 1 : 0) {
+  if (!place || !isMapPixel(place.x, place.y)) return;
+  const key = place.y * 1000 + place.x;
+  let entry = byPixel.get(key);
+  if (!entry) {
+    entry = {
+      id: place.id,
+      kind: place.kind,
+      name: place.name,
+      region: place.region ?? null,
+      x: place.x,
+      y: place.y,
+      count: 0,
+      inside: 0,
+    };
+    byPixel.set(key, entry);
+  } else if (entry.kind !== 'town' && place.kind === 'town') {
+    Object.assign(entry, { id: place.id, kind: 'town', name: place.name, region: place.region ?? null });
+  } else if (entry.kind === 'wilderness' && place.kind === 'sea') {
+    Object.assign(entry, { id: place.id, kind: 'sea', name: place.name, region: place.region ?? null });
+  }
+  entry.count += count;
+  entry.inside += insideCount;
+}
+
+function resolveRemoteSnapshots(extra) {
+  if (!extra) return [];
+  if (Array.isArray(extra)) return extra;
+  if (typeof extra.getRemoteSnapshots === 'function') return extra.getRemoteSnapshots();
+  if (typeof extra.worldBus?.getRemoteSnapshots === 'function') return extra.worldBus.getRemoteSnapshots();
+  if (Array.isArray(extra.remoteSnapshots)) return extra.remoteSnapshots;
+  return [];
+}
+
+/**
+ * Merge multiple world-map snapshots (e.g. from zone workers of the same Iliac Bay world)
+ * into a single unified world-map projection.
+ */
+export function mergeWorldMapSnapshots(snapshots, now = Date.now()) {
+  const byPixel = new Map();
+  let online = 0;
+  for (const snap of snapshots) {
+    if (!snap || typeof snap !== 'object') continue;
+    if (Number.isFinite(snap.online) && snap.online > 0) online += snap.online;
+    for (const loc of Array.isArray(snap.locations) ? snap.locations : []) {
+      const count = Number.isFinite(loc?.count) && loc.count > 0 ? loc.count : 0;
+      if (!count) continue;
+      const inside = Number.isFinite(loc?.inside) && loc.inside > 0 ? loc.inside : 0;
+      mergePlace(byPixel, loc, count, inside);
+    }
+  }
+  const locations = [...byPixel.values()].sort((a, b) =>
+    b.count - a.count || a.name.localeCompare(b.name) || a.y - b.y || a.x - b.x);
+  const placed = locations.reduce((n, l) => n + l.count, 0);
+  return { version: 1, generatedAt: new Date(now).toISOString(), online, unplaced: Math.max(0, online - placed), locations };
+}
+
 /**
  * Aggregates sessions by occupied map pixel. A town and wilderness at the same pixel merge
  * under the town. `online` counts players who have entered the world, including those without a known map pixel.
+ * Optional `extra` accepts a `worldBus` (with `getRemoteSnapshots()`), an array of remote zone
+ * snapshots, or `{ worldBus, remoteSnapshots }` so `/api/world-map` reflects the entire single world.
  */
-export function publicWorldMap(players, lookup, now = Date.now(), sailing) {
+export function publicWorldMap(players, lookup, now = Date.now(), sailing, extra = null) {
   const byPixel = new Map();
   let online = 0;
   for (const player of players) {
@@ -75,26 +134,31 @@ export function publicWorldMap(players, lookup, now = Date.now(), sailing) {
       place = publicMapLocation(player?.rpg, lookup);
     }
     if (!place) continue;
-    const key = place.y * 1000 + place.x;
-    let entry = byPixel.get(key);
-    if (!entry) {
-      entry = { id: place.id, kind: place.kind, name: place.name, region: place.region, x: place.x, y: place.y, count: 0, inside: 0 };
-      byPixel.set(key, entry);
-    } else if (entry.kind !== 'town' && place.kind === 'town') {
-      Object.assign(entry, { id: place.id, kind: 'town', name: place.name, region: place.region });
-    } else if (entry.kind === 'wilderness' && place.kind === 'sea') {
-      Object.assign(entry, { id: place.id, kind: 'sea', name: place.name, region: place.region });
+    mergePlace(byPixel, place, 1, place.inside ? 1 : 0);
+  }
+  const remoteSnapshots = resolveRemoteSnapshots(extra);
+  for (const snap of remoteSnapshots) {
+    if (!snap || typeof snap !== 'object') continue;
+    if (Number.isFinite(snap.online) && snap.online > 0) online += snap.online;
+    for (const loc of Array.isArray(snap.locations) ? snap.locations : []) {
+      const count = Number.isFinite(loc?.count) && loc.count > 0 ? loc.count : 0;
+      if (!count) continue;
+      const inside = Number.isFinite(loc?.inside) && loc.inside > 0 ? loc.inside : 0;
+      mergePlace(byPixel, loc, count, inside);
     }
-    entry.count++;
-    if (place.inside) entry.inside++;
   }
   const locations = [...byPixel.values()].sort((a, b) =>
     b.count - a.count || a.name.localeCompare(b.name) || a.y - b.y || a.x - b.x);
   const placed = locations.reduce((n, l) => n + l.count, 0);
-  return { version: 1, generatedAt: new Date(now).toISOString(), online, unplaced: online - placed, locations };
+  return { version: 1, generatedAt: new Date(now).toISOString(), online, unplaced: Math.max(0, online - placed), locations };
 }
 
-export function handlePublicWorldMap(req, res, players, travel, sailing) {
+/** Named-options helper for projecting the unified single-world online map. */
+export function projectOnlineWorldMap({ players = [], lookup, now = Date.now(), sailing, worldBus, remoteSnapshots } = {}) {
+  return publicWorldMap(players, lookup, now, sailing, worldBus || remoteSnapshots ? { worldBus, remoteSnapshots } : null);
+}
+
+export function handlePublicWorldMap(req, res, players, travel, sailing, extra = null) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -103,7 +167,7 @@ export function handlePublicWorldMap(req, res, players, travel, sailing) {
   }
   let body;
   try {
-    body = JSON.stringify(publicWorldMap(players.values(), travel?.lookup, Date.now(), sailing));
+    body = JSON.stringify(publicWorldMap(players.values(), travel?.lookup, Date.now(), sailing, extra));
   } catch (err) {
     console.error('[game] world map projection failed:', err.message);
     res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
