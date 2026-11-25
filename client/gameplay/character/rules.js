@@ -268,7 +268,8 @@ export function usesForAdvancement(skillValue, skillName, careerMultiplier, leve
 
 /** PlayerEntity.RaiseSkills reflexes modifier: (uses * (0x10000 - ((reflexes - 2) << 13))) >> 16 */
 export function effectiveUses(uses, reflexes) {
-  const idx = Math.max(0, REFLEXES.indexOf(reflexes));
+  const raw = REFLEXES.indexOf(reflexes);
+  const idx = raw < 0 ? 2 : raw;
   const mod = 0x10000 - ((idx - 2) << 13);
   return (uses * mod) >> 16;
 }
@@ -341,16 +342,19 @@ export function validateAttributeSpend(base, pool, proposed) {
   if (!proposed || typeof proposed !== 'object') fail('Attributes are missing.');
   const out = {};
   let spent = 0;
+  let headroom = 0;
   for (const a of ATTRIBUTES) {
     const v = proposed[a];
     if (!isInt(v)) fail(`${a} must be a whole number.`);
     if (v < base[a]) fail(`${a} cannot be lowered below its rolled value of ${base[a]}.`);
     if (v > MAX_STAT) fail(`${a} cannot exceed ${MAX_STAT}.`);
     spent += v - base[a];
+    headroom += Math.max(0, MAX_STAT - base[a]);
     out[a] = v;
   }
   for (const k of Object.keys(proposed)) if (!ATTRIBUTES.includes(k)) fail(`Unknown attribute "${k}".`);
-  if (spent !== pool) fail(spent < pool ? `Distribute all bonus points (${pool - spent} left).` : 'Too many bonus points were spent.');
+  const target = Math.min(pool, headroom);
+  if (spent !== target) fail(spent < target ? `Distribute all bonus points (${target - spent} left).` : 'Too many bonus points were spent.');
   return out;
 }
 
@@ -387,15 +391,19 @@ export function validateLevelSpend(current, pool, proposed) {
   if (!proposed || typeof proposed !== 'object') fail('Attributes are missing.');
   const out = {};
   let spent = 0;
+  let headroom = 0;
   for (const a of ATTRIBUTES) {
     const v = proposed[a];
     if (!isInt(v)) fail(`${a} must be a whole number.`);
     if (v < current[a]) fail(`${a} cannot be lowered.`);
     if (v > MAX_STAT) fail(`${a} cannot exceed ${MAX_STAT}.`);
     spent += v - current[a];
+    headroom += Math.max(0, MAX_STAT - current[a]);
     out[a] = v;
   }
-  if (spent !== pool) fail(spent < pool ? `Distribute all bonus points (${pool - spent} left).` : 'Too many bonus points were spent.');
+  for (const k of Object.keys(proposed)) if (!ATTRIBUTES.includes(k)) fail(`Unknown attribute "${k}".`);
+  const target = Math.min(pool, headroom);
+  if (spent !== target) fail(spent < target ? `Distribute all bonus points (${target - spent} left).` : 'Too many bonus points were spent.');
   return out;
 }
 
