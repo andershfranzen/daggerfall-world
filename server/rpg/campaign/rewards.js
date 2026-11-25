@@ -6,18 +6,28 @@
 //   letter with `used` text  parchment carrying that text (campaign letters, cures)
 //   artifact                 the artifact template; an artifact already owned is not copied again
 //   any other item class     its rolled template and appearance (quests/itemIdentity.js: gems, ingredients, religious
-//                            items, jewellery, drugs, magic items, books...), as an ordinary item
+//                            items, jewellery, drugs, magic items, books...), or a durable fallback misc/custom item
+//                            preserving name, weight, value and icon metadata when no rolled template is present
 // Not converted: an item the player is not carrying (never received, or handed over / taken back: Item.MakePermanent
-// only exports items still in the player's collection), and records with no inventory template (an out-of-range
-// subclass, clothing; recorded in the quest's notes). Items already in the inventory (`give pc` rewards) are ordinary records and need nothing.
+// only exports items still in the player's collection), gold, or an unresolved unique artifact with no catalogue entry.
+// Items already in the inventory (`give pc` rewards) are ordinary records and need nothing.
 // Delivery is queued in `rpg.quests.campaignRewards` and retried on join and each tick until the pack has room.
+import { permanentFallbackItem } from '../quests/itemIdentity.js';
 
 /** Move a carried quest item into inventory when the script makes it permanent. Runs at most once per item. */
 export function permanentQuestItem(ctx, player, quest, key, text) {
   const item = quest.items[key];
   if (!item?.held || item.handedOver || !ctx.services.giveItem) return;
   const letter = item.className === 'letter' && item.usedMessage ? text(quest, item.usedMessage) : null;
-  const template = letter ? 'parchment' : item.className === 'gold' ? null : item.template;
+  let template = letter ? 'parchment' : item.className === 'gold' ? null : item.template;
+  let appearance = !letter && item.appearance ? item.appearance : undefined;
+  if (!template && !letter && item.className !== 'gold' && item.className !== 'artifact') {
+    const fb = permanentFallbackItem(item, quest);
+    if (fb) {
+      template = fb.template;
+      appearance = fb.appearance;
+    }
+  }
   if (!template) {
     const note = `make permanent: no inventory item for ${item.className}`;
     if (!quest.notes?.includes(note)) quest.notes?.push(note);
@@ -26,12 +36,13 @@ export function permanentQuestItem(ctx, player, quest, key, text) {
   const reward = { template };
   if (letter) reward.letter = { title: item.name === 'letter' ? quest.title : item.name, lines: letter.split('\n') };
   else if (item.className !== 'artifact') reward.ordinary = true;
-  if (!letter && item.appearance) reward.appearance = item.appearance; // the rolled magic item or book
+  if (appearance) reward.appearance = appearance; // rolled magic item/book or durable fallback metadata
 
   const pending = player.rpg.quests.campaignRewards ??= {};
   const id = `${quest.uid}:${key}`;
   ctx.dirty(player);
   pending[id] ??= reward;
+  if (!item.template) item.template = template;
   item.held = false;
   item.permanent = true;
   if (!deliver(ctx, player, pending, id)) {
