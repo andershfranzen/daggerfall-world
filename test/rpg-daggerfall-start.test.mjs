@@ -6,7 +6,8 @@ import { createRpgRuntime } from '../server/rpg/runtime.js';
 import * as character from '../server/rpg/character.js';
 import { install as inventory } from '../server/rpg/inventory.js';
 import { install as magic } from '../server/rpg/magic.js';
-import { STARTING_SPELLS, FALLBACK_STARTING, makeSpell } from '../server/rpg/magic/catalogue.js';
+import { STARTING_SPELLS, FALLBACK_STARTING, makeSpell, loadCatalogue } from '../server/rpg/magic/catalogue.js';
+import { localArena2 } from './support/rpg-session.mjs';
 import { effectTemplate } from '../server/rpg/magic/effects.js';
 import * as R from '../client/gameplay/character/rules.js';
 import * as K from '../client/gameplay/character/classic.js';
@@ -33,12 +34,13 @@ function makeStdCatalogue() {
   const dmg = { template: effectTemplate(4, 0), settings, type: 4, subType: 0 };
   const heal = { template: effectTemplate(10, 8), settings, type: 10, subType: 8 };
   const defs = [
-    [1, 'Water Breathing', 'magic', 'caster', [heal]],
-    [2, 'Slowfalling', 'magic', 'caster', [heal]],
+    // Names as in the real SPELLS.STD for these indices.
+    [1, "Fenrik's Door Jam", 'magic', 'caster', [heal]],
+    [2, 'Buoyancy', 'magic', 'caster', [heal]],
     [8, 'Shock', 'shock', 'touch', [dmg]],
-    [37, 'Light', 'magic', 'caster', [heal]],
+    [37, 'Slowfalling', 'magic', 'caster', [heal]],
     [44, 'Chameleon', 'magic', 'caster', [heal]],
-    [97, "Troll's Blood", 'magic', 'caster', [heal]],
+    [97, "Balyna's Balm", 'magic', 'caster', [heal]],
   ];
   const spells = new Map();
   for (const [index, name, element, targetType, effects] of defs) {
@@ -69,20 +71,20 @@ function textRsc(records) {
 
 function ebonyDaggerBiog(classIndex) {
   const q = [];
-  q.push('1.\tWhat weapon did you keep?\r\na.\tAn ebony dagger.\r\n\t28 +6\r\n\tIT 3 0 7\r\n\tGP +50\r\nb.\tA quiver of arrows.\r\n\tIT 3 18 0\r\n');
+  q.push('1.\tWhat weapon did you keep?\r\na.\tAn ebony dagger.\r\n\t28 +6\r\n\tIT 3 0 7\r\n\tGP +50\r\nb.\tA dozen arrows.\r\n' + '\tIT 3 18 0\r\n'.repeat(12));
   for (let n = 2; n <= 12; n++) {
     q.push(`${n}.\tQuestion ${n}\r\na.\tYes\r\n\tr0 1\r\nb.\tNo\r\n\tr1 1\r\n`);
   }
   return K.parseBiog(q.join('\r\n'), classIndex);
 }
 
-function harness({ stdCatalogue = false, classicData = null, careers, seed = 17 } = {}) {
+function harness({ stdCatalogue = false, catalogue = null, classicData = null, careers, seed = 17 } = {}) {
   const players = new Map();
   const saved = new Map();
   const sent = [];
   let clock = 10_000;
   let worldMinutes = 0;
-  const cat = stdCatalogue ? makeStdCatalogue() : undefined;
+  const cat = catalogue ?? (stdCatalogue ? makeStdCatalogue() : undefined);
   const rng = seeded(seed);
   const rt = createRpgRuntime({
     players,
@@ -191,7 +193,7 @@ test('contrasting classic classes receive authentic starting gear, torch, potion
   assert.deepEqual(nightblade.rpg.magic.known, STARTING_SPELLS.Nightblade.map((i) => `std:${i}`));
   assert.equal(nightblade.rpg.magic.selected, 'std:44');
 
-  // Custom spellcasting class gets school-based classic starting spells + magicka potions.
+  // DFU StartGameBehaviour.AssignStartingSpells: a custom class with a magic primary or major skill gets the Spellsword set.
   const customCaster = h.join(6, null, 'Auren');
   createCharacter(h, customCaster, {
     custom: {
@@ -207,11 +209,26 @@ test('contrasting classic classes receive authentic starting gear, torch, potion
     race: 'Breton',
     gender: 'Male',
   });
-  assert.ok(customCaster.rpg.magic.known.includes('std:8'), 'Destruction primary grants Shock');
-  assert.ok(customCaster.rpg.magic.known.includes('std:97'), "Restoration primary grants Troll's Blood");
-  assert.ok(customCaster.rpg.magic.known.includes('std:37'), 'Illusion major grants Light');
+  assert.deepEqual(customCaster.rpg.magic.known, STARTING_SPELLS.Spellsword.map((i) => `std:${i}`));
   assert.ok(customCaster.rpg.inventory.some((i) => i.template === 'potion-of-magicka'));
   assert.ok(customCaster.rpg.inventory.some((i) => i.template === 'torch'));
+
+  const customFighter = h.join(7, null, 'Brann');
+  createCharacter(h, customFighter, {
+    custom: {
+      name: 'Bulwark',
+      hitPointsPerLevel: 12,
+      attributes: { Strength: 55, Intelligence: 50, Willpower: 50, Agility: 50, Endurance: 55, Personality: 40, Speed: 50, Luck: 50 },
+      primarySkills: ['Long Blade', 'Axe', 'Blunt Weapon'],
+      majorSkills: ['Dodging', 'Stealth', 'Climbing'],
+      minorSkills: ['Running', 'Swimming', 'Medical', 'Lockpicking', 'Streetwise', 'Destruction'],
+      advantages: [{ key: 'increasedMagery', option: '1.5x INT' }],
+      disadvantages: [],
+    },
+    race: 'Nord',
+    gender: 'Male',
+  });
+  assert.deepEqual(customFighter.rpg.magic.known, [], 'no magic primary or major skill: no starting spells');
 });
 
 test('fallback catalogue grants starting spells to casters and none to non-casters', () => {
@@ -250,7 +267,7 @@ test('restricted class without legal starter weapons receives a legal backup wea
 
 // ------------------------------------------------------------------ 2. Biography Ebony Dagger & resilience without ARENA2
 
-test('classic biography grants Ebony Dagger, gold, arrows quiver, and works with fate fallback', () => {
+test('classic biography grants Ebony Dagger, gold, a dozen arrows, and works with fate fallback', () => {
   const rsc = textRsc({ 4132: 'Born in %hpn, you carry your past.' });
   const biogs = new Map([[16, ebonyDaggerBiog(16)]]);
   const h = harness({ stdCatalogue: true, classicData: { rsc, biogs } });
@@ -264,7 +281,7 @@ test('classic biography grants Ebony Dagger, gold, arrows quiver, and works with
   assert.equal(p1.rpg.gold, 150, 'starter gold + 50 biography gold');
   assert.equal(p1.rpg.character.biography.gold, 50);
 
-  // Answer b on Q1 grants a full quiver (20 arrows) instead of 1.
+  // Answer b on Q1 lists twelve arrow IT lines, like BIOG12T0.TXT "A dozen arrows": one arrow each.
   const p2 = h.join(2, null, 'Lyra');
   const arrowsBefore = p2.rpg.inventory.filter((i) => i.template === 'arrow').reduce((n, i) => n + i.quantity, 0);
   createCharacter(h, p2, {
@@ -272,7 +289,7 @@ test('classic biography grants Ebony Dagger, gold, arrows quiver, and works with
     biography: { answers: [1, ...Array(11).fill(0)] },
   });
   const arrowsAfter = p2.rpg.inventory.filter((i) => i.template === 'arrow').reduce((n, i) => n + i.quantity, 0);
-  assert.equal(arrowsAfter - arrowsBefore, 20, 'biography arrow grant gives a 20-arrow quiver');
+  assert.equal(arrowsAfter - arrowsBefore, 12, 'one arrow per biography IT line');
 
   // Client without local BIOG files sends { biography: { random: true } } when server has biography data.
   const d = new CharacterDraft('Fate');
@@ -289,6 +306,33 @@ test('classic biography grants Ebony Dagger, gold, arrows quiver, and works with
   assert.deepEqual(req.biography, { random: true });
   assert.deepEqual(h.rt.act(p3, 'character.create', req), { ok: true });
   assert.equal(p3.rpg.character.biography.answers.length, 12);
+});
+
+const ARENA2 = localArena2();
+
+test('real CLASS*.CFG, BIOG and SPELLS.STD: all 18 classes start with legal grants, their DFU spells and biography items as listed', { skip: !ARENA2 && 'needs gamedata/ARENA2' }, () => {
+  const careers = character.loadCareers(ARENA2, { warn() {} });
+  const classicData = character.loadClassicData(ARENA2, { warn() {} });
+  const catalogue = loadCatalogue({ arena2Dir: ARENA2 });
+  assert.equal(catalogue.source, 'SPELLS.STD');
+  const h = harness({ careers, classicData, catalogue });
+  const count = (p, t) => p.rpg.inventory.filter((i) => i.template === t).reduce((n, i) => n + i.quantity, 0);
+  R.CLASSES.forEach((std, ci) => {
+    assert.equal(careers[std.name].source, 'cfg', `${std.name} comes from CLASS${String(ci).padStart(2, '0')}.CFG`);
+    const biog = classicData.biogs.get(ci);
+    // Pick, for every question, the answer that lists the most arrows (classic lists one IT line per arrow).
+    const arrowsIn = (a) => a.effects.filter((e) => /^IT\s+3\s+18\b/.test(e)).length;
+    const answers = biog.questions.map((q) => q.answers.reduce((best, a, i) => (arrowsIn(a) > arrowsIn(q.answers[best]) ? i : best), 0));
+    const listed = biog.questions.reduce((n, q, i) => n + arrowsIn(q.answers[answers[i]]), 0);
+    const p = h.join(100 + ci, null, `Real ${String.fromCharCode(65 + ci)}`);
+    const before = count(p, 'arrow');
+    createCharacter(h, p, { className: std.name, biography: { answers } });
+    assert.equal(count(p, 'arrow') - before, listed, `${std.name}: one arrow per biography IT line`);
+    const expected = (STARTING_SPELLS[std.name] ?? []).map((i) => `std:${i}`);
+    assert.deepEqual(p.rpg.magic.known, expected, `${std.name}: DFU starting spells, all present in SPELLS.STD`);
+    const staff = p.rpg.inventory.find((i) => i.template === 'iron-staff');
+    if (staff) assert.deepEqual(h.rt.act(p, 'inventory.equip', { itemId: staff.id }), { ok: true }, `${std.name} may wield its starter staff`);
+  });
 });
 
 // ------------------------------------------------------------------ 3. Level-up formula, 6-hour rest check, caps, persistence

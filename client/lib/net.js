@@ -152,7 +152,8 @@ export class Connection {
       ws.onopen = () => {
         // arrival: we send {type:'arrived'} once the loading screen shows a complete place (client/main.js).
         // delta: the server may send `stateDelta` (applied below) and partial `rpg` snapshots (merged by mergeRpg).
-        const msg = { type: 'join', name, arrival: true, delta: true };
+        // patch: `rpg` may carry `peerDelta` and `entityDelta.patch` (client/gameplay/api.js mergeRpg).
+        const msg = { type: 'join', name, arrival: true, delta: true, patch: true };
         if (account) {
           msg.account = true;
           if (claimToken) msg.claimToken = claimToken;

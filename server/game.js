@@ -61,8 +61,8 @@ export const DEFAULTS = Object.freeze({
   wsMaxBufferedBytes: 4 * 1024 * 1024, // disconnect chronically stalled sockets above 4 MB queued
   msgRatePerSec: 40, // token bucket for all messages
   msgBurst: 80,
-  chatRatePerSec: 1,
-  chatBurst: 5,
+  chatRatePerSec: 4, // CHAT_LIMITS.local (server/rpg/social/chat.js); 1/s with a burst of 5 was too tight
+  chatBurst: 12,
   actionRatePerSec: 10,
   actionBurst: 20,
   accountActionRatePerSec: null, // defaults to actionRatePerSec when null
@@ -499,7 +499,8 @@ export function createGameServer(options = {}) {
         const across = view ? view.across(p) : [];
         let mine;
         if (useAoi) {
-          const priorityIds = typeof services.partyOf === 'function' ? (services.partyOf(p)?.memberIds ?? []) : [];
+          // Party members and the trade partner stay visible past the crowd cap and the radius.
+          const priorityIds = [...(services.partyOf?.(p)?.memberIds ?? []), services.tradePartnerOf?.(p) ?? p.id];
           const nearby = spatialIndex.query(scene, p, { priorityIds });
           mine = [publicOf(p), ...nearby.map(publicOf)];
         } else {
@@ -835,6 +836,8 @@ export function createGameServer(options = {}) {
       conn.arrival = msg.arrival === true;
       // `delta: true`: the client applies `stateDelta` frames and merges partial `rpg` snapshots (client/lib/net.js).
       conn.delta = msg.delta === true;
+      // `patch: true`: the client also merges `peerDelta` and `entityDelta.patch` (client/gameplay/api.js mergeRpg).
+      conn.patch = msg.patch === true;
       if (conn.account) await joinAccount(conn, msg);
       else await joinGuest(conn, msg);
     } finally {
@@ -927,6 +930,7 @@ export function createGameServer(options = {}) {
       existing.dirty = true;
       existing.arriving = conn.arrival === true;
       existing.delta = conn.delta === true;
+      existing.patch = conn.patch === true;
       conn.player = existing;
       runtime.resetSync(existing);
       send(ws, { type: 'welcome', id: existing.id, ...welcome, ...(conn.arrival ? { arrival: true } : {}), player: publicPlayer(existing) });
@@ -960,6 +964,7 @@ export function createGameServer(options = {}) {
       chatOk: bucket(cfg.chatRatePerSec, cfg.chatBurst),
       arriving: conn.arrival === true,
       delta: conn.delta === true,
+      patch: conn.patch === true,
     };
     conn.player = p;
     players.set(p.id, p);
@@ -1010,7 +1015,6 @@ export function createGameServer(options = {}) {
     const sceneOf = runtime.sceneOf ?? runtime.locationOf;
     const scene = sceneOf(p);
     const channel = msg.channel === 'shout' || msg.channel === 'yell' ? 'shout' : 'say';
-    services.logChat?.(p, { channel, location: scene, text });
     const data = JSON.stringify({ type: 'chat', name: p.name, text, ...(channel === 'shout' ? { channel: 'shout' } : {}) });
     const audience = typeof services.chatAudience === 'function'
       ? services.chatAudience(p, channel)
@@ -1018,6 +1022,8 @@ export function createGameServer(options = {}) {
           const near = new Set((services.peerView?.across(p) ?? []).map((a) => a.player));
           return [...players.values()].filter((q) => sceneOf(q) === scene || near.has(q));
         })();
+    const logged = services.logChat?.(p, { channel, location: scene, text, recipientIds: audience.filter((q) => q !== p).map((q) => q.id) });
+    if (logged === null) return sendError(conn.ws, 'chat is unavailable right now'); // moderation: never deliver unlogged chat
     for (const q of audience) {
       if (q.ws.readyState === q.ws.OPEN) q.ws.send(data);
     }

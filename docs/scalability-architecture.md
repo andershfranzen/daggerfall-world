@@ -4,6 +4,12 @@ Daggerfall World hosts **one shared Iliac Bay world** — there are **no shards,
 
 This document describes the vertical and horizontal scaling infrastructure implemented in `server/scale/`, the updated capacity and chat limits, real 500-player AOI benchmark measurements, and the exact minimal hooks to wire these modules into `server/game.js` during integration.
 
+> **What the live server runs (reviewed 2026-11-25 against the real ARENA2 files).**
+> - **Running:** `server/scale/spatial-grid.js` only, through `createSceneSpatialIndex` in `server/game.js` `broadcastState()`. It activates per presence scene once more than `aoiThreshold` (64) visible players share it, and keeps `maxVisiblePeers` (64) per viewer within `aoiRadius` (128 m). Until this review, the live wiring crashed the whole process the first time a culled scene had a stale entry (a leave, a scene change or a loading screen): `game.js` called `grid.ids()`, which `SpatialGrid` did not have. Before the fix, every server with more than 64 players in one scene went down. 100 real-data players in Privateer's Hold reproduced it.
+> - **Priority tier as wired:** party members and the partner of a pending or open trade (`services.tradePartnerOf`, `server/rpg/social.js`). Until this review only party members were wired. There is no player-versus-player melee, so there are no duel or combat partners to wire. `isPriority` is unused. The `rpg` peer list (`server/rpg/runtime.js`, nearest 64 in a crowd) uses the same two priorities.
+> - **Not running:** `server/scale/zone-router.js` and `server/scale/world-bus.js` (including `createPostgresBus`). Only their tests import them. `server/main.js` never creates a bus or a router, so `cfg.worldBus` is always `null`. The live world is one Node process. Sections 2.2, 2.3 and 4 below describe unintegrated code.
+> - The 500-player figure in section 3 times `SpatialGrid` alone in a unit test. It is not a server measurement. For measured server capacity with the real files, see `docs/server-capacity-report.md`.
+
 ---
 
 ## 1. Architecture Overview

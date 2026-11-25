@@ -571,3 +571,18 @@ test('with the shell api: target goes through setTarget, and only once sprites a
   assert.equal(seen.length, 1, 'no repeat emits while the target is unchanged');
   assert.equal(api.spritesActive, true);
 });
+
+test('figureDrawable: a peer whose sprite archive failed to load is not drawable, so the shell draws a stand-in', () => {
+  const state = { character: { location: 'town:Daggerfall/Gothway Garden' }, peers: [
+    { id: 2, x: 0, z: 0, readied: true, className: 'Warrior', gender: 'm' },
+    { id: 3, x: 1, z: 0, readied: true, className: 'Knight', gender: 'f' },
+  ] };
+  const { ctl } = makeController(state, { 488: enemyArchive(25) });
+  ctl.syncState(state, 0);
+  assert.equal(ctl.figureDrawable(2), false, 'no game files indexed: nothing will ever load');
+  ctl.library.index = new Map();
+  assert.equal(ctl.figureDrawable(2), true, 'archive loaded (drawn or out of range)');
+  ctl.library.failed.set(487, 'TEXTURE.487 could not be read');
+  assert.equal(ctl.figureDrawable(3), false, 'archive failed: never drawable');
+  assert.equal(ctl.figureDrawable(9), true, 'no rpg snapshot for this player yet');
+});

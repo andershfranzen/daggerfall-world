@@ -63,6 +63,7 @@ function makeTownHarness({
   weather = 'sunny',
   startTime = 0,
   slowTown = false,
+  initialWinter = lookFor(season).winter,
 } = {}) {
   const api = createGameplayApi({ send: () => true, applyScene: () => {} });
   api.files = [new File([new Uint8Array(1)], 'MAPS.BSA')];
@@ -80,7 +81,7 @@ function makeTownHarness({
   api.renderer = renderer;
   api.on('exteriorLook', (ev) => calls.exteriorLook.push(ev));
 
-  const initialTown = makeTownMesh(location, { region, name, climateValue, climateBase, winter: lookFor(season).winter });
+  const initialTown = makeTownMesh(location, { region, name, climateValue, climateBase, winter: initialWinter });
   const loadTown = async (_files, opts) => {
     calls.loadTown.push({ region: opts.region, location: opts.location, winter: !!opts.winter });
     if (slowTown && state.gate) await state.gate;
@@ -124,7 +125,7 @@ function makeTownHarness({
     }
   };
   const clock = () => api.emit('event', { kind: 'clock', minutes: 3067200 });
-  return { api, initialTown, calls, state, frames, clock, renderer };
+  return { api, initialTown, calls, state, frames, clock, renderer, advance: (ms) => { t += ms; } };
 }
 
 describe('live in-place seasonal texture swaps (town & wilderness)', () => {
@@ -290,6 +291,46 @@ describe('live in-place seasonal texture swaps (town & wilderness)', () => {
     assert.equal(changed.atlas, true);
     assert.equal(target.atlas.height, 2);
     assert.equal(target.positions, positions);
+  });
+
+  test('arrival: a town built before the season was known is not shown until it wears the server season', async () => {
+    // The shell builds its bootstrap town (Gothway Garden) before joining, always in summer; a winter
+    // server then places the player there. No 'frame' events run behind the loading screen: only the
+    // arrival gate polls api.exterior.arrival().
+    const loc = 'town:Daggerfall/Gothway Garden';
+    const h = makeTownHarness({ season: 'Winter', initialWinter: false });
+    await settle();
+    assert.notEqual(h.api.exterior.arrival(loc).status, 'ready', 'the season is not known yet');
+    h.clock();
+    let status = null;
+    for (let i = 0; i < 40 && (status = h.api.exterior.arrival(loc).status) !== 'ready'; i++) await settle(5);
+    assert.equal(status, 'ready');
+    assert.deepEqual(h.initialTown.look, { winter: true }, 'winter textures before the first visible frame');
+    assert.equal(h.initialTown.atlas.pixels[0], 240);
+    assert.equal(h.calls.loadTown.filter((c) => c.winter).length, 1);
+  });
+
+  test('arrival: a server that never sends its clock does not hold the loading screen forever', async () => {
+    const loc = 'town:Daggerfall/Gothway Garden';
+    const h = makeTownHarness({ season: 'Winter', initialWinter: false });
+    await settle();
+    assert.notEqual(h.api.exterior.arrival(loc).status, 'ready', 'waits for the clock at first');
+    h.advance(4000);
+    assert.notEqual(h.api.exterior.arrival(loc).status, 'ready', 'still inside the wait');
+    h.advance(2000);
+    assert.equal(h.api.exterior.arrival(loc).status, 'ready', 'shown as built once the wait is over');
+    assert.deepEqual(h.initialTown.look, { winter: false });
+  });
+
+  test('arrival: a town already in the season is ready without a rebuild once the clock is known', async () => {
+    const loc = 'town:Daggerfall/Gothway Garden';
+    const h = makeTownHarness({ season: 'Winter' });
+    await settle();
+    h.clock();
+    let status = null;
+    for (let i = 0; i < 40 && (status = h.api.exterior.arrival(loc).status) !== 'ready'; i++) await settle(5);
+    assert.equal(status, 'ready');
+    assert.equal(h.calls.loadTown.length, 0);
   });
 
   test('clock event triggers look check even when performance.now() < 1000', async () => {

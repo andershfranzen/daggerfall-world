@@ -557,14 +557,19 @@ export function install(ctx, options = {}) {
     }
     if (t.kind === 'player' && poolName === 'health' && delta < 0 && source && typeof services.hurtPlayerBy === 'function') {
       // Enemy spells: the combat feature applies shields, defeat and events.
-      return -(Number(services.hurtPlayerBy(t.ref, -delta, source)) || 0);
+      return -(Number(services.hurtPlayerBy(t.ref, -delta, source, 'spell')) || 0);
     }
     const pl = pool(t, poolName);
     if (!pl) return null;
     const before = pl.obj[pl.cur];
     pl.obj[pl.cur] = Math.max(0, Math.min(pl.max, before + delta));
     if (t.kind === 'player') ctx.dirty?.(t.ref);
-    return pl.obj[pl.cur] - before;
+    const change = pl.obj[pl.cur] - before;
+    // Private health feedback for the affected player: what was actually applied.
+    if (t.kind === 'player' && poolName === 'health' && change) {
+      ctx.notify?.(t.ref, change > 0 ? { kind: 'heal', amount: change } : { kind: 'hurt', damage: -change, cause: 'spell' });
+    }
+    return change;
   }
 
   function applyEffect(cast, eff, t) {
@@ -775,6 +780,7 @@ export function install(ctx, options = {}) {
       if (!p.rpg) continue;
       const m = magicOf(p);
       if (grantStarting(p)) ctx.dirty?.(p);
+      activeReadySpell(p);
       if (!m.active.length) continue;
       const events = [];
       m.active = tickTarget(asPlayerTarget(p), m.active, events);

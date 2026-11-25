@@ -7,7 +7,7 @@
 // ItemHelper.GetItemTemplate logs "Item index out of range" for a subclass past the group's enum and builds an empty
 // template (O0B60Y18's parcel is UselessItems1 #16 of 11), so such a record keeps no inventory item here: it stays a
 // journal quest item. Letters (9/5) are quest parchment with their own text and are not inventory templates here.
-import { BASES, describeTemplate, resolveTemplate, templateForClassic, classicGroupTemplates } from '../inventory.js';
+import { BASES, resolveTemplate, templateForClassic, classicGroupTemplates } from '../inventory.js';
 import { GROUPS as CLASSIC_GROUPS } from '../items/classicTemplates.js';
 import { randomBook } from '../items/loot.js';
 
@@ -110,34 +110,13 @@ const PERMANENT_FALLBACK_TEMPLATES = Object.freeze({
 });
 
 /**
- * Converts a template-less non-gold, non-artifact quest item into a durable inventory record definition
- * preserving its name, weight, value, and icon metadata in `appearance.extra.quest`.
+ * Base inventory template for a template-less non-gold, non-artifact quest item made permanent: an ordinary record of
+ * the class's stand-in template. The quest item's own name is not carried over. No `quest` extra: that marks a quest
+ * item (untradeable, unstorable), which a permanent item no longer is.
  */
-export function permanentFallbackItem(item, quest = null) {
+export function permanentFallbackItem(item) {
   if (!item || item.gold || item.className === 'gold' || item.className === 'artifact') return null;
   const cls = String(item.className ?? 'misc').toLowerCase();
-  const baseKey = PERMANENT_FALLBACK_TEMPLATES[cls] ?? 'glass-jar';
-  const resolved = resolveTemplate(baseKey) ?? resolveTemplate('glass-jar');
-  if (!resolved) return null;
-  const desc = describeTemplate(resolved.key);
-  const displayName = (typeof item.name === 'string' && item.name.trim()) ? item.name.trim().slice(0, 80) : desc.name;
-  const weight = Number.isFinite(item.weight) ? item.weight : desc.weight;
-  const value = Number.isFinite(item.value) ? item.value : desc.value;
-  const icon = item.art?.icon ?? item.art?.world ?? desc.icon ?? desc.world ?? null;
-  return {
-    template: resolved.key,
-    appearance: {
-      extra: {
-        quest: {
-          permanent: true,
-          ...(quest?.name ? { fromQuest: quest.name } : {}),
-          className: cls,
-          name: displayName,
-          weight,
-          value,
-          ...(icon ? { icon } : {}),
-        },
-      },
-    },
-  };
+  const resolved = resolveTemplate(PERMANENT_FALLBACK_TEMPLATES[cls] ?? 'glass-jar') ?? resolveTemplate('glass-jar');
+  return resolved ? { template: resolved.key } : null;
 }

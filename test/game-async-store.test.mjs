@@ -56,6 +56,9 @@ function createMockPgPool({ delayMs = 2 } = {}) {
       return { rows: [], rowCount: 0 };
     }
 
+    if (sql.includes('pg_advisory_xact_lock')) return { rows: [{}], rowCount: 1 }; // single-process mock: no contention
+    if (sql.startsWith('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS')) return { rows: [], rowCount: 0 }; // upgrade of older tables
+
     if (sql.includes('CREATE TABLE IF NOT EXISTS') || sql.includes('CREATE INDEX IF NOT EXISTS')) {
       state.schemaApplied += 1;
       return { rows: [], rowCount: 0 };
@@ -190,6 +193,7 @@ function createMockPgPool({ delayMs = 2 } = {}) {
         target_name,
         group_id,
         body,
+        recipient_ids,
       ] = params;
       const id = ++state.seqs.chat_messages;
       const row = {
@@ -204,6 +208,7 @@ function createMockPgPool({ delayMs = 2 } = {}) {
         target_name,
         group_id,
         body,
+        recipient_ids: recipient_ids ?? null,
       };
       state.chatMessages.push(row);
       return { rows: [structuredClone(row)], rowCount: 1 };

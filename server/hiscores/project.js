@@ -412,11 +412,9 @@ export function projectOrders(worldRows, characterById = new Map()) {
     const leaderMember = (leaderId != null ? members.find((m) => Number(m.id) === leaderId) : null)
       ?? members.find((m) => m.rank === 'Leader')
       ?? members[0];
+    // Name the leader only through their public Chronicles record: hidden, banned or uncreated leaders stay unnamed.
     const leaderChar = leaderMember ? lookupCharacter(charLookup, Number(leaderMember.id)) : null;
-    const leaderName = (typeof val.leaderName === 'string' && val.leaderName.trim())
-      || (typeof leaderMember?.name === 'string' && leaderMember.name.trim())
-      || leaderChar?.name
-      || 'Unknown';
+    const leaderName = leaderChar?.name || 'Unknown';
 
     let combinedLevel = 0;
     let combinedTotalSkill = 0;
@@ -428,9 +426,8 @@ export function projectOrders(worldRows, characterById = new Map()) {
     }
 
     const treasury = nonNegInt(val.treasury);
-    const createdAt = typeof val.createdAt === 'string'
-      ? val.createdAt
-      : (Number.isFinite(val.createdAt) ? new Date(val.createdAt).toISOString() : null);
+    // Epoch ms: both stores keep an integer and the engine tie-breaks on it (an ISO string became 0).
+    const createdAt = toEpochMs(val.createdAt) ?? 0;
 
     out.push(Object.freeze({
       id,

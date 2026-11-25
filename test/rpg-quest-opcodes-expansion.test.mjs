@@ -418,7 +418,7 @@ Person _giver_ group Questor
 // 4. Upgraded makePermanent (0x36) for non-standard item classes + persistence
 // ---------------------------------------------------------------------------
 
-test('makePermanent converts non-standard template-less quest items into durable inventory records with metadata', () => {
+test('makePermanent converts non-standard template-less quest items into ordinary inventory records', () => {
   const players = new Map();
   let invCtx = null;
   const rt = createRpgRuntime({
@@ -469,33 +469,19 @@ test('makePermanent converts non-standard template-less quest items into durable
     assert.ok(it.template, `${k} received durable template`);
   }
 
-  const chalice = p.rpg.inventory.find((i) => i.quest?.name === 'Silver Chalice');
-  assert.ok(chalice);
-  assert.equal(chalice.template, 'religious-item');
-  assert.equal(chalice.quest.className, 'religious');
-  assert.equal(chalice.quest.weight, 1.5);
-  assert.equal(chalice.quest.value, 220);
-  assert.deepEqual(chalice.quest.icon, { archive: 211, record: 50 });
-  assert.equal(chalice.quest.fromQuest, 'T0C00Y54');
+  // Ordinary records: no `quest` marker, which would make them untradeable and unstorable.
+  assert.ok(p.rpg.inventory.every((i) => i.quest === undefined), 'converted items are not quest items');
+  assert.ok(p.rpg.inventory.some((i) => i.template === 'religious-item'));
 
   // Survives JSON save/reload + inventory normalizeRpg!
   const reloaded = JSON.parse(JSON.stringify(p.rpg));
   normalizeRpg(reloaded);
   assert.equal(reloaded.inventory.length, Object.keys(quest.items).length);
-  const chaliceAfter = reloaded.inventory.find((i) => i.quest?.name === 'Silver Chalice');
-  assert.ok(chaliceAfter);
-  assert.equal(chaliceAfter.quest.permanent, true);
-  assert.equal(chaliceAfter.quest.value, 220);
-  assert.deepEqual(chaliceAfter.quest.icon, { archive: 211, record: 50 });
+  assert.ok(reloaded.inventory.some((i) => i.template === 'religious-item'));
 });
 
 test('permanentFallbackItem handles custom classes and rejects gold/artifacts', () => {
   assert.equal(permanentFallbackItem({ className: 'gold', gold: 100 }), null);
   assert.equal(permanentFallbackItem({ className: 'artifact' }), null);
-  const custom = permanentFallbackItem({ className: 'exotic_curio', name: 'Dwemer Gyro' }, { name: 'T0C00Y55' });
-  assert.ok(custom);
-  assert.equal(custom.template, 'glass-jar');
-  assert.equal(custom.appearance.extra.quest.name, 'Dwemer Gyro');
-  assert.equal(custom.appearance.extra.quest.className, 'exotic_curio');
-  assert.equal(custom.appearance.extra.quest.permanent, true);
+  assert.deepEqual(permanentFallbackItem({ className: 'exotic_curio', name: 'Dwemer Gyro' }), { template: 'glass-jar' });
 });

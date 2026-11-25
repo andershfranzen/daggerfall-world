@@ -36,6 +36,8 @@ API (JSON, same origin):
 | `POST /api/login` `{username, password}` | `200 {user}` and sets the cookie; `401` wrong name or password, `403` banned. |
 | `POST /api/logout` | Deletes the server session and clears the cookie. |
 
+Password change, sign-out everywhere, recovery codes, account deletion, `GET /api/account` and `GET /api/stats` are listed in [server/README.md](../server/README.md#account-request-flow).
+
 Browsers accept `Secure` cookies from `http://localhost` and `http://127.0.0.1`, so local development over loopback uses the same cookie as production. If a browser refuses the cookie on another plain-HTTP dev host, use `COOKIE_SECURE=0 npm run dev` (dev only).
 
 ## Moderation
@@ -70,7 +72,7 @@ Every action is recorded in `moderation_log` with the operator's user name.
 | `REQUIRE_HTTPS` | `0` | `1`. Refuse login/register that did not arrive over HTTPS. |
 | `COOKIE_SECURE` | `1` | Leave at `1`. `0` is only accepted with `--dev`. |
 | `ALLOW_GUESTS` | `0` | Leave at `0`. `1` is only accepted with `--dev`, for local testing without accounts. |
-| `MAX_PLAYERS` | `32` | Size to your machine. |
+| `MAX_PLAYERS` | `2000` | Size to your machine. `0` removes the cap. |
 
 The Dockerfile sets these defaults. `deploy/compose.yaml` adds `PUBLIC_ORIGIN` from `DFW_DOMAIN`.
 
@@ -117,7 +119,7 @@ Copy backups off the machine. `accounts.db` holds password hashes and session ha
 
 ## Before opening to the public
 
-- Publish a privacy notice and terms. You store account names, password hashes, IP addresses in memory for rate limiting, and chat in transit. See the checklist in [research/04-legal-and-licences.md](research/04-legal-and-licences.md#6-running-an-online-service-accounts--chat-euuk-users-checklist).
+- Publish a privacy notice and terms. You store account names, password hashes, IP addresses in memory for rate limiting, and a moderation log of chat messages with their recipients. See the checklist in [research/04-legal-and-licences.md](research/04-legal-and-licences.md#6-running-an-online-service-accounts--chat-euuk-users-checklist).
 - Decide who moderates and how players report abuse.
-- There is no password reset (no e-mail is collected). An operator can only revoke sessions or ban. If you add recovery, add it deliberately.
+- No e-mail is collected. A forgotten password is reset with the recovery code shown once at registration (`POST /api/recover`). An operator cannot reset a password, only revoke sessions or ban.
 - The server is a single process with in-memory world state. Scale vertically and keep `MAX_PLAYERS` realistic.

@@ -202,7 +202,7 @@ export function install(api) {
       }
     }, true);
     if (input) {
-      input.placeholder = 'Speak nearby · /yell or /msg to shout · /help';
+      input.placeholder = 'Say nearby · /yell to shout · /help';
       input.title = 'Plain text speaks nearby (~24 m). Start with / or /yell to shout across the area. /p, /r, /g, /w, /me, /help.';
     }
   }

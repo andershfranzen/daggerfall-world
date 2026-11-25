@@ -110,6 +110,12 @@ test('Potion Maker: a recipe brews a real potion from real ingredients and consu
   a.must('alchemy.brew', { targetId: e.id, recipe: 'healing' });
   assert.equal(byTemplate(a, 'potion-of-healing').quantity, healingBefore + 2);
   assert.equal(byTemplate(a, 'mercury'), undefined, 'last mercury used');
+  // Drinking one restores health and tells the drinker how much (the private `heal` event).
+  const hpBefore = a.player.rpg.character.health;
+  a.must('inventory.use', { itemId: byTemplate(a, 'potion-of-healing').id });
+  const restored = a.player.rpg.character.health - hpBefore;
+  assert.ok(restored > 0, 'the potion healed');
+  assert.deepEqual(a.events('heal').map((ev) => ev.amount), [restored], 'one heal event, with the amount restored');
   // A wrong mixture is lost.
   give(world, a, 'twigs'); give(world, a, 'aloe');
   a.must('alchemy.brew', { targetId: e.id, itemIds: [byTemplate(a, 'twigs').id, byTemplate(a, 'aloe').id] });

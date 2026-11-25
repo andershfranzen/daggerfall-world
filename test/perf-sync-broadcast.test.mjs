@@ -31,8 +31,8 @@ test('runtime.sync: delta players get only changed fields, merged state always e
     }],
   });
   const add = (p) => { players.set(p.id, p); rt.join(p); return p; };
-  const a = add(player(1, { inventory: [{ id: 'i', name: 'Big inventory' }] }, { delta: true }));
-  const b = add(player(2, {}, { delta: true }));
+  const a = add(player(1, { inventory: [{ id: 'i', name: 'Big inventory' }] }, { delta: true, patch: true }));
+  const b = add(player(2, {}, { delta: true, patch: true }));
   const legacy = add(player(3));
   const merged = new Map();
   const step = (mutate, expectSent) => {
@@ -55,11 +55,11 @@ test('runtime.sync: delta players get only changed fields, merged state always e
   step(() => { a.x = 9; b.yaw = 1; }, []); // peer positions stream through `state`
   step(() => { rt.entities.get('rat').x = 4; }, [1, 2, 3]);
   assert.deepEqual(Object.keys(sent.find(([id]) => id === 1)[1]).sort(), ['entityDelta', 'selfId', 'type'], 'only the moved entity is sent as entityDelta');
-  assert.deepEqual(sent.find(([id]) => id === 1)[1].entityDelta, { upsert: [{ id: 'rat', location: DEFAULT_LOCATION, x: 4, z: 2, hp: 3 }] });
+  assert.deepEqual(sent.find(([id]) => id === 1)[1].entityDelta, { patch: [{ id: 'rat', x: 4 }] }, 'only the changed field');
   step(() => { a.rpg.gold = 5; }, [1]); // a private sheet change reaches only its owner
   assert.deepEqual(Object.keys(sent.find(([id]) => id === 1)[1]).sort(), ['character', 'selfId', 'type']);
-  step(() => { a.rpg.readied = true; }, [1, 2, 3]); // public peer field: others get `peers`
-  assert.deepEqual(Object.keys(sent.find(([id]) => id === 2)[1]).sort(), ['peers', 'selfId', 'type']);
+  step(() => { a.rpg.readied = true; }, [1, 2, 3]); // public peer field: others get that peer in `peerDelta`
+  assert.deepEqual(Object.keys(sent.find(([id]) => id === 2)[1]).sort(), ['peerDelta', 'selfId', 'type']);
   step(() => { rt.entities.get('key').visibleTo = [1]; }, [1, 2]);
   assert.deepEqual(sent.find(([id]) => id === 1)[1].entityDelta, { upsert: [{ id: 'key', location: DEFAULT_LOCATION, x: 0, z: 0 }] });
   assert.deepEqual(sent.find(([id]) => id === 2)[1].entityDelta, { remove: ['key'] });
@@ -103,7 +103,7 @@ test('runtime.sync: entityDelta cuts wire bytes by >85% when 1 of 20 entities mo
       }
     }],
   });
-  const d = player(1, {}, { delta: true });
+  const d = player(1, {}, { delta: true, patch: true });
   const l = player(2, {}, { delta: false });
   players.set(1, d); rt.join(d);
   players.set(2, l); rt.join(l);
@@ -234,4 +234,194 @@ test('client/lib/net.js opts in and rebuilds the roster from stateDelta', async 
   assert.deepEqual(got.at(-1).players.map((p) => p.id), ['1', '2']);
   ws.recv({ type: 'stateDelta', location: 'town:Other', players: [{ id: 9, name: 'Z', x: 0, z: 0, yaw: 0 }] });
   assert.equal(got.length, 3, 'a delta for another location is ignored until its full state arrives');
+});
+
+// ---- crowd culling keeps trade partners ---------------------------------------------------------
+
+test('runtime.sync crowd cap keeps an open trade partner who is not among the 64 nearest', async () => {
+  const inventory = await import('../server/rpg/inventory.js');
+  const social = await import('../server/rpg/social.js');
+  const players = new Map();
+  const last = new Map();
+  const rt = createRpgRuntime({ players, save() {}, log: quiet, send: (p, msg) => last.set(p.id, mergeRpg(last.get(p.id), json(msg))), features: [inventory, social] });
+  const add = (id, x) => { const p = player(id, {}, { x }); players.set(id, p); rt.join(p); return p; };
+  const a = add(1, 0);
+  const b = add(2, 7); // within trade reach (8 m), but 66 others stand closer
+  for (let i = 3; i <= 68; i++) add(i, 1 + (i % 5) * 0.2);
+  assert.equal(rt.act(a, 'trade.request', { targetId: 2 }).error, undefined);
+  rt.sync(undefined, { force: true });
+  const ids = (p) => last.get(p.id).peers.map((q) => q.id);
+  assert.equal(ids(a).length, 64);
+  assert.ok(ids(a).includes(2), 'trade partner B is in A\'s rpg peers');
+  assert.ok(ids(b).includes(1), 'trade partner A is in B\'s rpg peers');
+});
+
+test('broadcastState AOI keeps an open trade partner past the crowd cap', async () => {
+  const inventory = await import('../server/rpg/inventory.js');
+  const social = await import('../server/rpg/social.js');
+  const tmp = mkdtempSync(join(tmpdir(), 'dfw-aoi-'));
+  mkdirSync(join(tmp, 'c'));
+  mkdirSync(join(tmp, 's'));
+  const server = createGameServer({ host: '127.0.0.1', port: 0, dbPath: join(tmp, 'w.db'), clientDir: join(tmp, 'c'), siteDir: join(tmp, 's'), features: [inventory, social], aoiThreshold: 2, maxVisiblePeers: 1 });
+  const { port } = await server.start();
+  try {
+    const [a, b, c] = [client(port, 'Ada', true), client(port, 'Bram', true), client(port, 'Cole', true)];
+    await Promise.all([a, b, c].map((x) => x.ready));
+    const live = server.runtime.ctx.players;
+    live.get(a.id).x = 0;
+    live.get(b.id).x = 6; // trade partner, farther than C
+    live.get(c.id).x = 1;
+    for (const id of [a.id, b.id, c.id]) live.get(id).z = 0;
+    await sleep(300);
+    assert.deepEqual([...a.roster.keys()].sort(), [a.id, c.id].sort(), 'cap 1: A sees only the nearest (C)');
+    a.ws.send(JSON.stringify({ type: 'action', seq: 1, verb: 'trade.request', args: { targetId: b.id } }));
+    await sleep(400);
+    assert.ok(a.roster.has(b.id), 'trade partner B is visible to A under AOI');
+    assert.ok(b.roster.has(a.id), 'trade partner A is visible to B under AOI');
+    for (const x of [a, b, c]) x.ws.close();
+  } finally {
+    await server.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('broadcastState AOI survives a player leaving a culled scene (stale index entries are pruned)', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dfw-aoi-'));
+  mkdirSync(join(tmp, 'c'));
+  mkdirSync(join(tmp, 's'));
+  const server = createGameServer({ host: '127.0.0.1', port: 0, dbPath: join(tmp, 'w.db'), clientDir: join(tmp, 'c'), siteDir: join(tmp, 's'), features: [], aoiThreshold: 2, maxVisiblePeers: 8 });
+  const { port } = await server.start();
+  const crashes = [];
+  const onCrash = (err) => crashes.push(err);
+  process.on('uncaughtException', onCrash);
+  try {
+    const cs = ['A', 'B', 'C', 'D'].map((n) => client(port, n, true));
+    await Promise.all(cs.map((x) => x.ready));
+    await sleep(200);
+    assert.equal(cs[0].roster.size, 4);
+    cs[3].ws.close();
+    await sleep(400);
+    assert.deepEqual(crashes.map(String), [], 'no exception in the broadcast');
+    assert.deepEqual([...cs[0].roster.keys()].sort(), [cs[0].id, cs[1].id, cs[2].id].sort(), 'the leaver is gone from the rebuilt roster');
+    for (const x of cs.slice(0, 3)) x.ws.close();
+  } finally {
+    process.off('uncaughtException', onCrash);
+    await server.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runtime.sync crowd cap: peers swapping places inside the nearest 64 resend nothing', () => {
+  const players = new Map();
+  const sent = [];
+  const rt = createRpgRuntime({ players, save() {}, log: quiet, send: (p, msg) => sent.push([p.id, msg]), features: [] });
+  for (let i = 1; i <= 70; i++) { const p = player(i, {}, { x: i, delta: true, patch: true }); players.set(i, p); rt.join(p); }
+  rt.sync();
+  sent.length = 0;
+  players.get(2).x = 3.5; // 2 and 3 swap distance order for viewer 1; the nearest-64 set is unchanged
+  players.get(3).x = 2.5;
+  rt.sync();
+  assert.deepEqual(sent.filter(([id]) => id === 1), [], 'viewer 1 gets no peer resend for a reorder');
+});
+
+// ---- per-peer and field-level entity deltas ----------------------------------------------------
+
+test('runtime.sync: random joins, leaves, moves, gear, travel, crowd churn and reconnects: delta state equals the full snapshot', () => {
+  let s = 12345;
+  const rand = () => ((s = (Math.imul(s, 1103515245) + 12345) >>> 0) / 4294967296);
+  const pick = (arr) => arr[Math.floor(rand() * arr.length)];
+  const LOCS = [DEFAULT_LOCATION, 'dungeon:Crypt'];
+  const players = new Map();
+  const merged = new Map(); // player id -> what a delta (or legacy) client rebuilt from the wire
+  const sentKinds = { peerDelta: 0, patch: 0, upsert: 0, peers: 0, entities: 0 };
+  let acrossOf = () => [];
+  const rt = createRpgRuntime({
+    players, save() {}, log: quiet,
+    send: (p, msg) => {
+      const m = json(msg);
+      if (m.peerDelta) sentKinds.peerDelta++;
+      if (m.entityDelta?.patch) sentKinds.patch++;
+      if (m.entityDelta?.upsert) sentKinds.upsert++;
+      if (m.peers) sentKinds.peers++;
+      if (m.entities) sentKinds.entities++;
+      if (!p.delta) for (const k of ['character', 'entities', 'peers', 'readiness']) assert.ok(k in m, `legacy ${p.id} gets full ${k}`);
+      // A tab on the previous delta protocol (joined without `patch`) never gets what it cannot merge.
+      if (!p.patch) assert.ok(!('peerDelta' in m) && !m.entityDelta?.patch, `player ${p.id} without patch got ${Object.keys(m)}`);
+      merged.set(p.id, mergeRpg(merged.get(p.id), m));
+    },
+    services: { peerView: { across: (p) => acrossOf(p) } },
+    features: [(ctx) => {
+      for (let i = 0; i < 30; i++) {
+        ctx.entities.set(`npc-${i}`, { id: `npc-${i}`, kind: 'npc', name: `Townsperson ${i}`, location: pick(LOCS), x: i, z: -i, yaw: 0, sprite: 'tp', state: 'walk', _ai: {} });
+      }
+    }],
+  });
+  let nextId = 1;
+  const join = () => {
+    const p = player(nextId++, { location: pick(LOCS) }, { x: rand() * 40, z: rand() * 40, ...((r) => ({ delta: r < 0.85, patch: r < 0.7 }))(rand()) }); // current, previous-protocol and legacy clients
+    players.set(p.id, p);
+    rt.join(p);
+    merged.delete(p.id);
+  };
+  for (let i = 0; i < 80; i++) join();
+  const live = () => [...players.values()];
+  const byId = (list) => [...(list ?? [])].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const still = (peers) => byId(peers).map(({ x, z, yaw, moving, ...rest }) => rest);
+  const ops = [
+    () => join(),
+    () => { const p = pick(live()); rt.leave(p); players.delete(p.id); merged.delete(p.id); },
+    () => { for (const p of live()) if (rand() < 0.5) { p.x += rand() * 6 - 3; p.z += rand() * 6 - 3; } }, // crowd-cap churn
+    () => { const p = pick(live()); p.rpg.readied = !p.rpg.readied; }, // public appearance
+    () => { const p = pick(live()); p.rpg.defeated = !p.rpg.defeated || undefined; },
+    () => { const p = pick(live()); p.rpg.location = pick(LOCS); }, // travel
+    () => { const p = pick(live()); p.rpg.gold = (p.rpg.gold ?? 0) + 1; },
+    () => { const p = pick(live()); rt.resetSync(p); merged.delete(p.id); }, // reconnect: fresh client
+    () => { for (const e of rt.entities.values()) if (rand() < 0.6) { e.x += 0.5; e.yaw = rand(); } }, // walking townspeople
+    () => { const e = pick([...rt.entities.values()]); if (e.hp === undefined) e.hp = 5; else delete e.hp; }, // a field appears/goes
+    () => { const e = pick([...rt.entities.values()]); e.location = pick(LOCS); },
+    () => { const id = `npc-x${nextId++}`; rt.entities.set(id, { id, kind: 'npc', location: pick(LOCS), x: 0, z: 0 }); },
+    () => { const e = pick([...rt.entities.values()]); rt.entities.delete(e.id); },
+    () => { const e = pick([...rt.entities.values()]); e.visibleTo = rand() < 0.5 ? [pick(live()).id] : undefined; },
+    () => { // a player seen across a boundary from some viewers
+      const far = pick(live());
+      acrossOf = (p) => (p.id % 3 === 0 && p !== far ? [{ player: far, x: 400, z: 1, distance: 30 }] : []);
+    },
+    () => { acrossOf = () => []; },
+  ];
+  for (let stepNo = 0; stepNo < 400; stepNo++) {
+    pick(ops)();
+    rt.sync();
+    for (const p of live()) {
+      const full = json(rt.rpgMessage(p));
+      const got = merged.get(p.id);
+      const ctx = `step ${stepNo}, player ${p.id} (delta ${p.delta})`;
+      assert.deepEqual(got.character, full.character, `character, ${ctx}`);
+      assert.deepEqual(got.readiness, full.readiness, `readiness, ${ctx}`);
+      assert.deepEqual(byId(got.entities), byId(full.entities), `entities, ${ctx}`);
+      assert.deepEqual(still(got.peers), still(full.peers), `peers, ${ctx}`);
+    }
+  }
+  for (const k of ['peerDelta', 'patch', 'upsert', 'peers', 'entities']) assert.ok(sentKinds[k] > 0, `exercised ${k}`);
+});
+
+test('runtime.sync: a walking entity costs its changed fields; crowd churn costs only the peers that changed', () => {
+  const players = new Map();
+  const sent = [];
+  const rt = createRpgRuntime({
+    players, save() {}, log: quiet, send: (p, msg) => sent.push([p.id, json(msg)]),
+    features: [(ctx) => ctx.entities.set('tp', { id: 'tp', kind: 'npc', name: 'Townsperson', location: DEFAULT_LOCATION, x: 1, z: 2, yaw: 0, sprite: 'tp-182-3', faction: 'Daggerfall', state: 'walk' })],
+  });
+  for (let i = 1; i <= 70; i++) { const p = player(i, {}, { x: i, delta: i === 1, patch: i === 1 }); players.set(i, p); rt.join(p); }
+  rt.sync();
+  sent.length = 0;
+  rt.entities.get('tp').x = 1.5;
+  rt.sync();
+  assert.deepEqual(sent.find(([id]) => id === 1)[1].entityDelta, { patch: [{ id: 'tp', x: 1.5 }] });
+  sent.length = 0;
+  players.get(70).x = 1.2; // 70 enters viewer 1's nearest 64, 65 drops out
+  rt.sync();
+  const m = sent.find(([id]) => id === 1)[1];
+  assert.deepEqual(Object.keys(m).sort(), ['peerDelta', 'selfId', 'type']);
+  assert.deepEqual(m.peerDelta.upsert.map((q) => q.id), [70]);
+  assert.deepEqual(m.peerDelta.remove, [65]);
 });

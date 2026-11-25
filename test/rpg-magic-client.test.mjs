@@ -94,7 +94,10 @@ test('spell rows split known and learnable, mark the readied spell and sort cast
   assert.equal(learnable.at(-1).id, 'x:broken');
   assert.ok(!learnable.some((s) => s.id === 'ward:mending'));
   assert.equal(spellRows(cat, state, { query: 'ember' }).learnable.length, 1);
-  assert.deepEqual(magicOf(null), { known: [], selected: null, active: [] });
+  assert.deepEqual(magicOf(null), { known: [], selected: null, active: [], readySpell: null });
+  // A trap's free spell (server magic.readySpell) reaches the HUD chip and the V key.
+  const ready = { spellId: 'std:37', name: 'Slowfalling', expiresAt: 1 };
+  assert.deepEqual(magicOf({ character: { magic: { readySpell: ready } } }).readySpell, ready);
   const lines = effectLines(cat.find((s) => s.id === 'ward:slow-rot').effects[0]);
   assert.match(lines[0], /^Magnitude 1–3 \+ 1 per level$/);
   assert.match(lines[1], /^Duration 3 \+ 1 per level rounds$/);

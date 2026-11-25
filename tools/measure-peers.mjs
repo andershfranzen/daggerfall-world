@@ -13,6 +13,8 @@
 //   clustered  half the players just west and half just east of one map-pixel edge, so every
 //              client sees the others across the border (projected peers)
 //   dispersed  every player in a different town, spread over the populated regions
+//   dungeon    everyone in the starting dungeon (Privateer's Hold), packed around its start marker
+//   city       everyone in Daggerfall city, spread over 120 m around the city centre
 // Players are placed by a benchmark-only action (`bench.place`) after joining; it is not part of
 // the production feature list.
 //
@@ -42,7 +44,7 @@ if (!isMainThread) {
   };
   const LINES = ['well met', 'over here', 'to the tavern', 'nice weather today', 'heading north'];
   let measuring = false;
-  const clients = places.map((place, i) => {
+  const connect = (place, i) => {
     const c = { i, place, bytes: 0, msgs: 0, byType: {}, sent: 0, welcome: null, closed: null, errors: [], seen: 0, across: 0, states: 0 };
     c.ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { perMessageDeflate: false });
     c.ws.on('message', (data) => {
@@ -86,7 +88,7 @@ if (!isMainThread) {
       c.ws.send(d);
     };
     c.ready = new Promise((res, rej) => {
-      c.ws.once('open', () => c.send({ type: 'join', name: `Walker ${i}`, ...(delta ? { delta: true } : {}) }));
+      c.ws.once('open', () => c.send({ type: 'join', name: `Walker ${i}`, ...(delta ? { delta: true, patch: true } : {}) }));
       c.ws.once('error', rej);
       const timer = setInterval(() => {
         if (c.welcome) { clearInterval(timer); res(); }
@@ -94,8 +96,14 @@ if (!isMainThread) {
       }, 20);
     });
     return c;
-  });
-  await Promise.all(clients.map((c) => c.ready));
+  };
+  // Connect in batches: hundreds of simultaneous connects overflow the loopback accept backlog (ECONNRESET).
+  const clients = [];
+  for (let i = 0; i < places.length; i += 50) {
+    const batch = places.slice(i, i + 50).map((place, k) => connect(place, i + k));
+    clients.push(...batch);
+    await Promise.all(batch.map((c) => c.ready));
+  }
   for (const c of clients) if (c.place) c.send({ type: 'action', seq: 1, verb: 'bench.place', args: c.place });
   await new Promise((r) => {
     const t = setInterval(() => { if (clients.every((c) => !c.place || c.placed !== undefined)) { clearInterval(t); r(); } }, 20);
@@ -154,7 +162,7 @@ function parseArgs(argv) {
     else if (a === '--delta') o.delta = true;
     else throw new Error(`unknown option ${a}`);
   }
-  if (!o.counts.every((n) => Number.isInteger(n) && n >= 1 && n <= 32)) throw new Error('--counts must be integers in [1, 32]');
+  if (!o.counts.every((n) => Number.isInteger(n) && n >= 1 && n <= 1000)) throw new Error('--counts must be integers in [1, 1000]');
   return o;
 }
 
@@ -180,6 +188,9 @@ function benchPlacer(ctx) {
 
 async function placesFor(scenario, count, arena2Dir) {
   if (scenario === 'town') return Array.from({ length: count }, () => null);
+  // Start marker as reported to a freshly created character (progress/fixtures/peer-bots.mjs); a 3 m jitter.
+  if (scenario === 'dungeon') return Array.from({ length: count }, (_, i) => ({ location: "dungeon:Daggerfall/Privateer's Hold", x: 12.75 + ((i * 37) % 7) / 2 - 1.5, z: -41.8 + ((i * 53) % 7) / 2 - 1.5 }));
+  if (scenario === 'city') return Array.from({ length: count }, (_, i) => ({ location: 'town:Daggerfall/Daggerfall', x: ((i * 97) % 121) - 60, z: ((i * 61) % 121) - 60 }));
   if (scenario === 'clustered') {
     // The east edge of Gothway Garden's map pixel (109,159) and the pixel beyond it (110,159).
     return Array.from({ length: count }, (_, i) => {
@@ -300,7 +311,7 @@ async function runOnce(scenario, count, o, arena2Dir) {
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   const raw = process.env.ARENA2_DIR;
-  const needsData = o.scenarios.includes('dispersed');
+  const needsData = o.scenarios.some((s) => ['dispersed', 'dungeon', 'city'].includes(s));
   if ((raw || needsData) && (!raw || !existsSync(raw) || !statSync(raw).isDirectory())) throw new Error('ARENA2_DIR must name the ARENA2 folder (frames and towns come from it)');
   const arena2Dir = raw ? resolve(raw) : null;
   console.log(`measure-peers: scenarios=${o.scenarios.join(',')} counts=${o.counts.join(',')} delta=${o.delta} arena2=${!!arena2Dir} warmup=${o.warmup}s measured=${o.seconds}s cpus=${cpus().length} load=${loadavg().map((v) => v.toFixed(1)).join('/')} node=${process.version}`);

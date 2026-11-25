@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { Catalog } from '../client/gameplay/travel/catalog.js';
 import { classicCatalog, CLASSIC_STARTERS } from '../client/gameplay/travel/classic.js';
 import {
-  canonicalAddress, migratePlaces, regionNameOf, exteriorAddress, normalizeFound, hasFound, addFound, IDENTITY_VERSION,
+  canonicalAddress, migratePlaces, regionNameOf, exteriorAddress, normalizeFound, hasFound, addFound, countFound, IDENTITY_VERSION,
 } from '../client/gameplay/travel/identity.js';
 import { placeOf } from '../client/gameplay/townServices/rules.js';
 import { regionOf as chatRegion } from '../server/rpg/social/chat.js';
@@ -261,8 +261,26 @@ test('installed: every hidden record can be discovered and survives restart', { 
   const legacy = { id: 2, name: 'B', x: 0, z: 0, yaw: 0, rpg: { travel: { discovered: hidden.slice(0, 4000).map(e => e.id) } } };
   players2.set(2, legacy);
   s2.runtime.join(legacy);
-  assert.equal(Object.values(legacy.rpg.travel.found).reduce((n, l) => n + l.length, 0), 4000);
+  // Regions above 512 entries are stored as a 'b:' bitset string, so count entries, not string length.
+  assert.equal(countFound(legacy.rpg.travel.found), 4000);
+  assert.equal(hidden.slice(0, 4000).filter(e => !hasFound(legacy.rpg.travel.found, e)).length, 0);
   assert.deepEqual(legacy.rpg.travel.discovered, []);
+});
+
+test('installed: all 15,251 records in found survive save and restart unchanged', { skip }, async () => {
+  const p = { id: 1, name: 'A', x: 0, z: 0, yaw: 0, rpg: { travel: { found: {} } } };
+  for (const e of world.catalog.locations) addFound(p.rpg.travel.found, e);
+  const before = JSON.stringify(p.rpg.travel.found);
+  const saved = JSON.parse(JSON.stringify(p));
+  const players = new Map();
+  const s = server(players);
+  await s.api.ready;
+  players.set(1, saved);
+  s.runtime.join(saved);
+  assert.equal(countFound(saved.rpg.travel.found), 15251);
+  assert.equal(world.catalog.locations.filter(e => !hasFound(saved.rpg.travel.found, e)).length, 0);
+  assert.equal(JSON.stringify(saved.rpg.travel.found), before);
+  test.diagnostic?.(`all 15,251 records: ${before.length} bytes`);
 });
 
 test('installed: classic-only start keeps legacy discoveries until MAPS.BSA is available', { skip }, () => {

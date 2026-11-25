@@ -692,3 +692,51 @@ test('two WebSocket clients share one monster, see swings and death, and only on
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('feedback: a hit flags backstab exactly when the backstab bonus applied', () => {
+  const w = world({ seed: 3 });
+  const a = w.join(1, 'Ann');
+  const rat = w.handle.spawnMonster(DEFAULT_LOCATION, RAT, 0, -1.5);
+  a.rpg.character.skills.Backstabbing = 95;
+  w.act(a, 'combat.ready', { ready: true });
+  for (let i = 0; i < 40 && !rat.dead; i++) {
+    rat.x = 0; rat.z = -1.5; rat.yaw = 0; rat.hp = rat.maxHp; // facing away (-z), kept alive
+    faceTo(a, rat);
+    w.act(a, 'combat.attack', { targetId: rat.id, direction: 'down' });
+    w.advance(1500);
+  }
+  const seq = w.events(1).filter((e) => e.kind === 'hit' || (e.kind === 'combat' && /backstab/.test(e.text)));
+  const hits = seq.filter((e) => e.kind === 'hit');
+  assert.ok(hits.some((h) => h.backstab === true), 'at least one backstab');
+  seq.forEach((e, i) => {
+    if (e.kind !== 'hit') return;
+    const told = seq[i + 1]?.kind === 'combat';
+    assert.equal(e.backstab === true, told, 'backstab flag matches the backstab message');
+    if (!told) assert.equal('backstab' in e, false);
+  });
+});
+
+test('feedback: a monster blow soaked by a shield is absorbed, not a miss; hurt is private and per cause', () => {
+  const w = world({ seed: 21, services: { absorbDamage: () => 0 } });
+  const a = w.join(1, 'Ann', 3, 3);
+  const b = w.join(2, 'Ben', 4, 3);
+  w.handle.spawnMonster(DEFAULT_LOCATION, ORC, 3, -2);
+  const hp = a.rpg.character.health;
+  w.tick(20);
+  const attacks = w.events(2, 'monsterAttack').filter((e) => e.targetId === 1);
+  assert.ok(attacks.some((e) => e.absorbed === true && e.hit === false && e.damage === 0), 'absorbed blows');
+  assert.ok(attacks.some((e) => !('absorbed' in e)), 'misses stay plain misses');
+  assert.equal(a.rpg.character.health, hp);
+  assert.equal(w.events(1, 'hurt').length, 0, 'monster melee is reported by monsterAttack, not hurt');
+
+  const w2 = world({ seed: 5 });
+  const c = w2.join(1, 'Cat');
+  w2.join(2, 'Dan', 1, 0);
+  const before = c.rpg.character.health;
+  assert.equal(w2.S.hurtPlayerBy(c, 4, { kind: 'trap', id: 't1' }), 4);
+  w2.S.hurtPlayerBy(c, 3, { name: 'holy ground', source: 'holy ground' });
+  w2.S.hurtPlayerBy(c, 2, { kind: 'monster', name: 'Imp' }, 'spell');
+  assert.deepEqual(w2.events(1, 'hurt').map((e) => [e.damage, e.cause]), [[4, 'trap'], [3, 'other'], [2, 'spell']]);
+  assert.equal(c.rpg.character.health, before - 9);
+  assert.equal(w2.events(2, 'hurt').length, 0, 'hurt goes to the injured player only');
+});

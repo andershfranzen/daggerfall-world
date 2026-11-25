@@ -555,3 +555,33 @@ describe('server: persistence and character isolation over WebSocket + SQLite', 
     }
   });
 });
+
+test('feedback: disease health loss reaches only that player as hurt (condition) with the amount applied', () => {
+  const t = stack();
+  const a = t.join(1);
+  t.join(2);
+  t.S.makeDiseased(a, 'Plague');
+  const before = a.rpg.character.health;
+  t.pass(1);
+  t.S.spendTime(a, 30 * 60, 'rest');
+  t.pass(1);
+  const hurt = t.sent.filter(([to, m]) => m.type === 'gameEvent' && m.event.kind === 'hurt');
+  assert.ok(hurt.length > 0, 'daily disease damage is reported');
+  assert.ok(hurt.every(([to, m]) => to === 1 && m.event.cause === 'condition'));
+  assert.equal(hurt.reduce((n, [, m]) => n + m.event.damage, 0), before - a.rpg.character.health);
+});
+
+test('feedback: the lycanthrope health limiter reports the health it takes as hurt (condition)', () => {
+  const t = stack();
+  const p = t.join(1);
+  t.S.deploySupernatural(p, 'wereboar');
+  p.rpg.character.health = p.rpg.character.maxHealth;
+  const before = p.rpg.character.health;
+  t.S.spendTime(p, 32 * DAY, 'fixture');
+  t.pass(0);
+  const limit = t.S.conditionStatus(p).lycanthrope.healthLimit;
+  assert.equal(p.rpg.character.health, limit);
+  const hurt = t.sent.filter(([to, m]) => to === 1 && m.event?.kind === 'hurt').map(([, m]) => m.event);
+  assert.equal(hurt.reduce((n, e) => n + e.damage, 0), before - limit);
+  assert.ok(hurt.every((e) => e.cause === 'condition'));
+});

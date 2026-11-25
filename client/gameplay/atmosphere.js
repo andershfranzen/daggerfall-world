@@ -284,10 +284,10 @@ export function install(api) {
       const clip = e ? creatureClip(e.monsterId, 'attack') : null;
       if (clip !== null) { engine.playClip(clip, { volume: Math.max(0.3, nearVolume(e, 0.9)), pan: panAt(e.x, e.z) }); lastCreature = { id: e.id, monsterId: e.monsterId, clip, attack: true }; }
     }
-    for (const { clip, self, at } of clipsForEvent(ev, { selfId })) {
+    for (const { clip, self, at, record } of clipsForEvent(ev, { selfId })) {
       if (at) { engine.playClip(clip, { volume: 0.8, pan: panAt(at.x, at.z) }); lastMechanism = { id: at.id, clip, cue: at.cue }; continue; }
       const mine = self || (ev.playerId !== undefined && String(ev.playerId) === String(selfId));
-      engine.playClip(clip, { volume: mine ? 0.9 : 0.5, pan: mine ? 0 : panFor(ev.playerId) });
+      engine.playClip(clip, { volume: mine ? 0.9 : 0.5, pan: mine ? 0 : panFor(ev.playerId), record });
     }
   }
 
@@ -380,7 +380,16 @@ export function install(api) {
   // ------------------------------------------------------------ per frame
 
   let chipTick = 0;
-  let syncAsked = 0;
+  let syncAsked = -Infinity;
+  // The server sends the join-time clock before its welcome, and the shell drops game events until the
+  // welcome is handled. Ask as soon as the character's state arrives, behind the loading screen (the arrival
+  // gate waits for the season, client/gameplay/wilderness.js), then once per 10 s until it lands.
+  const askClock = () => {
+    if (clock.minutes !== null || !api.state || performance.now() - syncAsked <= 10000) return;
+    syncAsked = performance.now();
+    api.act('time.sync', {}, { quiet: true });
+  };
+  api.on('state', askClock);
   const labels = document.getElementById('labels');
   const keepLayerOrder = () => {
     // Other features add full-screen canvases (sprites, effects) after #view; the shade and
@@ -389,11 +398,7 @@ export function install(api) {
   };
   api.on('frame', (f = {}) => {
     if (screen !== 'game') return;
-    // The join-time clock can arrive before features install; ask again once per 10 s until it lands.
-    if (clock.minutes === null && api.state && performance.now() - syncAsked > 10000) {
-      syncAsked = performance.now();
-      api.act('time.sync');
-    }
+    askClock();
     const info = sceneInfo();
     const dt = Math.min(0.1, Number(f.dt) || 0.016);
     const renderer = f.renderer ?? api.renderer;

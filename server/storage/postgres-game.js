@@ -39,7 +39,11 @@ export async function createPgPool(connectionString, poolOptions = {}) {
   if (typeof Pool !== 'function') {
     throw new Error("Loaded 'pg' module does not export Pool");
   }
-  return new Pool({ connectionString, ...poolOptions });
+  const pool = new Pool({ connectionString, ...poolOptions });
+  // An idle client dropped by the server (restart, failover, pg_terminate_backend) is re-emitted here;
+  // unhandled, it would crash the game. The pool discards that client and reconnects on the next query.
+  pool.on('error', (err) => console.error('[postgres] idle connection lost:', err.message));
+  return pool;
 }
 
 function parseRpg(raw, id) {
@@ -142,6 +146,8 @@ export async function openPostgresGameStore(options = {}) {
   async function ensureSchema() {
     const sql = schemaSql ?? loadSchemaSql();
     await transaction(async (client) => {
+      // Serialize concurrent first boots: parallel CREATE ... IF NOT EXISTS races on pg_type.
+      await client.query('SELECT pg_advisory_xact_lock(7243911)');
       await client.query(sql);
     });
   }
@@ -361,7 +367,7 @@ export async function openPostgresGameStore(options = {}) {
  *    subsequent `flush()` calls can recover cleanly once PostgreSQL is back.
  */
 export function createBufferedGameStore(pgStore, options = {}) {
-  const { onError = null } = options;
+  const { onError = null, retryMs = 2000 } = options;
 
   // Latest un-committed snapshots keyed by player.id / world key.
   const pendingPlayers = new Map(); // id -> { id, name, x, z, yaw, rpg }
@@ -444,6 +450,8 @@ export function createBufferedGameStore(pgStore, options = {}) {
           }
           inFlight = null;
           resolveWaiters(err);
+          // Callers already cleared their dirty flags; nothing else would retry these rows until close().
+          if (!closed) setTimeout(scheduleDrain, retryMs).unref();
           return;
         }
       }

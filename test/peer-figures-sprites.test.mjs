@@ -126,6 +126,22 @@ describe('peerFigure: custom classes and gear-aware classic sprite selection', (
 });
 
 describe('peerFigure: peaceful townsperson variant stability & danger zones', () => {
+  test('in town any weapon or armour shows the class figure, sheathed or drawn; only a player with nothing equipped is a town walker', () => {
+    const town = { location: 'town:Daggerfall/Gothway Garden' };
+    const knight = { id: 's1', race: 'Nord', gender: 'Male', className: 'Knight', faceIndex: 0, readied: false };
+    for (const weaponKind of ['blade', 'axe', 'blunt', 'dagger', 'bow', 'staff']) {
+      assert.equal(resolvePeerAppearance({ ...knight, weaponKind }, town).layout, 'enemy', `sheathed ${weaponKind}`);
+    }
+    assert.equal(resolvePeerAppearance({ ...knight, weaponKind: 'blade' }, town).archive, 488);
+    assert.equal(resolvePeerAppearance({ ...knight, weaponKind: 'blade', readied: true }, town).archive, 488, 'drawing it changes nothing');
+    // The real Mage starting kit: leather helm, cuirass and boots, no weapon.
+    const mage = { id: 's2', race: 'High Elf', gender: 'Male', className: 'Mage', weaponKind: 'none', armorTier: 'leather' };
+    assert.equal(resolvePeerAppearance(mage, town).archive, 486);
+    const bare = resolvePeerAppearance({ ...knight, weaponKind: 'none', armorTier: 'none' }, town);
+    assert.equal(bare.layout, 'person');
+    assert.ok(PEOPLE.nord.male.includes(bare.archive));
+  });
+
   test('unarmored, unarmed peer in town uses race & gender town-walker archive stabilized by faceIndex', () => {
     const p = {
       id: 'town-1', name: 'Elysana', race: 'redguard', gender: 'female',

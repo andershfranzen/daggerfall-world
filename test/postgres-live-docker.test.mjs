@@ -19,7 +19,7 @@ import { createAccounts, createPostgresAccounts } from '../server/accounts.js';
 import { createGameServer, CLOSE } from '../server/game.js';
 import { openPostgresGameStore, createBufferedGameStore, createPgPool } from '../server/storage/postgres-game.js';
 import { openPostgresAccountStore } from '../server/storage/postgres-accounts.js';
-import { openPostgresChatLog } from '../server/chat-log.js';
+import { openPostgresChatLog, openSqliteChatLog } from '../server/chat-log.js';
 import { openPostgresHiscoresStore } from '../server/hiscores/postgres-store.js';
 import { createPostgresBus } from '../server/scale/world-bus.js';
 import { migrateSqliteToPostgres } from '../tools/migrate-to-postgres.mjs';
@@ -154,15 +154,17 @@ test('live PostgreSQL 17 end-to-end: game store, buffered commits, accounts + LI
     clientB.release();
 
     // 5. Real SQLite -> PostgreSQL 17 migration via tools/migrate-to-postgres.mjs (into clean target tables).
-    await pool.query('TRUNCATE account_characters, players, world_state, sessions, moderation_log, accounts RESTART IDENTITY CASCADE');
+    await pool.query('TRUNCATE chat_messages, account_characters, players, world_state, sessions, moderation_log, accounts RESTART IDENTITY CASCADE');
     const sqliteGamePath = join(tmp, 'game.db');
     const sqliteAccPath = join(tmp, 'accounts.db');
     const sg = openStore(sqliteGamePath);
     const migRow = sg.createForAccount('mig-acc-99', 'Barenziah', 'Barenziah');
     migRow.rpg = { gold: 999, migrated: true };
     sg.saveCharacters([migRow], [['mig:world:1', { ok: true }]]);
+    openSqliteChatLog(sg.db).record({ channel: 'shout', location: 'town:Daggerfall', senderPlayerId: migRow.id, senderAccountId: 'mig-acc-99', senderName: 'Barenziah', body: 'Kept across the migration' });
     sg.close();
     const sa = createAccounts({ dbPath: sqliteAccPath, secureCookies: false, scrypt: { N: 1024, r: 8, p: 1, keyLen: 32 } });
+    sa.store.db.prepare("INSERT INTO accounts (username, username_key, password_hash, created_at, recovery_hash) VALUES ('Migrated', 'migrated', 'scrypt$x', 1, 'recovery-hash-1')").run();
     sa.close();
 
     const summary1 = await migrateSqliteToPostgres({ gameDbPath: sqliteGamePath, accountsDbPath: sqliteAccPath, databaseUrl: PG_URL, pool });
@@ -172,12 +174,49 @@ test('live PostgreSQL 17 end-to-end: game store, buffered commits, accounts + LI
     const migrated = await pgGame.findByAccount('mig-acc-99');
     assert.equal(migrated.name, 'Barenziah');
     assert.equal(migrated.rpg.gold, 999);
+    // Without these, migrated players lose their recovery codes and moderators lose the chat history.
+    assert.equal((await pool.query("SELECT recovery_hash FROM accounts WHERE username_key = 'migrated'")).rows[0]?.recovery_hash, 'recovery-hash-1');
+    assert.deepEqual((await pool.query("SELECT body FROM chat_messages WHERE body = 'Kept across the migration'")).rows.length, 1, 'chat log migrated once, also on a repeat run');
 
     await pgAccounts.close();
     await pgGame.close();
   } finally {
     await pool.end();
     rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('live PostgreSQL 17 survives every connection being terminated (idle pool clients and the LISTEN client)', {
+  skip: !PG_URL ? 'set DFW_LIVE_PG_URL to run live PostgreSQL integration test' : false,
+}, async () => {
+  const pool = await createPgPool(PG_URL);
+  const admin = await createPgPool(PG_URL, { max: 1 });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    const pgGame = await openPostgresGameStore({ pool, applySchema: true });
+    const buffered = createBufferedGameStore(pgGame);
+    const pgAccounts = await openPostgresAccountStore({ pool, applySchema: false });
+    const received = [];
+    const unsub = await pgAccounts.listenModeration((ev) => received.push(ev));
+    const ch = await pgGame.createForAccount('pg-kill-1', 'Killtest', 'Killtest');
+    const acc = await pgAccounts.createAccount('LivePgKill', 'scrypt$1024$8$1$salt$hash');
+
+    // Same as a PostgreSQL restart or failover: every server-side backend of this pool goes away.
+    await admin.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()');
+    await sleep(1500); // unhandled, the 'error' events would already have thrown by now
+
+    ch.x = 9.5;
+    buffered.saveCharacters([ch]);
+    await buffered.flush();
+    assert.equal((await pgGame.findByAccount('pg-kill-1')).x, 9.5, 'a fresh pool connection committed the save');
+    await pgAccounts.ban('LivePgKill', { reason: 'after reconnect', actor: 'test-operator' });
+    for (let i = 0; i < 80 && !received.length; i++) await sleep(25);
+    assert.ok(received.some((e) => e.accountId === acc.id && e.action === 'ban'), 'moderation LISTEN re-subscribed after its connection was lost');
+    await unsub();
+  } finally {
+    await pool.query('TRUNCATE account_characters, players, world_state, sessions, moderation_log, accounts RESTART IDENTITY CASCADE').catch(() => {});
+    await pool.end();
+    await admin.end();
   }
 });
 
@@ -248,6 +287,14 @@ test('live PostgreSQL 17 full HTTP + WebSocket game server (zero SQLite): regist
     assert.equal(loginRes.status, 200);
     cookie = cookieHeader(loginRes);
     assert.ok(cookie.includes('dfw_session='));
+
+    // 3b. The website's account page and player counter read these.
+    const { account } = await (await fetch(`${stack1.base}/api/account`, { headers: { cookie } })).json();
+    assert.deepEqual(
+      [account.username, account.hasRecoveryCode, typeof account.createdAt, account.activeSessions >= 1],
+      ['PgHeroine', true, 'number', true],
+    );
+    assert.ok((await (await fetch(`${stack1.base}/api/stats`)).json()).accounts >= 1);
 
     // 4. Connect over WebSocket /ws (async resolveUpgrade + async handleJoin -> Postgres)
     const sock1 = await connectWs(stack1.port, cookie);
@@ -423,5 +470,64 @@ test('live PostgreSQL 17 server/main.js boot via DATABASE_URL, redacted logs, HT
     if (child.exitCode === null) {
       child.kill('SIGKILL');
     }
+  }
+});
+
+test('live PostgreSQL 17 server/main.js hides a query-string password and fails cleanly on bad credentials', {
+  skip: !PG_URL ? 'set DFW_LIVE_PG_URL to run live PostgreSQL integration test' : false,
+}, async () => {
+  const parsed = new URL(PG_URL);
+  const secretPass = decodeURIComponent(parsed.password || '');
+  const boot = (url) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [MAIN_JS, '--dev'], {
+      env: { ...process.env, DATABASE_URL: url, ACCOUNTS_DATABASE_URL: '', HOST: '127.0.0.1', PORT: '0', COOKIE_SECURE: '0', ARENA2_DIR: '' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    child.stdout.on('data', (d) => {
+      out += String(d);
+      if (out.includes('accounts:')) child.kill('SIGTERM');
+    });
+    child.stderr.on('data', (d) => { out += String(d); });
+    child.on('exit', (code) => resolve({ code, out }));
+  });
+
+  // libpq-style URLs may carry the password as a query parameter; pg honours it, so the log must hide it.
+  const viaQuery = new URL(PG_URL);
+  viaQuery.password = '';
+  viaQuery.searchParams.set('password', secretPass);
+  const ok = await boot(viaQuery.toString());
+  assert.match(ok.out, /database:\s+postgres/);
+  if (secretPass) assert.equal(ok.out.includes(secretPass), false, `query-string password leaked:\n${ok.out}`);
+
+  const wrong = new URL(PG_URL);
+  wrong.password = 'definitely-not-the-password';
+  const bad = await boot(wrong.toString());
+  assert.equal(bad.code, 1);
+  assert.match(bad.out, /failed to initialize PostgreSQL/);
+  assert.doesNotMatch(bad.out, /\n\s+at /, `expected a clean error, not a stack trace:\n${bad.out}`);
+  assert.equal(bad.out.includes('definitely-not-the-password'), false);
+});
+
+test('live PostgreSQL 17 applies the schema safely when several processes boot on an empty database at once', {
+  skip: !PG_URL ? 'set DFW_LIVE_PG_URL to run live PostgreSQL integration test' : false,
+}, async () => {
+  const admin = await createPgPool(PG_URL, { max: 1 });
+  const dbName = `dfw_schema_race_${process.pid}`;
+  const url = new URL(PG_URL);
+  url.pathname = `/${dbName}`;
+  await admin.query(`DROP DATABASE IF EXISTS ${dbName}`);
+  await admin.query(`CREATE DATABASE ${dbName}`);
+  try {
+    const results = await Promise.allSettled(Array.from({ length: 4 }, async () => {
+      const g = await openPostgresGameStore({ connectionString: url.toString() });
+      const a = await openPostgresAccountStore({ connectionString: url.toString() });
+      await g.close();
+      await a.close();
+    }));
+    assert.deepEqual(results.filter((r) => r.status === 'rejected').map((r) => r.reason.message), []);
+  } finally {
+    await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+    await admin.end();
   }
 });

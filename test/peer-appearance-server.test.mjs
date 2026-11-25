@@ -100,6 +100,13 @@ test('projectVisibleEquipment maps real inventory.js equipment & resolves hands-
   assert.equal(aliasProj.worn.hands, undefined);
 });
 
+test('a cloak over ordinary clothes is not robes (a Warrior in a cloak is not drawn as a Mage)', () => {
+  const rpg = makeRpg([['blue-casual-cloak', 1], ['white-short-shirt', 1]], [['blue-casual-cloak', 'cloak'], ['white-short-shirt', 'chestClothes']]);
+  const proj = projectVisibleEquipment(rpg);
+  assert.equal(proj.wearingRobes, false);
+  assert.equal(proj.primaryDye, 'blue');
+});
+
 test('projectVisibleEquipment classifies weapons, robes, and armor tiers accurately', () => {
   const bowRpg = makeRpg([['elven-long-bow', 1], ['green-open-tunic', 1]], [['elven-long-bow', 'rightHand'], ['green-open-tunic', 'chestClothes']]);
   const bowProj = projectVisibleEquipment(bowRpg);

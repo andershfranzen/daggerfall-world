@@ -179,6 +179,7 @@ test('potions heal, consume one from the stack and refuse at full', () => {
   assert.equal(p.rpg.character.health, 40);
   assert.equal(potion.quantity, 2);
   assert.ok(w.events(5, 'inventory').some((e) => /drink/i.test(e.text)));
+  assert.equal(w.events(5, 'heal').at(-1)?.amount, 30, 'the drinker is told how much was restored');
   const stamina = byTemplate(p, 'potion-of-stamina');
   assert.match(w.rt.act(p, 'inventory.use', { itemId: stamina.id }).error, /already full/);
   assert.equal(stamina.quantity, 1);

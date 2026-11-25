@@ -98,9 +98,15 @@ export function install(ctx) {
     }
   }
 
+  /** `source.kind` is 'fall' or 'drowning', the `hurt` cause sent to this player with the health actually lost. */
   function hurt(p, damage, source) {
-    if (!(damage > 0)) return null;
-    return typeof S.damagePlayer === 'function' ? S.damagePlayer(p, damage, source) : null;
+    if (!(damage > 0) || typeof S.damagePlayer !== 'function') return null;
+    const c = S.characterOf?.(p) ?? p.rpg?.character;
+    const before = Number(c?.health) || 0;
+    const r = S.damagePlayer(p, damage, source);
+    const lost = before - (Number(c?.health) || 0);
+    if (lost > 0) ctx.notify(p, { kind: 'hurt', damage: lost, cause: source.kind });
+    return r;
   }
 
   function locomotionEvents(p, events, body) {

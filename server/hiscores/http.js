@@ -264,7 +264,7 @@ export function createHiscoresHttpHandler(engine, options = {}) {
         if (sort !== undefined) params.sort = sort;
         if (page !== undefined) params.page = page;
         if (limit !== undefined) params.limit = limit;
-        if (q !== undefined) params.q = q;
+        if (q !== undefined) params.query = q;
         const data = await engine.getOrders(params);
         return sendJson(req, res, 200, data);
       }
@@ -385,7 +385,7 @@ export function createHiscoresHttpHandler(engine, options = {}) {
     if (limit !== undefined) params.limit = limit;
     if (className !== undefined) params.className = className;
     if (race !== undefined) params.race = race;
-    if (q !== undefined) params.q = q;
+    if (q !== undefined) params.query = q;
 
     try {
       const data = await engine.getBoard(params);

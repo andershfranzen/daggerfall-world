@@ -252,7 +252,7 @@ export function install(api) {
   api.on('frame', ({ dt, renderer } = {}) => {
     drawHands(Number(dt) || 0.016);
     drawMissiles(renderer);
-    const hide = !selectedSpell() || screen !== 'game' || api.modalOpen;
+    const hide = !(readyTrapSpell() ?? selectedSpell()) || screen !== 'game' || api.modalOpen;
     if (chip.hidden !== hide) chip.hidden = hide;
   });
   api.on('screen', (name) => {
@@ -264,7 +264,7 @@ export function install(api) {
       shopCounter = null;
       ui.tab = 'known';
     }
-    chip.hidden = screen !== 'game' || !selectedSpell();
+    chip.hidden = screen !== 'game' || !(readyTrapSpell() ?? selectedSpell());
   });
 
   // ---------------------------------------------------------------- HUD chip (readied spell)

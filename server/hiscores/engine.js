@@ -140,7 +140,8 @@ function defaultProjectOrders(rawOrders) {
       name,
       tag: String(raw.tag ?? raw.orderTag ?? '').trim(),
       memberCount: Math.max(0, toFiniteNumber(raw.memberCount ?? raw.members, 0)),
-      totalLevel: Math.max(0, toFiniteNumber(raw.totalLevel ?? raw.level ?? raw.combinedLevel, 0)),
+      combinedLevel: Math.max(0, toFiniteNumber(raw.combinedLevel ?? raw.totalLevel ?? raw.level, 0)),
+      combinedTotalSkill: Math.max(0, toFiniteNumber(raw.combinedTotalSkill, 0)),
       treasury: Math.max(0, toFiniteNumber(raw.treasury ?? raw.treasuryGold ?? raw.gold, 0)),
       leaderName: raw.leaderName ?? null,
       createdAt: toFiniteNumber(raw.createdAt ?? raw.foundedAt ?? raw.milestoneAt, 0),
@@ -313,16 +314,16 @@ function createBoardCatalog(skillsList) {
 function compareOrders(sort) {
   return (a, b) => {
     if (sort === 'level') {
-      if (b.totalLevel !== a.totalLevel) return b.totalLevel - a.totalLevel;
+      if (b.combinedLevel !== a.combinedLevel) return b.combinedLevel - a.combinedLevel;
       if (b.memberCount !== a.memberCount) return b.memberCount - a.memberCount;
       if (b.treasury !== a.treasury) return b.treasury - a.treasury;
     } else if (sort === 'treasury') {
       if (b.treasury !== a.treasury) return b.treasury - a.treasury;
       if (b.memberCount !== a.memberCount) return b.memberCount - a.memberCount;
-      if (b.totalLevel !== a.totalLevel) return b.totalLevel - a.totalLevel;
+      if (b.combinedLevel !== a.combinedLevel) return b.combinedLevel - a.combinedLevel;
     } else {
       if (b.memberCount !== a.memberCount) return b.memberCount - a.memberCount;
-      if (b.totalLevel !== a.totalLevel) return b.totalLevel - a.totalLevel;
+      if (b.combinedLevel !== a.combinedLevel) return b.combinedLevel - a.combinedLevel;
       if (b.treasury !== a.treasury) return b.treasury - a.treasury;
     }
     const ca = normalizeMilestone(a.createdAt);

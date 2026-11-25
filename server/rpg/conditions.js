@@ -299,8 +299,11 @@ export function install(ctx, options = {}) {
         if (e.fatigue && Number.isFinite(c.fatigue)) c.fatigue = Math.max(0, Math.min(Number(c.maxFatigue) || c.fatigue, c.fatigue - e.fatigue));
         if (e.magicka && Number.isFinite(c.magicka)) c.magicka = Math.max(0, Math.min(Number(c.maxMagicka) || c.magicka, c.magicka - e.magicka));
         if (e.health > 0) {
+          const before = Number(c.health) || 0;
           if (typeof S.damagePlayer === 'function') S.damagePlayer(p, e.health, { kind: 'condition' });
           else if (Number.isFinite(c.health)) c.health = Math.max(0, c.health - e.health);
+          const lost = before - (Number(c.health) || 0);
+          if (lost > 0) ctx.notify(p, { kind: 'hurt', damage: lost, cause: 'condition' });
         }
         ctx.dirty(p);
         if (e.health > 0 || e.fatigue > 0 || e.magicka > 0) tell(p, 'symptom', 'You feel somewhat bad.', { health: e.health, fatigue: e.fatigue, magicka: e.magicka });
@@ -401,6 +404,7 @@ export function install(ctx, options = {}) {
     const c = character(p);
     const cap = c ? M.healthLimit(st, Number(c.maxHealth) || 0, { hircine: hircine(p) }) : null;
     if (cap !== null && Number.isFinite(c.health) && c.health > cap) {
+      ctx.notify(p, { kind: 'hurt', damage: c.health - cap, cause: 'condition' });
       c.health = cap;
       ctx.dirty(p);
     }

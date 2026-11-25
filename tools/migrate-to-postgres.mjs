@@ -45,6 +45,20 @@ function readGameSqlite(dbPath) {
     const worldState = hasTable(db, 'world_state')
       ? db.prepare('SELECT key, value, updated_at FROM world_state ORDER BY key').all()
       : [];
+    // Older SQLite files have no recipient_ids column (added with the chat audience record).
+    const hasRecipients = hasTable(db, 'chat_messages') &&
+      db.prepare('PRAGMA table_info(chat_messages)').all().some((c) => c.name === 'recipient_ids');
+    const chatMessages = hasTable(db, 'chat_messages')
+      ? db
+          .prepare(
+            `SELECT id, created_at, channel, location, sender_player_id, sender_account_id, sender_name,
+                    target_player_id, target_name, group_id, body,
+                    ${hasRecipients ? 'recipient_ids' : 'NULL AS recipient_ids'}
+               FROM chat_messages ORDER BY id`,
+          )
+          .all()
+          .map((m) => ({ ...m, id: Number(m.id), created_at: Number(m.created_at) }))
+      : [];
 
     const validatedPlayers = players.map((p) => {
       let rpgObj;
@@ -93,6 +107,7 @@ function readGameSqlite(dbPath) {
       players: validatedPlayers,
       accountCharacters: validatedLinks,
       worldState: validatedWorld,
+      chatMessages,
     };
   } finally {
     if (db.isOpen) db.close();
@@ -102,11 +117,14 @@ function readGameSqlite(dbPath) {
 function readAccountsSqlite(dbPath) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
+    const hasRecovery = hasTable(db, 'accounts') &&
+      db.prepare('PRAGMA table_info(accounts)').all().some((c) => c.name === 'recovery_hash');
     const accounts = hasTable(db, 'accounts')
       ? db
           .prepare(
             `SELECT id, username, username_key, password_hash, created_at,
-                    last_login_at, muted_until, mute_reason, banned_at, ban_reason
+                    last_login_at, muted_until, mute_reason, banned_at, ban_reason,
+                    ${hasRecovery ? 'recovery_hash' : 'NULL AS recovery_hash'}
                FROM accounts ORDER BY id`,
           )
           .all()
@@ -140,6 +158,7 @@ function readAccountsSqlite(dbPath) {
         mute_reason: a.mute_reason ?? null,
         banned_at: a.banned_at == null ? null : Number(a.banned_at),
         ban_reason: a.ban_reason ?? null,
+        recovery_hash: a.recovery_hash ?? null,
       })),
       sessions: sessions.map((s) => ({
         id: Number(s.id),
@@ -212,7 +231,7 @@ export async function migrateSqliteToPostgres(options = {}) {
 
   const summary = {
     dryRun,
-    game: { skipped: true, players: 0, accountCharacters: 0, worldState: 0 },
+    game: { skipped: true, players: 0, accountCharacters: 0, worldState: 0, chatMessages: 0 },
     accounts: { skipped: true, accounts: 0, sessions: 0, moderationLog: 0 },
   };
 
@@ -225,6 +244,7 @@ export async function migrateSqliteToPostgres(options = {}) {
         players: gameData.players.length,
         accountCharacters: gameData.accountCharacters.length,
         worldState: gameData.worldState.length,
+        chatMessages: gameData.chatMessages.length,
       };
     } else {
       log(`[migrate] game SQLite DB not found at ${gameDbPath}; skipping`);
@@ -328,10 +348,21 @@ export async function migrateSqliteToPostgres(options = {}) {
             [w.key, w.value, w.updated_at],
           );
         }
+        for (const m of gameData.chatMessages) {
+          await client.query(
+            `INSERT INTO chat_messages (id, created_at, channel, location, sender_player_id, sender_account_id,
+                                        sender_name, target_player_id, target_name, group_id, body, recipient_ids)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             ON CONFLICT (id) DO NOTHING`,
+            [m.id, m.created_at, m.channel, m.location, m.sender_player_id, m.sender_account_id,
+              m.sender_name, m.target_player_id, m.target_name, m.group_id, m.body, m.recipient_ids ?? null],
+          );
+        }
         await syncSequence(client, 'players', 'id');
+        if (gameData.chatMessages.length) await syncSequence(client, 'chat_messages', 'id');
       });
       log(
-        `[migrate] game migrated: ${summary.game.players} players, ${summary.game.accountCharacters} account_characters, ${summary.game.worldState} world_state rows`,
+        `[migrate] game migrated: ${summary.game.players} players, ${summary.game.accountCharacters} account_characters, ${summary.game.worldState} world_state rows, ${summary.game.chatMessages} chat_messages`,
       );
     }
 
@@ -342,9 +373,9 @@ export async function migrateSqliteToPostgres(options = {}) {
           await client.query(
             `INSERT INTO accounts (
                id, username, username_key, password_hash, created_at,
-               last_login_at, muted_until, mute_reason, banned_at, ban_reason
+               last_login_at, muted_until, mute_reason, banned_at, ban_reason, recovery_hash
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              ON CONFLICT (id) DO UPDATE SET
                username = EXCLUDED.username,
                username_key = EXCLUDED.username_key,
@@ -354,7 +385,8 @@ export async function migrateSqliteToPostgres(options = {}) {
                muted_until = EXCLUDED.muted_until,
                mute_reason = EXCLUDED.mute_reason,
                banned_at = EXCLUDED.banned_at,
-               ban_reason = EXCLUDED.ban_reason`,
+               ban_reason = EXCLUDED.ban_reason,
+               recovery_hash = EXCLUDED.recovery_hash`,
             [
               a.id,
               a.username,
@@ -366,6 +398,7 @@ export async function migrateSqliteToPostgres(options = {}) {
               a.mute_reason,
               a.banned_at,
               a.ban_reason,
+              a.recovery_hash,
             ],
           );
         }

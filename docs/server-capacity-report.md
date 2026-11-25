@@ -206,3 +206,52 @@ node tools/profile-server-capacity.mjs
 # Custom run with raw JSON export
 node tools/profile-server-capacity.mjs --counts=25,50,100,200,350 --duration=8000 --json=/tmp/capacity.json
 ```
+
+---
+
+## Re-measured with the real ARENA2 files (2026-11-25 review)
+
+Every number above was measured with ARENA2 **off**: no NPCs, no collision, no dungeon. None of them hold with the real files. Command (data-loaded, production features, `delta` clients, chat about every 6 s, 5 s warm-up, 10 s measured, Node v26.12.1, 18 threads, Apple M5 Pro):
+
+```sh
+ARENA2_DIR=gamedata/DaggerfallGameFiles/arena2 node tools/measure-peers.mjs --scenarios dungeon,city --counts 2,32,100,200 --delta
+```
+
+`dungeon` packs everyone around the Privateer's Hold start marker. `city` spreads them over 120 m of Daggerfall city.
+
+| Scene | Players | Down per player | `stateDelta` KB/s | `rpg` KB/s (avg frame) | `runtime.sync` mean / p99 | `runtime.tick` mean | Loop delay p99 | ELU |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| dungeon | 2 | 24.36 KB/s | 1.88 | 22.11 (2231 B) | 0.47 / 1.19 ms | 0.33 ms | 2.62 ms | 0.03 |
+| dungeon | 32 | 25.02 KB/s | 15.96 | 8.55 (1359 B) | 3.15 / 6.55 ms | 1.88 ms | 7.01 ms | 0.13 |
+| dungeon | 100 | 1317.16 KB/s | 31.69 | 1284.47 (116088 B) | 34.52 / 58.73 ms | 4.26 ms | 57.83 ms | 0.65 |
+| dungeon | 200 | 1247.9 KB/s | 21.07 | 1224.75 (182275 B) | 81.91 / 120.18 ms | 8.81 ms | 125.53 ms | 0.9 |
+| city | 2 | 123.37 KB/s | 1.76 | 121.57 (15182 B) | 0.51 / 1.49 ms | 0.26 ms | 2.52 ms | 0.02 |
+| city | 32 | 134.63 KB/s | 15.35 | 119.23 (14851 B) | 3.13 / 10.47 ms | 0.31 ms | 6.09 ms | 0.08 |
+| city | 100 | 466.83 KB/s | 31.05 | 435.68 (51181 B) | 17.37 / 40.09 ms | 0.53 ms | 30.76 ms | 0.4 |
+| city | 200 | 713.95 KB/s | 25.06 | 688.69 (78356 B) | 52.93 / 71.14 ms | 1.07 ms | 75 ms | 0.71 |
+
+Before the per-peer delta and entity field patches (above), these were the main costs:
+- **Above 64 players per scene, `rpg` peers were the bottleneck.** Each viewer's `rpg` peers are the 64 nearest; walking players change that set every sync, and `peers` was all-or-nothing (about 1.8 KB per peer resent).
+- **Walking townsfolk dominated city traffic at any player count.** `entityDelta` sent each changed entity whole, so 32 or more walking NPCs cost about 120 KB/s per player even with 2 players.
+
+### After `peerDelta` and `entityDelta.patch`
+
+Delta clients now get `peerDelta: {upsert?, remove?}` (only peers that joined, left or changed appearance, keyed by id) and `entityDelta.patch: [{id, ...changedFields, $del?}]` (only the changed fields of an entity, when smaller than the whole record). Legacy clients still get full `peers` and `entities`. Same command and machine:
+
+| Scene | Players | Down per player | `stateDelta` KB/s | `rpg` KB/s (avg frame) | `runtime.sync` mean / p99 | Loop delay p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| dungeon | 2 | 13.66 KB/s | 1.92 | 11.38 (1048 B) | 0.43 / 0.77 ms | 2.71 ms |
+| dungeon | 32 | 19.03 KB/s | 15.73 | 2.74 (384 B) | 3.69 / 6.38 ms | 8.6 ms |
+| dungeon | 100 | 62.37 KB/s | 32.73 | 28.49 (2602 B) | 14.8 / 18.46 ms | 28.83 ms |
+| dungeon | 200 | 98.18 KB/s | 30.13 | 65.94 (6508 B) | 29.41 / 38.5 ms | 58.35 ms |
+| city | 2 | 21.03 KB/s | 1.73 | 19.29 (2444 B) | 0.68 / 1.79 ms | 2.72 ms |
+| city | 32 | 31.84 KB/s | 15.09 | 16.7 (2094 B) | 4.22 / 8.5 ms | 7.91 ms |
+| city | 100 | 48.96 KB/s | 31.16 | 17.71 (2070 B) | 12.96 / 15.87 ms | 19.13 ms |
+| city | 200 | 52.72 KB/s | 30.11 | 22.41 (2537 B) | 26.93 / 44.69 ms | 47.18 ms |
+
+What remains:
+- At 200 players in one scene `runtime.sync` takes 29 ms on average (p99 39 ms) against the 80 ms interval. Download is about 98 KB/s per player in the dungeon and 53 KB/s in the city.
+- In the city at 32 players, half of the remaining 32 KB/s is `stateDelta` (peer positions at 10 Hz, about 15 KB/s), not `rpg`. The `rpg` remainder is the field patches of walking townsfolk.
+- At 200 players in the dungeon `rpg` is about 66 KB/s: crowd-cap churn still sends a whole public appearance (about 1.8 KB) for every peer that enters a viewer's nearest 64.
+- Delta clients keep `entities` and `peers` keyed by id; their list order can differ from a full snapshot's.
+- The earlier 1-town and 8-town ceilings in this report (sections 1 and 2) came from `tools/profile-server-capacity.mjs` with ARENA2 off. Do not use them for capacity planning.

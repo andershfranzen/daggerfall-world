@@ -23,7 +23,7 @@ Daggerfall World ships with **SQLite (`node:sqlite`)** as its zero-config defaul
 - `server/storage/postgres-accounts.js` — Async PostgreSQL account store matching `server/accounts.js`'s storage and moderation contract with `LISTEN/NOTIFY` on `dfw_moderation`.
 - `server/storage/index.js` — Backend factory (`openGameStorage`, `openAccountStorage`) that keeps SQLite as the default when `DATABASE_URL` is unset.
 
-The PostgreSQL modules dynamically import `pg` only when PostgreSQL is selected, so installing `pg` (`npm install pg`) is only required in environments that use PostgreSQL.
+`pg` is a regular dependency in `package.json` (installed by `npm ci` and in the Docker image); the PostgreSQL modules import it only when PostgreSQL is selected.
 
 ### Async Write-Behind Boundary (Protecting the 25 Hz Tick)
 
@@ -33,7 +33,7 @@ The PostgreSQL modules dynamically import `pg` only when PostgreSQL is selected,
 
 1. **Synchronous validation & snapshotting:** `saveCharacters(players, world)` validates payload size (`MAX_RPG_BYTES`) and serializability immediately and snapshots each dirty player and world-state entry so later tick mutations cannot race with in-flight SQL writes.
 2. **Coalesced, serialized commits:** At most one PostgreSQL transaction is in flight at a time. While a transaction is committing, subsequent saves merge into a pending map keyed by `player.id` and world `key` (keeping the latest state) and commit atomically in the next batch.
-3. **Error surfacing & automatic retry:** If a commit fails, `onError(err, batch)` is called, `lastError` is updated, and any entry not superseded by a newer snapshot is re-queued for the next flush.
+3. **Error surfacing & automatic retry:** If a commit fails, `onError(err, batch)` is called, `lastError` is updated, and any entry not superseded by a newer snapshot is re-queued and retried automatically every 2 seconds (and by every later save or `flush()`). `server/main.js` logs each failed commit. A dropped connection (PostgreSQL restart, failover, `pg_terminate_backend`) is logged and replaced; it does not stop the server. Queries have no timeout: while PostgreSQL is unreachable but not refusing connections, sign-ins and shutdown wait for it.
 4. **Graceful shutdown:** `await store.flush()` (also called automatically by `await store.close()`) drains all pending commits before the process exits.
 
 ### Instant Cross-Process Moderation (`LISTEN/NOTIFY`)
@@ -50,8 +50,7 @@ Game server processes subscribe via `await accountStore.listenModeration(fn)`, w
 
 The default Compose stack (`deploy/compose.yaml`) continues to run SQLite with zero changes. To enable PostgreSQL:
 
-1. Install the `pg` driver in your image/environment (`npm install pg`).
-2. Copy `deploy/env.example` to `deploy/.env` and uncomment the PostgreSQL variables:
+1. Copy `deploy/env.example` to `deploy/.env` and uncomment the PostgreSQL variables:
 
    ```dotenv
    POSTGRES_DB=daggerfallworld
@@ -60,7 +59,7 @@ The default Compose stack (`deploy/compose.yaml`) continues to run SQLite with z
    DATABASE_URL=postgresql://dfw:replace-with-a-strong-random-password@postgres:5432/daggerfallworld
    ```
 
-3. Start the stack with the `postgres` profile:
+2. Start the stack with the `postgres` profile:
 
    ```sh
    docker compose -f deploy/compose.yaml --env-file deploy/.env --profile postgres up -d --build
@@ -68,7 +67,7 @@ The default Compose stack (`deploy/compose.yaml`) continues to run SQLite with z
 
 ## Step-by-Step Migration from SQLite
 
-`tools/migrate-to-postgres.mjs` reads your existing SQLite `daggerfallworld.db` and `accounts.db` files via `node:sqlite` and upserts every row into PostgreSQL inside transactions, preserving primary keys and advancing PostgreSQL sequences (`setval`). It is idempotent and safe to re-run.
+`tools/migrate-to-postgres.mjs` reads your existing SQLite `daggerfallworld.db` and `accounts.db` files via `node:sqlite` and upserts every row of `players`, `account_characters`, `world_state`, `chat_messages`, `accounts` (including `recovery_hash`), `sessions` and `moderation_log` into PostgreSQL inside transactions, preserving primary keys and advancing PostgreSQL sequences (`setval`). It is idempotent and safe to re-run. Chronicles (`hiscores`) are not copied: the server rebuilds them from `players` on first use.
 
 1. **Dry-run first** (validates all JSON payloads and prints row counts without touching PostgreSQL):
 
@@ -99,6 +98,7 @@ The default Compose stack (`deploy/compose.yaml`) continues to run SQLite with z
      SELECT 'players' AS tbl, COUNT(*) FROM players
      UNION ALL SELECT 'account_characters', COUNT(*) FROM account_characters
      UNION ALL SELECT 'world_state', COUNT(*) FROM world_state
+     UNION ALL SELECT 'chat_messages', COUNT(*) FROM chat_messages
      UNION ALL SELECT 'accounts', COUNT(*) FROM accounts
      UNION ALL SELECT 'sessions', COUNT(*) FROM sessions
      UNION ALL SELECT 'moderation_log', COUNT(*) FROM moderation_log;

@@ -193,9 +193,10 @@ export class AudioEngine {
     return p;
   }
 
-  /** One-shot DAGGER.SND clip by SoundClips index. */
-  async playClip(index, { bus = 'effects', volume = 1, pan = 0, rate = 1 } = {}) {
+  /** One-shot DAGGER.SND clip by SoundClips index, or by record id with `record` (quest `play sound`). */
+  async playClip(index, { bus = 'effects', volume = 1, pan = 0, rate = 1, record = false } = {}) {
     if (!this.running || this.paused) return false;
+    if (record) index = this.snd?.indexOfId(index) ?? -1;
     const buf = await this._buffer(index);
     if (!buf || !this.running) return false;
     const src = this.ctx.createBufferSource();

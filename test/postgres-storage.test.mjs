@@ -12,6 +12,7 @@ import { openAccountStore, hashPassword } from '../server/accounts.js';
 import {
   openPostgresGameStore,
   createBufferedGameStore,
+  createPgPool,
   loadSchemaSql,
   CorruptCharacterError,
   MAX_RPG_BYTES,
@@ -120,6 +121,8 @@ function createMockPgPool() {
       clientCtx.pendingNotifications = [];
       return { rows: [], rowCount: 0 };
     }
+
+    if (sql.includes('pg_advisory_xact_lock')) return { rows: [{}], rowCount: 1 }; // single-process mock: no contention
 
     // Schema DDL
     if (sql.includes('CREATE TABLE IF NOT EXISTS schema_migrations')) {
@@ -722,6 +725,17 @@ describe('PostgreSQL schema & storage factory', () => {
       },
     );
   });
+
+  it('createPgPool survives an idle connection dropped by the server (no unhandled pool error)', async () => {
+    const pool = await createPgPool('postgresql://127.0.0.1:1/dfw');
+    try {
+      // pg-pool re-emits an idle client's error (e.g. pg_terminate_backend, a PostgreSQL restart) on the
+      // pool; with no listener Node throws it and the whole game server exits.
+      assert.doesNotThrow(() => pool.emit('error', new Error('terminating connection due to administrator command')));
+    } finally {
+      await pool.end();
+    }
+  });
 });
 
 describe('postgres-game store contract', () => {
@@ -914,6 +928,24 @@ describe('createBufferedGameStore write-behind coordinator', () => {
     await buffered.close();
     assert.equal((await pgStore.findByToken(g.token)).x, 77);
   });
+
+  it('retries a failed commit on its own, without waiting for another save or close()', async () => {
+    // game.js clears p.dirty as soon as saveCharacters returns, so an idle world never calls it again.
+    const committed = [];
+    let failures = 1;
+    const buffered = createBufferedGameStore({
+      async saveCharacters(players) {
+        if (failures-- > 0) throw new Error('connection terminated unexpectedly');
+        committed.push(...players.map((p) => p.x));
+      },
+      async close() {},
+    }, { retryMs: 20 });
+    buffered.saveCharacters([{ id: 1, name: 'Idle', x: 5, z: 0, yaw: 0, rpg: {} }]);
+    for (let i = 0; i < 50 && !committed.length; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.deepEqual(committed, [5]);
+    assert.equal(buffered.pendingCount, 0);
+    await buffered.close();
+  });
 });
 
 describe('postgres-accounts store & LISTEN/NOTIFY moderation', () => {
@@ -1028,7 +1060,7 @@ describe('tools/migrate-to-postgres.mjs SQLite -> PostgreSQL migration', () => {
         log: (m) => dryLogs.push(m),
       });
       assert.equal(drySummary.dryRun, true);
-      assert.deepEqual(drySummary.game, { skipped: false, players: 2, accountCharacters: 1, worldState: 2 });
+      assert.deepEqual(drySummary.game, { skipped: false, players: 2, accountCharacters: 1, worldState: 2, chatMessages: 0 });
       assert.deepEqual(drySummary.accounts, { skipped: false, accounts: 1, sessions: 1, moderationLog: 1 });
 
       // 2. CLI --dry-run invocation

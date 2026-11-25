@@ -390,7 +390,7 @@ test('projectOrders: parses pguild: rows and aggregates member levels and skills
     combinedLevel: c1.level + c2.level,
     combinedTotalSkill: c1.totalSkill + c2.totalSkill,
     treasury: 12500,
-    createdAt: '2026-01-15T00:00:00.000Z',
+    createdAt: Date.parse('2026-01-15T00:00:00.000Z'),
   });
   assert.equal(Object.hasOwn(first, 'ledger'), false);
   assert.equal(Object.hasOwn(first, 'motd'), false);

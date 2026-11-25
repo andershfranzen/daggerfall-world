@@ -475,6 +475,7 @@ describe('peerHybrid: async fallback, target tint, matchHeight, and shouldSkipFa
       now: 1.0,
       spriteLibrary,
       dollLibrary,
+      mode: 'hybrid',
       targetId: 'tgt-1',
     });
     assert.equal(frontTarget.source, 'doll');
@@ -501,12 +502,14 @@ describe('peerHybrid: async fallback, target tint, matchHeight, and shouldSkipFa
     assert.deepEqual(matchHeight(1.0, 1.6, 0), { w: 1.0, h: 1.6 });
   });
 
-  test('shouldSkipFallbackAvatar suppresses blocky cube fallback whenever hasActorSprite or arena2Loaded is true', () => {
-    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: true, arena2Loaded: false }), true);
-    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: false, arena2Loaded: true }), true);
-    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: true, arena2Loaded: true }), true);
-    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: false, arena2Loaded: false }), false);
-    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: false, arena2Loaded: false, peer: { coverage: 0 } }), true);
+  test('shouldSkipFallbackAvatar hides the cube only while a sprite is drawn or still loading', () => {
+    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: true }), true);
+    // While the figure's archive can still arrive the cube stays hidden (no flash on first sight)...
+    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: false, figureDrawable: true }), true);
+    // ...but a player whose figure cannot be drawn must not vanish just because game files are loaded.
+    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: false, figureDrawable: false, arena2Loaded: true }), false);
+    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: false }), false);
+    assert.equal(shouldSkipFallbackAvatar({ hasActorSprite: false, peer: { coverage: 0 } }), true);
     assert.equal(shouldSkipFallbackAvatar(), false);
   });
 });

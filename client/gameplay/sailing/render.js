@@ -647,10 +647,7 @@ export function installSailingRenderer(api, opts = {}) {
   let deckPeerPass = null;
   function getDeckPeerPass() {
     if (!deckPeerPass && (api.actors?.library || api.actors?.dollLibrary)) {
-      deckPeerPass = createDeckPeerPass({
-        spriteLibrary: api.actors.library,
-        dollLibrary: api.actors.dollLibrary,
-      });
+      deckPeerPass = createDeckPeerPass({ spriteLibrary: api.actors.library });
     }
     return deckPeerPass;
   }
@@ -812,6 +809,8 @@ export function installSailingRenderer(api, opts = {}) {
         camera: renderer.camera ?? { x: renderer.eye[0], y: renderer.eye[1], z: renderer.eye[2], yaw: 0, pitch: 0 },
         now: S.frame.t,
         peerStateById,
+        // Crew follow the same figure mode as peers ashore: paper dolls only when one is chosen.
+        dollLibrary: api.actors.peerFigureMode?.() === 'classic8dir' ? null : api.actors.dollLibrary,
       });
       deckPeerPass.draw(gl, renderer, renderer.camera ?? { x: renderer.eye[0], y: renderer.eye[1], z: renderer.eye[2], yaw: 0, pitch: 0 });
     }

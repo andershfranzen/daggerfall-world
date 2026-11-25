@@ -5,7 +5,7 @@
 // The highest `version` wins when members return after a restart, so a removed member's stale
 // copy cannot re-admit them. Trades and invitations are live-only and end on disconnect.
 import { randomBytes } from 'node:crypto';
-import { CHANNELS, CHAT_BURST, CHAT_RATE_PER_SEC, cleanChatText, isMuted, regionOf, tokenBucket } from './social/chat.js';
+import { CHANNELS, cleanChatText, createChatLimiter, isMuted, regionOf, tokenBucket } from './social/chat.js';
 import { PROXIMITY_RANGE, SHOUT_RANGE, canonicalChannel, findWhisperTarget, parseChatCommand, selectChatAudience } from './social/proximity.js';
 import { TRADE_RANGE, describeOffer, goldOf, normaliseOffer, offerProblem, settle } from './social/trade.js';
 
@@ -94,7 +94,7 @@ export function install(ctx) {
   function limiter(p) {
     let l = limits.get(p);
     if (!l) {
-      l = { chat: tokenBucket(CHAT_RATE_PER_SEC, CHAT_BURST), request: tokenBucket(REQUEST_RATE_PER_SEC, REQUEST_BURST) };
+      l = { chat: createChatLimiter(now), request: tokenBucket(REQUEST_RATE_PER_SEC, REQUEST_BURST) };
       limits.set(p, l);
     }
     return l;
@@ -116,7 +116,7 @@ export function install(ctx) {
       max: PARTY_MAX,
       members: [...party.members.values()].map((m) => {
         const live = online(m.id);
-        return { id: m.id, name: live?.name ?? m.name, online: Boolean(live), location: live ? regionOf(locationOf(live)) : null };
+        return { id: m.id, name: live?.name ?? m.name, online: Boolean(live), location: live ? regionOf(locationOf(live), ctx) : null };
       }),
     };
   }
@@ -153,7 +153,7 @@ export function install(ctx) {
       players.push({
         id: o.id,
         name: o.name,
-        region: regionOf(locationOf(o)),
+        region: regionOf(locationOf(o), ctx),
         sameLocation,
         inTradeRange: sameLocation && distance(o, p) <= TRADE_RANGE,
         partyMember: Boolean(party && party.members.has(o.id)),
@@ -164,7 +164,7 @@ export function install(ctx) {
     players.sort((x, y) => Number(y.sameLocation) - Number(x.sameLocation) || x.name.localeCompare(y.name));
     const tid = tradeOf.get(p.id);
     return {
-      region: regionOf(loc),
+      region: regionOf(loc, ctx),
       channels: ['say', 'shout', ...CHANNELS],
       proximityRange: PROXIMITY_RANGE,
       shoutRange: SHOUT_RANGE,
@@ -545,21 +545,26 @@ export function install(ctx) {
     const text = cleanChatText(args.text);
     // Share the runtime's per-player chat budget when present, plus our own as a floor.
     const okShared = typeof p.chatOk === 'function' ? p.chatOk() : true;
-    if (!okShared || !limiter(p).chat()) throw new Error('You are chatting too fast.');
-    const region = regionOf(locationOf(p));
+    // Per-channel budgets (CHAT_LIMITS): say/emote/shout use the local one; global stays tightest.
+    const budget = channel === 'say' || channel === 'emote' || channel === 'shout' ? 'local' : channel;
+    if (!okShared || !limiter(p).chat(budget)) throw new Error('You are chatting too fast.');
+    const region = regionOf(locationOf(p), ctx);
     const whisperTo = channel === 'whisper'
       ? findWhisperTarget(ctx.players, p, { target: args.target, targetId: args.targetId })
       : null;
     const recipients = chatAudience(p, channel, { recipient: whisperTo });
     const party = channel === 'party' ? partyOfPlayer(p) : null;
-    ctx.services.logChat?.(p, {
+    // Moderation needs every delivered line on record: a failed (synchronous) write is not delivered.
+    const logged = ctx.services.logChat?.(p, {
       channel,
       location: locationOf(p),
       targetPlayerId: whisperTo?.id ?? null,
       targetName: whisperTo?.name ?? null,
       groupId: party?.id ?? null,
+      recipientIds: recipients.filter((r) => r.id !== p.id).map((r) => r.id),
       text,
     });
+    if (logged === null) throw new Error('Chat is unavailable right now.');
     const event = {
       kind: 'chat',
       channel,
@@ -648,6 +653,11 @@ export function install(ctx) {
     return Boolean(party && party.members.has(b?.id) && partyOfPlayer(b) === party);
   };
   services.tradeOpenFor = (p) => tradeOf.has(p.id);
+  // The other side of p's pending or open trade, or null. Crowd culling keeps it visible (server/game.js, runtime.js).
+  services.tradePartnerOf = (p) => {
+    const t = trades.get(tradeOf.get(p?.id));
+    return t ? (t.a.id === p.id ? t.b.id : t.a.id) : null;
+  };
   services.goldOf = services.goldOf ?? ((p) => goldOf(p?.rpg));
   services.chatAudience = chatAudience;
   services.parseChatCommand = parseChatCommand;

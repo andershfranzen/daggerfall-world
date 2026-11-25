@@ -6,8 +6,8 @@
 //   letter with `used` text  parchment carrying that text (campaign letters, cures)
 //   artifact                 the artifact template; an artifact already owned is not copied again
 //   any other item class     its rolled template and appearance (quests/itemIdentity.js: gems, ingredients, religious
-//                            items, jewellery, drugs, magic items, books...), or a durable fallback misc/custom item
-//                            preserving name, weight, value and icon metadata when no rolled template is present
+//                            items, jewellery, drugs, magic items, books...), or, with no rolled template, an ordinary
+//                            record of the class's stand-in template (quests/itemIdentity.js permanentFallbackItem)
 // Not converted: an item the player is not carrying (never received, or handed over / taken back: Item.MakePermanent
 // only exports items still in the player's collection), gold, or an unresolved unique artifact with no catalogue entry.
 // Items already in the inventory (`give pc` rewards) are ordinary records and need nothing.
@@ -20,14 +20,8 @@ export function permanentQuestItem(ctx, player, quest, key, text) {
   if (!item?.held || item.handedOver || !ctx.services.giveItem) return;
   const letter = item.className === 'letter' && item.usedMessage ? text(quest, item.usedMessage) : null;
   let template = letter ? 'parchment' : item.className === 'gold' ? null : item.template;
-  let appearance = !letter && item.appearance ? item.appearance : undefined;
-  if (!template && !letter && item.className !== 'gold' && item.className !== 'artifact') {
-    const fb = permanentFallbackItem(item, quest);
-    if (fb) {
-      template = fb.template;
-      appearance = fb.appearance;
-    }
-  }
+  const appearance = !letter && item.appearance ? item.appearance : undefined;
+  if (!template && !letter && item.className !== 'gold' && item.className !== 'artifact') template = permanentFallbackItem(item)?.template ?? null;
   if (!template) {
     const note = `make permanent: no inventory item for ${item.className}`;
     if (!quest.notes?.includes(note)) quest.notes?.push(note);

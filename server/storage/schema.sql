@@ -106,8 +106,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   target_player_id BIGINT,
   target_name TEXT,
   group_id TEXT,
-  body TEXT NOT NULL
+  body TEXT NOT NULL,
+  recipient_ids TEXT          -- JSON array of player ids who received it (sender excluded)
 );
+
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS recipient_ids TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at
   ON chat_messages (created_at DESC);

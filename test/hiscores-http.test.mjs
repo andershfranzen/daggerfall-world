@@ -34,7 +34,7 @@ function createMockEngine(overrides = {}) {
         sort: params.sort ?? 'members',
         page: params.page ?? 1,
         limit: params.limit ?? 25,
-        q: params.q ?? null,
+        filters: { query: params.query ?? null },
         orders: [{ name: 'Knights of the Dragon', members: 18, avgLevel: 21, treasury: 94000 }],
       };
     },
@@ -63,7 +63,7 @@ function createMockEngine(overrides = {}) {
         filters: {
           className: params.className ?? null,
           race: params.race ?? null,
-          q: params.q ?? null,
+          query: params.query ?? null,
         },
         entries: [{ rank: 1, name: 'Aldora', score: 24 }],
       };
@@ -146,7 +146,7 @@ describe('hiscores HTTP API', () => {
     assert.equal(body.limit, 100);
     assert.equal(body.filters.className, 'Spellsword');
     assert.equal(body.filters.race, 'Breton');
-    assert.equal(body.filters.q.length, 64);
+    assert.equal(body.filters.query.length, 64);
   });
 
   test('GET /api/hiscores supports className alias', async () => {
@@ -190,7 +190,7 @@ describe('hiscores HTTP API', () => {
     assert.equal(body.sort, 'treasury');
     assert.equal(body.page, 2);
     assert.equal(body.limit, 50);
-    assert.equal(body.q, 'Dragon');
+    assert.equal(body.filters.query, 'Dragon');
 
     const bad = await fetch(`${srv.base}/api/hiscores/orders?sort=invalid`);
     assert.equal(bad.status, 400);

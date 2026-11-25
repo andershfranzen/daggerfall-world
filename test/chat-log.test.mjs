@@ -106,7 +106,7 @@ function createMockPgPool({ failNextInsert = false } = {}) {
       const normalized = sql.trim();
       queries.push({ sql: normalized, params });
 
-      if (/^CREATE\s+(TABLE|INDEX)/i.test(normalized)) {
+      if (/^(CREATE\s+(TABLE|INDEX)|ALTER\s+TABLE)/i.test(normalized)) {
         ddl.push(normalized);
         return { rows: [], rowCount: 0 };
       }
@@ -128,6 +128,7 @@ function createMockPgPool({ failNextInsert = false } = {}) {
           target_name: params[7],
           group_id: params[8],
           body: params[9],
+          recipient_ids: params[10] ?? null,
         };
         rows.push({ ...row, id: Number(row.id), created_at: Number(row.created_at) });
         return { rows: [row], rowCount: 1 };
@@ -341,8 +342,8 @@ describe('chat-log PostgreSQL store (mock pg pool)', () => {
     const pool = createMockPgPool();
     const store = await openPostgresChatLog(pool);
 
-    // DDL executed: 1 CREATE TABLE + 4 CREATE INDEX
-    assert.equal(pool.ddl.length, 5);
+    // DDL executed: 1 CREATE TABLE + 4 CREATE INDEX + 1 ALTER TABLE (recipient_ids on older tables)
+    assert.equal(pool.ddl.length, 6);
     assert.match(pool.ddl[0], /CREATE TABLE IF NOT EXISTS chat_messages/i);
     assert.match(pool.ddl[0], /BIGSERIAL PRIMARY KEY/i);
 
@@ -376,8 +377,8 @@ describe('chat-log PostgreSQL store (mock pg pool)', () => {
     // Verify parameterized $1..$10 insert was used
     const insertCall = pool.queries.find((q) => /^INSERT INTO chat_messages/i.test(q.sql));
     assert.ok(insertCall);
-    assert.match(insertCall.sql, /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10\)/);
-    assert.equal(insertCall.params.length, 10);
+    assert.match(insertCall.sql, /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11\)/);
+    assert.equal(insertCall.params.length, 11);
 
     // Filtered queries
     const byUser = await store.query({ senderName: 'morgiah' });
@@ -555,5 +556,38 @@ describe('operator CLI & standalone PostgreSQL schema', () => {
     assert.match(sql, /idx_chat_messages_sender_account_created/i);
     assert.match(sql, /idx_chat_messages_sender_name_created/i);
     assert.match(sql, /idx_chat_messages_channel_created/i);
+  });
+});
+
+describe('chat-log review fixes', () => {
+  it('stores who heard each message and upgrades an existing table', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(':memory:');
+    // A table written by the first release, before recipient_ids existed.
+    db.exec(`CREATE TABLE chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL,
+      channel TEXT NOT NULL, location TEXT NOT NULL DEFAULT '', sender_player_id INTEGER, sender_account_id TEXT,
+      sender_name TEXT NOT NULL, target_player_id INTEGER, target_name TEXT, group_id TEXT, body TEXT NOT NULL)`);
+    db.prepare(`INSERT INTO chat_messages (created_at, channel, sender_name, body) VALUES (1, 'say', 'Old', 'kept')`).run();
+    const log = createChatLogService(openSqliteChatLog(db));
+    log.logChat({ id: 7, name: 'Aldric', accountId: 3, rpg: { location: 'town:Daggerfall/Daggerfall' } },
+      { channel: 'shout', text: 'Watch out!', recipientIds: [8, 9] });
+    const rows = log.queryChat({ order: 'asc' }).rows;
+    assert.equal(rows[0].body, 'kept');
+    assert.equal(rows[0].recipientIds, null);
+    assert.deepEqual(rows[1].recipientIds, [8, 9]);
+  });
+
+  it('PostgreSQL store adds and returns recipient_ids', async () => {
+    const pool = createMockPgPool();
+    const store = await openPostgresChatLog(pool);
+    assert.ok(pool.queries.some((q) => /ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS recipient_ids/i.test(q.sql)));
+    const r = await store.record({ channel: 'say', senderName: 'A', body: 'x', recipientIds: [2] });
+    assert.deepEqual(r.recipientIds, [2]);
+  });
+
+  it('CLI reads the database the game server writes by default', async () => {
+    const { DEFAULTS } = await import('../server/game.js');
+    const { CLI_DEFAULT_DB_PATH } = await import('../server/chat-log.js');
+    assert.equal(CLI_DEFAULT_DB_PATH, DEFAULTS.dbPath);
   });
 });

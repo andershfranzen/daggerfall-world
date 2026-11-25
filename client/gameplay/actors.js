@@ -20,6 +20,7 @@ import { groundFor, layersHeightAt } from '../lib/ground.js';
 import { crossesDoor } from '../lib/arrival.js';
 import { SnapshotBuffer } from '../lib/motion.js';
 import { mountedItems, HORSE_ARCHIVE } from './mount/sprites.js';
+import { CORPSE_FALLBACK } from './actors/tables.js';
 import { peerCoverage } from './magic/concealment.js';
 
 export const TARGET_RANGE = 40;
@@ -65,9 +66,9 @@ export function describeTarget(info) {
 export class ActorController {
   /**
    * @param {object} api gameplay api (see docs/gameplay-protocol.md)
-   * @param {{ clock?: () => number, peerFigureMode?: 'hybrid'|'doll'|'classic8dir' }} opts clock in seconds
+   * @param {{ clock?: () => number, peerFigureMode?: 'classic8dir'|'hybrid'|'doll' }} opts clock in seconds
    */
-  constructor(api, { clock, peerFigureMode = 'hybrid' } = {}) {
+  constructor(api, { clock, peerFigureMode = 'classic8dir' } = {}) {
     this.api = api;
     this.clock = clock ?? (() => performance.now() / 1000);
     this.library = new SpriteLibrary();
@@ -416,16 +417,31 @@ export class ActorController {
     return out;
   }
 
+  /**
+   * False when a remote player's sprite can never be drawn (no game files indexed, or its
+   * archive failed to load), so the shell should show a stand-in instead of nothing.
+   */
+  figureDrawable(id) {
+    if (!this.library.index) return false;
+    const v = this.views.get(`p:${id}`);
+    if (!v) return true; // the rpg snapshot with this player's figure is not in yet
+    if (!v.app) return false;
+    const archive = isPeerDefeated(v.data) ? (v.app.corpse ?? CORPSE_FALLBACK)[0] : v.app.archive;
+    return !this.library.failed.has(archive);
+  }
+
   /** Public, read-only view handed to the shell (also stored as api.actors). */
   publicApi() {
     return {
       arrival: (opts) => this.arrival(opts),
       hasSprite: (id) => this.drawnIds.has(String(id)),
+      figureDrawable: (id) => this.figureDrawable(id),
       drawnIds: () => [...this.drawnIds],
       target: () => this.targetInfo,
       appearance: (id) => (this.views.get(`p:${id}`) ?? this.views.get(`e:${id}`))?.app ?? null,
       library: this.library,
       dollLibrary: this.dollLibrary,
+      peerFigureMode: () => this.peerFigureMode,
       setPeerFigureMode: (mode) => {
         if (mode === 'hybrid' || mode === 'doll' || mode === 'classic8dir') this.peerFigureMode = mode;
       },

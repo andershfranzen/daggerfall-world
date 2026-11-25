@@ -6,6 +6,7 @@ import { install as law } from './law.js';
 import { install as interiors } from './interiors.js';
 import { install as automap } from './automap.js';
 import { install as actors } from './actors.js';
+import { install as combatFeedback } from './combatFeedback.js';
 import { install as npcs } from './npcs.js';
 import { install as townServices } from './townServices.js';
 import { install as alchemy } from './alchemy.js';
@@ -40,6 +41,7 @@ export const features = [
   { name: 'interiors', install: interiors },
   { name: 'automap', install: automap },
   { name: 'actors', install: actors },
+  { name: 'combatFeedback', install: combatFeedback }, // floating numbers from server combat events
   { name: 'npcs', install: npcs },
   { name: 'townServices', install: townServices },
   { name: 'alchemy', install: alchemy }, // Potion Maker, Item Maker, identify, magic merchants (package 16)
