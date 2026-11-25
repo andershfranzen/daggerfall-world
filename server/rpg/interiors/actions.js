@@ -414,9 +414,13 @@ export function installDungeonActions(ctx, { source, graceMs = RESET_GRACE_MS, l
             const from = { id: `dungeon:${e.m.id}`, mechanism: { id: e.m.id, firstTriangle: e.m.firstTriangle, triangleCount: e.m.triangleCount },
               // A plate or wall that casts on contact is a trap; a clicked object keeps its prompt label.
               name: directAction(e.m.action?.trigger) ? mechanismLabel(e.m) : 'trap', location, x: e.m.x, y: e.m.y, z: e.m.z };
-            if (typeof S.objectCast === 'function') S.objectCast(from, e.index, p, { level: levelOf(p) });
+            let castRes = null;
+            if (typeof S.objectCast === 'function') castRes = S.objectCast(from, e.index, p, { level: levelOf(p) });
             else ctx.emit('dungeonSpell', { player: p, index: e.index, level: levelOf(p), source: from });
-            ctx.notify(p, { kind: 'dungeonHazard', id: e.m.id, pool: 'spell', spell: e.index });
+            ctx.notify(p, {
+              kind: 'dungeonHazard', id: e.m.id, pool: 'spell', spell: e.index,
+              ...(castRes?.ready ? { ready: true, spellId: castRes.spell?.id, spellName: castRes.spell?.name } : {}),
+            });
             break;
           }
           case 'poison': {

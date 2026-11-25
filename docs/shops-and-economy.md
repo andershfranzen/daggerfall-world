@@ -121,8 +121,12 @@ In the browser, a player who faces a shelf within reach and presses G opens the 
   Grid routes come from the server's `collision.isClear`. Everything else is real input. A walked door → shelf 1 (9 legs) with the arrow keys and W, browsed it with G and took the last Bandage. B's socket was then refused ("no longer on this shelf") and got no basket event. A walked shelf → shopkeeper to 2.2 m and pressed G. The conversation offered "1. I'll pay for my basket: Bandage — 1 gold." B's conversation with the same keeper had no basket. Key 1 paid: the keeper answered "1 gold for 1 item. Thank you, and come again.", gold went 2500 → 2499 and the Bandage was in the pack. A retry of the same payment charged nothing. B picked Parchment and left by the door: the shelf went 0 → 1 and B was told the goods went back. The run logged no save errors. A's purchase went to the pack, not the wagon. Only A reaches A's wagon (B reaches none). After closing the page and reconnecting, A has the same gold, the same item ids and the cart, inside the shop. B's socket reconnected on the street outside, so the helper, which waits for the shop, timed out.
 - The earlier positions beside the shelves (`stand()`) are inside furniture collision. A player placed there cannot move. Positions in later runs use the door landing or `collision.nearestClear`.
 
+## Dynamic economy & regional holidays
+
+- Live faction power updates (`services.setFactionPower` / `adjustFactionPower`) and the monthly Merchants' faction power step (`services.updateMonthlyEconomy`, ±1 when three or more provinces hit `PricesHigh` or `PricesLow`) persist in shared world state (`economy:state`) and immediately update `priceAdjust`.
+- Regional holiday trade pricing (`server/rpg/economy/dynamic.js`: Saturalia in Wayrest, Festival of Blades and Baranth Do in Alik'r Desert, Dancing Day in Daggerfall, Broken Diamonds in Glenpoint, Appreciation Day in Anticlere, Koomu Alazeri in Ykalon) applies alongside the three global trade holidays (Merchants' Festival, Tales and Tallows, Warriors' Festival).
+
 ## Outstanding
 
-- Region-specific holiday price rules beyond the three trade holidays. Faction power is read once at start, so quest changes to faction power, and the monthly Merchants' power step from three or more PricesHigh/PricesLow provinces, are not followed.
 - Selling magic items at ordinary shops is not restricted beyond the classic group tables.
 - The counter's ware list (package 3's "Show me your wares" page) still offers direct purchase from every shelf (`npc.buy`). Classic's merchant popup offers only Talk and Sell; buying happens at the shelves. It is kept for older callers. The basket checkout is in the conversation and on the Shelf page.

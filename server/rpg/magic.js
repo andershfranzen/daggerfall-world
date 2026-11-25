@@ -24,6 +24,7 @@ export const MAGIC = Object.freeze({
   aimCone: 0.6, // radians either side of the caster's facing for missiles
   touchCone: 1.1,
   maxActivePerTarget: 24,
+  readySpellMs: 5 * 60_000, // pending free ready-to-cast trap spell lifetime
 });
 
 const POOLS = {
@@ -139,7 +140,83 @@ export function install(ctx, options = {}) {
     if (!Array.isArray(m.active)) m.active = [];
     if (!Array.isArray(m.custom)) m.custom = [];
     if (m.selected === undefined) m.selected = null;
+    if (m.readySpell && (typeof m.readySpell !== 'object' || typeof m.readySpell.spellId !== 'string')) m.readySpell = null;
+    if (m.readySpell === undefined) m.readySpell = null;
     return m;
+  }
+
+  function activeReadySpell(p, now = ctx.now()) {
+    const m = magicOf(p);
+    const r = m.readySpell;
+    if (!r) return null;
+    if (Number.isFinite(r.expiresAt) && now >= r.expiresAt) {
+      m.readySpell = null;
+      ctx.dirty?.(p);
+      return null;
+    }
+    return r;
+  }
+
+  function resolveFreeSpell(ref) {
+    if (typeof ref === 'number') return enemySpell(ref);
+    if (typeof ref === 'string') return catalogue.spells.get(ref) ?? enemySpell(Number(ref));
+    return null;
+  }
+
+  function grantFreeCast(p, indexOrId, { level = null, source = 'trap', ttlMs = opts.readySpellMs } = {}) {
+    if (!p?.rpg) return null;
+    const spell = resolveFreeSpell(indexOrId);
+    if (!spell || spell.support === 'unsupported') return null;
+    const now = ctx.now();
+    const m = magicOf(p);
+    const prev = m.readySpell;
+    const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : opts.readySpellMs;
+    const entry = {
+      spellId: spell.id,
+      index: spell.index ?? null,
+      name: spell.name,
+      level: Math.max(1, Math.trunc(level ?? p.rpg.character?.level ?? 1) || 1),
+      source: String(source ?? 'trap').slice(0, 64),
+      grantedAt: now,
+      expiresAt: now + ttl,
+    };
+    m.readySpell = entry;
+    ctx.onRollback?.(() => { m.readySpell = prev; });
+    ctx.dirty?.(p);
+    ctx.notify?.(p, {
+      kind: 'spellReady',
+      spellId: spell.id,
+      spellName: spell.name,
+      spell: publicSpell(spell),
+      free: true,
+      expiresAt: entry.expiresAt,
+      source: entry.source,
+      text: `${spell.name} is ready to cast.`,
+    });
+    return { ok: true, ready: true, cost: 0, results: [], spell: publicSpell(spell), expiresAt: entry.expiresAt };
+  }
+
+  function castFree(p, args = {}) {
+    if (!p?.rpg) throw new Error('No character.');
+    const ready = activeReadySpell(p);
+    if (!ready) throw new Error('You have no ready free spell to cast.');
+    const spell = resolveFreeSpell(ready.index ?? ready.spellId) ?? catalogue.spells.get(ready.spellId);
+    if (!spell) {
+      magicOf(p).readySpell = null;
+      ctx.dirty?.(p);
+      throw new Error('Your ready spell is no longer available.');
+    }
+    const m = magicOf(p);
+    const prev = m.readySpell;
+    m.readySpell = null;
+    ctx.onRollback?.(() => { m.readySpell = prev; });
+    try {
+      const res = cast(p, args, spell, { freeCast: true, level: ready.level });
+      return { ...res, free: true };
+    } catch (err) {
+      m.readySpell = prev;
+      throw err;
+    }
   }
 
   /** Grant class starting spells once a character exists. Returns true if anything changed. */
@@ -1025,16 +1102,23 @@ export function install(ctx, options = {}) {
     }
   }
 
-  function cast(p, args = {}, itemSpell = null) {
+  function cast(p, args = {}, itemSpell = null, castOpts = null) {
     if (!p.rpg) throw new Error('No character.');
     if (services.conditionBeastForm?.(p)) throw new Error('You cannot cast spells in beast form.');
     grantStarting(p);
+    const freeCast = !!castOpts?.freeCast;
+    if (!itemSpell && !freeCast) {
+      const ready = activeReadySpell(p);
+      if (ready && (args.free === true || (args.spellId === ready.spellId && !magicOf(p).known.includes(ready.spellId)))) {
+        return castFree(p, args);
+      }
+    }
     const spell = itemSpell ?? knownSpell(p, args.spellId);
     if (spell.support === 'unsupported') {
       const why = spell.effects.find((e) => e.template.reason)?.template.reason ?? 'unavailable';
       throw new Error(`${spell.name} cannot be cast in this world yet: ${why}.`);
     }
-    const item = !!itemSpell;
+    const item = !!itemSpell && !freeCast;
     if (!item) castingBlocker(p);
     const c = p.rpg.character;
     if (!c || c.health <= 0 || p.rpg.defeated) throw new Error('You cannot cast while defeated.');
@@ -1048,7 +1132,7 @@ export function install(ctx, options = {}) {
     const prevCd = cooldownUntil.get(p.id);
     if (!item && now < (prevCd ?? 0)) throw new Error('You are still recovering from your last spell.');
     const baseCost = costsFor(p, spell).magicka;
-    const cost = item ? 0 : baseCost;
+    const cost = item || freeCast ? 0 : baseCost;
     const mana = c.magicka ?? 0;
     if (mana < cost) throw new Error(`You need ${cost} magicka to cast ${spell.name} (you have ${Math.floor(mana)}).`);
     if (spell.effects.some((e) => e.template.behaviour?.kind === 'recall')) {
@@ -1082,7 +1166,8 @@ export function install(ctx, options = {}) {
     services.interruptRest?.(p, 'magic', 'You stop resting to cast a spell.');
     ctx.dirty?.(p);
     const castInfo = {
-      caster: p, spell, cost, item, args, location, start, level: Math.max(1, c.level ?? 1),
+      caster: p, spell, cost, item, args, location, start,
+      level: freeCast && Number.isFinite(castOpts?.level) ? Math.max(1, Math.trunc(castOpts.level)) : Math.max(1, c.level ?? 1),
       bundleId: randomUUID(), choices: [],
       yaw: aimYaw(p, args), pitch: Number.isFinite(args.pitch) ? Math.max(-1.45, Math.min(1.45, args.pitch)) : 0,
     };
@@ -1227,6 +1312,7 @@ export function install(ctx, options = {}) {
   });
 
   ctx.onAction('magic.cast', (p, args = {}) => { cast(p, args); });
+  ctx.onAction('magic.castFree', (p, args = {}) => { castFree(p, args); });
   ctx.onAction('magic.choose', resolveChoice);
 
   ctx.onTick?.((dt) => {
@@ -1353,7 +1439,7 @@ export function install(ctx, options = {}) {
     return sp ? { id: sp.id, name: sp.name, targetType: sp.targetType, harmful: sp.harmful, element: sp.element, baseCost: spellCosts(sp, () => 0).magicka } : null;
   };
 
-  function hostileCast(caster, index, target, { level = caster?.level ?? 1, free = false, object = false } = {}) {
+  function hostileCast(caster, index, target, { level = caster?.level ?? 1, free = false, object = false, immediate = false } = {}) {
     const spell = enemySpell(index);
     if (!spell || !caster || (!object && !alive(caster))) return null;
     const self = asEntityTarget(caster);
@@ -1368,6 +1454,12 @@ export function install(ctx, options = {}) {
         ? asPlayerTarget(target) : null;
     const tt = spell.targetType;
     if ((tt !== 'caster' || object) && !tp) return null;
+    // Classic Daggerfall / DFU DaggerfallAction.CastSpell: caster-only beneficial trap spells (Levitate, Shield,
+    // Heal, Slowfalling, Water Breathing, Feet of Notorgo) ready a free cast on the triggering player instead of
+    // firing immediately; harmful trap spells still cast immediately.
+    if (object && tt === 'caster' && !spell.harmful && !immediate && tp?.kind === 'player') {
+      return grantFreeCast(tp.ref, index, { level, source: caster?.name ?? 'trap' });
+    }
     const probe = tt === 'caster' && !object ? self : tp;
     const lasting = spell.effects.filter((eff) => eff.template.duration);
     if (lasting.length && lasting.every((eff) => activeOf(probe).some((a) => a.key === eff.template.key))) return null;
@@ -1405,6 +1497,8 @@ export function install(ctx, options = {}) {
   services.enemyCast = (caster, index, target, opts) => hostileCast(caster, index, target, opts);
   services.drainMonsterFatigue = (target, amount) => applyPool(null, asEntityTarget(target), 'fatigue', -amount);
   services.objectCast = (caster, index, target, opts) => hostileCast(caster, index, target, { ...opts, object: true, free: true });
+  services.grantFreeCast = grantFreeCast;
+  services.castFree = castFree;
   services.castItemSpell = (p, index, args = {}, { itemName = 'The item' } = {}) => {
     const spell = enemySpell(index);
     if (!spell) throw new Error(`${itemName} has no usable spell.`);
