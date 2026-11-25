@@ -150,7 +150,7 @@ export function createGameServer(options = {}) {
   cfg.wodPath = resolveDataPath(cfg.wodPath ?? process.env.WOD_PATH ?? (existsSync(WOD_ROOT) ? WOD_ROOT : null), [cfg.clientDir, cfg.siteDir]);
   const wodAssets = createLocalWodPack(cfg.wodPath);
   const accounts = cfg.accounts || null;
-  const store = (cfg.openStore ?? openStore)(cfg.dbPath); // openStore option: test fault injection
+  const store = cfg.store ?? (cfg.openStore ?? openStore)(cfg.dbPath); // store/openStore: PG cutover or test fault injection
   const serveStatic = createSiteHandler({
     clientDir: cfg.clientDir,
     siteDir: cfg.siteDir,
@@ -260,13 +260,33 @@ export function createGameServer(options = {}) {
             if (!c.account || String(c.account.id) !== key) continue;
             const p = c.player;
             if (p && p.conn === c && players.get(p.id) === p) {
+              orphans.delete(p.id);
               c.player = null;
               leave(p, { skipSave: true });
             }
             fatal(c.ws, CLOSE.ACCOUNT, 'account deleted');
           }
+          if (typeof store.deleteForAccount === 'function') {
+            return Promise.resolve()
+              .then(async () => {
+                const deletedId = await store.deleteForAccount(accountId);
+                if (deletedId != null) orphans.delete(deletedId);
+              })
+              .catch((err) => {
+                console.error('[game] failed to delete character for deleted account:', err?.message ?? err);
+              });
+          }
           try {
             const row = store.findByAccount(accountId);
+            if (row && typeof row.then === 'function') {
+              return row
+                .then((resolved) => {
+                  if (resolved) orphans.delete(resolved.id);
+                })
+                .catch((err) => {
+                  console.error('[game] failed to delete character for deleted account:', err?.message ?? err);
+                });
+            }
             if (row) {
               orphans.delete(row.id);
               if (store.db?.isOpen) {
@@ -326,9 +346,11 @@ export function createGameServer(options = {}) {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: cfg.maxPayloadBytes, perMessageDeflate: false });
 
-  http.on('upgrade', async (req, socket, head) => {
+  http.on('upgrade', (req, socket, head) => {
     const reject = (status, text) => {
-      socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      if (!socket.destroyed) {
+        socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      }
     };
     if (closing) return reject(503, 'Service Unavailable');
     if (req.url.split('?')[0] !== '/ws') {
@@ -344,18 +366,29 @@ export function createGameServer(options = {}) {
       } catch {}
       if (!ok) return reject(403, 'Forbidden');
     }
-    let account = null;
-    if (accounts) {
-      try {
-        account = normalizeAccount(await accounts.resolveUpgrade(req));
-      } catch (err) {
-        console.error('[game] account lookup failed:', err.message);
-      }
-      if (!account && !cfg.allowGuests) return reject(401, 'Unauthorized');
-      if (socket.destroyed) return;
-      if (closing) return reject(503, 'Service Unavailable');
+    if (!accounts) {
+      wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, null));
+      return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, account));
+    Promise.resolve()
+      .then(() => accounts.resolveUpgrade(req))
+      .then(
+        (resolved) => normalizeAccount(resolved),
+        (err) => {
+          console.error('[game] account lookup failed:', err?.message ?? err);
+          return null;
+        },
+      )
+      .then((account) => {
+        if (socket.destroyed) return;
+        if (closing) return reject(503, 'Service Unavailable');
+        if (!account && !cfg.allowGuests) return reject(401, 'Unauthorized');
+        wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, account));
+      })
+      .catch((err) => {
+        console.error('[game] upgrade failed:', err?.message ?? err);
+        reject(500, 'Internal Server Error');
+      });
   });
 
   function send(ws, msg) {
@@ -627,6 +660,7 @@ export function createGameServer(options = {}) {
       ws,
       account,
       player: null,
+      joining: false,
       replaced: false,
       msgOk: bucket(cfg.msgRatePerSec, cfg.msgBurst),
       actionOk: bucket(cfg.actionRatePerSec, cfg.actionBurst),
@@ -668,7 +702,12 @@ export function createGameServer(options = {}) {
       }
       if (!conn.player) {
         if (msg.type !== 'join') return sendError(ws, 'join first');
-        return handleJoin(conn, msg);
+        if (conn.joining) return;
+        handleJoin(conn, msg).catch((err) => {
+          console.error('[game] join failed:', err?.message ?? err);
+          if (ws.readyState === ws.OPEN) fatal(ws, CLOSE.POLICY, 'join failed');
+        });
+        return;
       }
       switch (msg.type) {
         case 'input':
@@ -713,9 +752,9 @@ export function createGameServer(options = {}) {
     }
   }
 
-  function loadCharacter(ws, fn) {
+  async function loadCharacter(ws, fn) {
     try {
-      return fn();
+      return await fn();
     } catch (err) {
       if (err instanceof CorruptCharacterError) {
         console.error('[game]', err.message);
@@ -731,13 +770,21 @@ export function createGameServer(options = {}) {
     return players.size >= limit;
   }
 
-  function handleJoin(conn, msg) {
-    // `arrival: true`: the client holds a loading screen after the welcome and sends {type:'arrived'} once its
-    // place is complete (client/main.js). Until then others do not see this player and monsters ignore them.
-    conn.arrival = msg.arrival === true;
-    // `delta: true`: the client applies `stateDelta` frames and merges partial `rpg` snapshots (client/lib/net.js).
-    conn.delta = msg.delta === true;
-    return conn.account ? joinAccount(conn, msg) : joinGuest(conn, msg);
+  async function handleJoin(conn, msg) {
+    const { ws } = conn;
+    if (conn.joining || conn.player || conn.replaced || ws.readyState !== ws.OPEN) return;
+    conn.joining = true;
+    try {
+      // `arrival: true`: the client holds a loading screen after the welcome and sends {type:'arrived'} once its
+      // place is complete (client/main.js). Until then others do not see this player and monsters ignore them.
+      conn.arrival = msg.arrival === true;
+      // `delta: true`: the client applies `stateDelta` frames and merges partial `rpg` snapshots (client/lib/net.js).
+      conn.delta = msg.delta === true;
+      if (conn.account) await joinAccount(conn, msg);
+      else await joinGuest(conn, msg);
+    } finally {
+      conn.joining = false;
+    }
   }
 
   function handleArrived(conn) {
@@ -748,13 +795,14 @@ export function createGameServer(options = {}) {
     runtime.sync();
   }
 
-  function joinGuest(conn, msg) {
+  async function joinGuest(conn, msg) {
     const { ws } = conn;
     let row;
     let token;
     if (msg.token !== undefined && msg.token !== null) {
-      row = typeof msg.token === 'string' && TOKEN_RE.test(msg.token) ? loadCharacter(ws, () => store.findByToken(msg.token)) : null;
+      row = typeof msg.token === 'string' && TOKEN_RE.test(msg.token) ? await loadCharacter(ws, () => store.findByToken(msg.token)) : null;
       if (row === undefined) return;
+      if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
       if (!row) return fatal(ws, CLOSE.INVALID_TOKEN, 'invalid token');
       token = msg.token;
     } else {
@@ -766,31 +814,36 @@ export function createGameServer(options = {}) {
         );
       }
       if (serverFull()) return fatal(ws, CLOSE.FULL, 'server full');
-      ({ row, token } = store.create(name));
+      ({ row, token } = await store.create(name));
+      if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
     }
     admit(conn, row, { token }, { accountId: null });
   }
 
   // Accounts mode: identity comes from the verified upgrade, never from message fields. The
   // character is found by account id (server-owned); the display name is the account username.
-  function joinAccount(conn, msg) {
+  async function joinAccount(conn, msg) {
     const { ws, account } = conn;
     const name = cleanName(account.username, cfg.maxNameLength);
     if (!name) return fatal(ws, CLOSE.ACCOUNT, 'account name cannot be used in game');
-    let row = loadCharacter(ws, () => store.findByAccount(account.id));
+    let row = await loadCharacter(ws, () => store.findByAccount(account.id));
     if (row === undefined) return;
+    if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
     if (!row) {
       if (serverFull()) return fatal(ws, CLOSE.FULL, 'server full');
       if (msg.claimToken !== undefined && msg.claimToken !== null) {
         const t = msg.claimToken;
-        row = typeof t === 'string' && TOKEN_RE.test(t) ? loadCharacter(ws, () => store.claimGuest(account.id, account.username, t, name)) : null;
+        row = typeof t === 'string' && TOKEN_RE.test(t) ? await loadCharacter(ws, () => store.claimGuest(account.id, account.username, t, name)) : null;
         if (row === undefined) return;
+        if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
         if (!row) return sendError(ws, 'guest character could not be claimed');
       } else {
-        row = store.createForAccount(account.id, account.username, name);
+        row = await store.createForAccount(account.id, account.username, name);
+        if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
       }
     } else if (row.username !== account.username) {
-      store.setAccountUsername(account.id, account.username);
+      await store.setAccountUsername(account.id, account.username);
+      if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
     }
     admit(conn, { ...row, name }, { token: null, account: { id: account.id, username: account.username } }, { accountId: account.id });
   }
@@ -939,6 +992,9 @@ export function createGameServer(options = {}) {
     /** Public summary of an account's character, or null. */
     characterForAccount(accountId) {
       const row = store.findByAccount(accountId);
+      if (row && typeof row.then === 'function') {
+        return row.then((r) => (r ? { id: r.id, name: r.name } : null));
+      }
       return row ? { id: row.id, name: row.name } : null;
     },
     async start() {
@@ -999,7 +1055,11 @@ export function createGameServer(options = {}) {
           http.close(() => resolve());
           http.closeAllConnections();
         });
-        store.close();
+        if (typeof store.flush === 'function') await store.flush();
+        if (chatLogStore && typeof chatLogStore.close === 'function' && (!store.db || chatLogStore.db !== store.db)) {
+          await chatLogStore.close();
+        }
+        if (typeof store.close === 'function') await store.close();
       })();
       return closing;
     },

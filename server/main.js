@@ -4,7 +4,20 @@ import { statSync, realpathSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { createGameServer, DEFAULTS } from './game.js';
 import { createAccounts, ACCOUNT_DEFAULTS } from './accounts.js';
+import { openPostgresChatLog } from './chat-log.js';
+import { isPostgresUrl, openPostgresGameStore, createBufferedGameStore } from './storage/index.js';
 import { CHAT_LIMITS } from './rpg/social/chat.js';
+
+function redactDbUrl(raw) {
+  try {
+    const u = new URL(raw);
+    if (u.username) u.username = '***';
+    if (u.password) u.password = '***';
+    return u.toString();
+  } catch {
+    return String(raw).replace(/\/\/[^/@]+@/, '//***@');
+  }
+}
 
 // Single-world capacity default: high practical cap instead of a 32-player instance cap.
 // Operators can set MAX_PLAYERS=0 for uncapped, or any positive integer up to 1,000,000.
@@ -76,16 +89,58 @@ if (!secureCookies && !dev) {
   console.error('COOKIE_SECURE=0 is only accepted together with --dev (npm run dev)');
   process.exit(2);
 }
-const accounts = createAccounts({
-  dbPath: process.env.ACCOUNTS_DB_PATH ? resolve(process.env.ACCOUNTS_DB_PATH) : ACCOUNT_DEFAULTS.dbPath,
-  trustProxy: boolEnv('TRUST_PROXY', false),
-  requireHttps: boolEnv('REQUIRE_HTTPS', false),
-  publicOrigin: process.env.PUBLIC_ORIGIN ? new URL(process.env.PUBLIC_ORIGIN).origin : null,
-  secureCookies,
-});
+const trustProxy = boolEnv('TRUST_PROXY', false);
+const requireHttps = boolEnv('REQUIRE_HTTPS', false);
+const publicOrigin = process.env.PUBLIC_ORIGIN ? new URL(process.env.PUBLIC_ORIGIN).origin : null;
+
+const databaseUrl = process.env.DATABASE_URL?.trim() || '';
+const accountsUrl = process.env.ACCOUNTS_DATABASE_URL?.trim() || databaseUrl;
+const usingPostgresGame = isPostgresUrl(databaseUrl);
+const usingPostgresAccounts = isPostgresUrl(accountsUrl);
+
+let accounts;
+if (usingPostgresAccounts) {
+  const { createPostgresAccounts } = await import('./accounts.js');
+  if (typeof createPostgresAccounts !== 'function') {
+    console.error('ACCOUNTS_DATABASE_URL / DATABASE_URL requires createPostgresAccounts in server/accounts.js');
+    process.exit(1);
+  }
+  accounts = await createPostgresAccounts({
+    connectionString: accountsUrl,
+    trustProxy,
+    requireHttps,
+    publicOrigin,
+    secureCookies,
+  });
+} else {
+  accounts = createAccounts({
+    dbPath: process.env.ACCOUNTS_DB_PATH ? resolve(process.env.ACCOUNTS_DB_PATH) : ACCOUNT_DEFAULTS.dbPath,
+    trustProxy,
+    requireHttps,
+    publicOrigin,
+    secureCookies,
+  });
+}
+
+let gameStore = null;
+let chatLog = null;
+if (usingPostgresGame) {
+  try {
+    const pgGame = await openPostgresGameStore({ connectionString: databaseUrl });
+    gameStore = createBufferedGameStore(pgGame);
+    await gameStore.preloadWorld();
+    chatLog = await openPostgresChatLog(pgGame.pool);
+  } catch (err) {
+    console.error(`failed to initialize PostgreSQL game store: ${err.message}`);
+    await Promise.resolve(accounts.close()).catch(() => {});
+    process.exit(1);
+  }
+}
 
 const server = createGameServer({
   accounts,
+  ...(gameStore ? { store: gameStore } : {}),
+  ...(chatLog ? { chatLog } : {}),
   allowGuests,
   arena2Dir: arena2Dir(),
   wodPath: process.env.WOD_PATH || null,
@@ -112,8 +167,8 @@ try {
   const addr = await server.start();
   const host = addr.family === 'IPv6' ? `[${addr.address}]` : addr.address;
   console.log(`daggerfallworld server listening on http://${host}:${addr.port}/ (WebSocket /ws)`);
-  console.log(`database: ${server.config.dbPath}`);
-  console.log(`accounts: ${accounts.config.dbPath}${allowGuests ? ' (guest entry enabled for development)' : ''}`);
+  console.log(`database: ${usingPostgresGame ? redactDbUrl(databaseUrl) : server.config.dbPath}`);
+  console.log(`accounts: ${usingPostgresAccounts ? redactDbUrl(accountsUrl) : accounts.config.dbPath}${allowGuests ? ' (guest entry enabled for development)' : ''}`);
   if (server.config.arena2Dir) console.log(`game data: ${server.config.arena2Dir} (read-only)`);
   if (server.localAssets?.enabled) console.log(`local game files: ${server.localAssets.dir} offered to /play.html on this loopback origin only (${server.localAssets.reason}; LOCAL_ASSETS=0 to disable)`);
   console.log(`game: http://${host}:${addr.port}/play.html`);
@@ -123,7 +178,7 @@ try {
 } catch (err) {
   console.error(`failed to start: ${err.message}`);
   await server.close().catch(() => {});
-  accounts.close();
+  await Promise.resolve(accounts.close()).catch(() => {});
   process.exit(1);
 }
 
@@ -134,7 +189,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     stopping = true;
     console.log(`\n${sig} received, saving and shutting down...`);
     await server.close();
-    accounts.close(); // after the game server: live sessions may still query mutes while closing
+    await accounts.close(); // after the game server: live sessions may still query mutes while closing
     process.exit(0);
   });
 }
