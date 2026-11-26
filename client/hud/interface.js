@@ -65,7 +65,18 @@ if (strip) {
 let arrivalEl = null;
 let lastScreen = document.body.dataset.screen;
 
-function showArrival(location, tries = 0) {
+async function ensureDisplayFont() {
+  const fonts = document.fonts;
+  if (!fonts?.load) return;
+  try {
+    await Promise.race([
+      fonts.load('400 48px "Jacquard 12"'),
+      new Promise((r) => setTimeout(r, 400)),
+    ]);
+  } catch {}
+}
+
+async function showArrival(location, tries = 0) {
   if (reduceMotion.matches || document.body.dataset.screen !== 'game' || location !== globalThis.dfwGame?.location) return;
   const town = $('hud-town')?.textContent.trim();
   // main.js shows a placeholder ("Entering the world…") until the first snapshot names the place.
@@ -73,6 +84,8 @@ function showArrival(location, tries = 0) {
     if (tries < 20) setTimeout(() => showArrival(location, tries + 1), 250);
     return;
   }
+  await ensureDisplayFont();
+  if (reduceMotion.matches || document.body.dataset.screen !== 'game' || location !== globalThis.dfwGame?.location) return;
   arrivalEl?.remove();
   arrivalEl = document.createElement('div');
   arrivalEl.className = 'hud-arrival';

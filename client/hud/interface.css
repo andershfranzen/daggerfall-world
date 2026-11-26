@@ -1488,13 +1488,21 @@ body:not([data-screen="game"]) #labels { display: none; }
 }
 .hud-arrival strong {
   display: block;
-  font: 400 clamp(2.4rem, 8vw, 4.4rem)/0.95 var(--font-display);
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(2.6rem, 8vw, 4.6rem);
+  line-height: 0.95;
   letter-spacing: 0.01em;
   color: #e9eef5;
-  text-shadow: 3px 3px 0 #05070c, 0 0 24px rgba(0, 0, 0, 0.9);
+  background: linear-gradient(#ffffff 0 30%, #d3dbe7 30% 52%, #9eabbf 52% 74%, #75839a 74% 100%);
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 3px 0 #05070c) drop-shadow(3px 0 0 #05070c) drop-shadow(0 0 22px rgba(0, 0, 0, 0.9));
+  text-shadow: none;
   overflow-wrap: anywhere;
 }
-.hud-arrival strong::after {
+.hud-arrival::after {
   content: "";
   display: block;
   width: 60%;
@@ -1533,6 +1541,6 @@ body:not([data-screen="game"]) #labels { display: none; }
 @media (forced-colors: active) {
   .panel, #join-form, .panel-landing > .acct, #hud-status, #hud-compass, #hud-roster, #hud-help, #hud-banner, .chat-line, #hud-bar, #hud-vitals { border: 1px solid CanvasText; }
   .btn, .bar-btn, .menu-tab { border: 1px solid ButtonText; }
-  #landing-title { -webkit-text-fill-color: CanvasText; background: none; filter: none; }
+  #landing-title, .hud-arrival strong { -webkit-text-fill-color: CanvasText; background: none; filter: none; }
   :is(#hud, #game-menu, .acct, #screen-landing) input[type="checkbox"] { appearance: auto; }
 }

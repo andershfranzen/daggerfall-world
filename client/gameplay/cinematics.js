@@ -27,9 +27,8 @@ const CSS = `
 .cine{position:fixed;inset:0;z-index:80;background:#000;display:grid;place-items:center;cursor:pointer;opacity:0;transition:opacity .25s linear}
 .cine[data-on="true"]{opacity:1}
 .cine canvas{--ar:1.3333;width:min(100vw,calc(100vh*var(--ar)));aspect-ratio:var(--ar);image-rendering:pixelated;image-rendering:crisp-edges;background:#000}
-.cine-bar{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;gap:1rem;padding:.5rem 1rem;
+.cine-bar{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:flex-end;gap:1rem;padding:.5rem 1rem;
   font:13px/1.3 var(--font-ui,system-ui,sans-serif);color:#b9c6d2;background:linear-gradient(transparent,rgba(3,6,10,.75));pointer-events:none}
-.cine-bar b{color:#e6eef5;font-weight:600}
 .cine-card{max-width:32rem;padding:1.25rem 1.5rem;border:1px solid #2b3a48;border-radius:6px;background:#0b1118;color:#c9d5e0;
   font:15px/1.45 var(--font-ui,system-ui,sans-serif);text-align:center}
 .cine-card h2{margin:0 0 .4rem;font-size:17px;color:#e6eef5}
@@ -100,14 +99,10 @@ export function install(api) {
     }
   }
 
-  function setBar(title, file, n, total) {
-    const left = doc.createElement('span');
-    const b = doc.createElement('b');
-    b.textContent = title || 'Daggerfall';
-    left.append(b, doc.createTextNode(total > 1 ? ` · ${file} (${n} of ${total})` : ` · ${file}`));
+  function setBar(total) {
     const right = doc.createElement('span');
     right.textContent = total > 1 ? 'Space: next · Esc: skip all' : 'Space or Esc: skip';
-    bar.replaceChildren(left, right);
+    bar.replaceChildren(right);
   }
 
   /** A player's skip (key or click); `force` for the shell's own reasons (resurrected, left the game). */
@@ -239,7 +234,7 @@ export function install(api) {
       ctx2d.fillRect(0, 0, canvas.width, canvas.height);
       for (let i = 0; i < files.length && !c.stopAll; i++) {
         c.stopFile = false;
-        setBar(cue.title, files[i], i + 1, files.length);
+        setBar(files.length);
         let outcome;
         try { outcome = await playFile(c, files[i]); } catch (e) { outcome = 'unreadable'; c.error = e.message; }
         if (outcome === 'missing' || outcome === 'unreadable') await showMissing(c, files[i], outcome);

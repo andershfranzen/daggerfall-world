@@ -69,9 +69,9 @@ export function entityAppearance(e) {
     record = sprite?.record ?? TREASURE_ICONS[hash(seed) % TREASURE_ICONS.length];
     return finish({ archive, layout: 'flat', record, mobile, guard, personLike: false, corpse: null });
   }
-  const typeRef = e.mobileType ?? e.mobile ?? e.enemyType ?? e.monster ?? e.type ?? e.className ?? null;
+  const typeRef = e.mobileType ?? e.monsterId ?? e.mobile ?? e.enemyType ?? e.monster ?? e.type ?? e.className ?? null;
   mobile = mobileFor(typeof typeRef === 'string' && /^\d+$/.test(typeRef) ? Number(typeRef) : typeRef)
-    ?? (e.kind === 'monster' ? mobileFor(e.name) : null);
+    ?? (e.kind === 'monster' || e.kind === 'corpse' ? mobileFor(e.name) : null);
   if (sprite) {
     archive = sprite.archive;
     record = sprite.record ?? 0;
@@ -98,7 +98,9 @@ export function entityAppearance(e) {
   const winged = layout === 'enemy' && e.form === 'winged';
   const corpse = e.corpseSprite && Number.isInteger(e.corpseSprite.archive)
     ? [e.corpseSprite.archive, e.corpseSprite.record ?? 0]
-    : layout === 'enemy' ? (mobile?.corpse ?? corpseForArchive(archive)) : corpseForArchive(archive);
+    : isDead(e) && sprite && layout === 'flat'
+      ? [archive, record]
+      : (mobile?.corpse ?? corpseForArchive(archive));
   return finish({ archive, layout, record, mobile, guard, personLike, corpse, winged });
 }
 

@@ -98,6 +98,61 @@ test('cinematic cues resolve like DFU PlayVideo and the new-game wizard', () => 
   assert.deepEqual(filesForCue(null), []);
 });
 
+test('cinematic overlay bar omits video filenames and titles during playback', async () => {
+  const { install } = await import('../client/gameplay/cinematics.js');
+  const makeEl = (tag) => ({
+    tagName: tag.toUpperCase(),
+    className: '',
+    id: '',
+    hidden: false,
+    dataset: {},
+    style: { setProperty() {} },
+    children: [],
+    textContent: '',
+    setAttribute() {},
+    addEventListener() {},
+    getContext: () => ({ fillStyle: '', fillRect() {}, putImageData() {} }),
+    append(...nodes) { this.children.push(...nodes); },
+    replaceChildren(...nodes) { this.children = [...nodes]; },
+    querySelector() { return null; },
+  });
+  const head = makeEl('head');
+  const body = makeEl('body');
+  const prevDoc = globalThis.document;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevImageData = globalThis.ImageData;
+  globalThis.document = {
+    head,
+    body,
+    querySelector: () => null,
+    createElement: makeEl,
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t) }),
+  };
+  globalThis.requestAnimationFrame = (fn) => { fn(); return 1; };
+  globalThis.ImageData = class { constructor(d, w, h) { this.data = d; this.width = w; this.height = h; } };
+  try {
+    const vid = fixtureVid();
+    const api = {
+      files: [{ name: 'ANIM0000.VID', size: vid.length, arrayBuffer: async () => vid.buffer.slice(vid.byteOffset, vid.byteOffset + vid.byteLength) }],
+      on() {},
+      emit() {},
+    };
+    install(api);
+    assert.equal(api.cinematics.play({ sequence: 'opening', title: 'Opening' }), true);
+    await new Promise((r) => setTimeout(r, 20));
+    const root = body.children.find((el) => el.id === 'cinematic');
+    const bar = root.children.find((el) => el.className === 'cine-bar');
+    const barText = bar.children.map((c) => c.textContent).join(' ');
+    assert.equal(barText, 'Space: next · Esc: skip all');
+    assert.doesNotMatch(barText, /ANIM0000|Opening|\.VID/i);
+    api.cinematics.skip();
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.ImageData = prevImageData;
+  }
+});
+
 test('installed VIDs: every file decodes to its header frame count while streamed', { skip: !HAVE_ARENA2 && 'no local ARENA2' }, () => {
   const names = readdirSync(ARENA2).filter((n) => /\.VID$/i.test(n));
   for (const want of [...new Set(Object.values(SEQUENCES).flat())]) assert.ok(names.includes(want), `${want} installed`);

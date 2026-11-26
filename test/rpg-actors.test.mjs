@@ -466,6 +466,50 @@ test('controller: death shows the corpse archive, hurt flashes, swing events ani
   assert.equal(ctl.targetInfo?.loot, true);
 });
 
+test('controller: server-swapped dead monster corpse sprite stays that species (not human fallback 380:1)', () => {
+  // Server combat.js swaps e.sprite to e._m.corpse on death (e.g. Giant Bat -> TEXTURE.401 rec 0).
+  const liveBat = {
+    id: 'bat-1', kind: 'monster', name: 'Giant Bat', monsterId: 3,
+    x: 0, z: -5, yaw: Math.PI, hp: 14, maxHp: 14, animation: 'idle',
+    sprite: { archive: 258, record: 0 },
+  };
+  const deadBat = {
+    ...liveBat, hp: 0, dead: true, animation: 'dead', lootable: true,
+    sprite: { archive: 401, record: 0 },
+  };
+  assert.deepEqual(entityAppearance(liveBat).corpse, [401, 0], 'live Giant Bat corpse table');
+  assert.deepEqual(entityAppearance(deadBat).corpse, [401, 0], 'dead Giant Bat with server corpse sprite keeps 401:0');
+  assert.deepEqual(
+    entityAppearance({ id: 'orc-1', kind: 'monster', name: 'Orc', monsterId: 7, dead: true, hp: 0, animation: 'dead', sprite: { archive: 96, record: 2 } }).corpse,
+    [96, 2],
+    'dead Orc keeps 96:2',
+  );
+  const animalCorpses = buildTexture([
+    { width: 64, height: 29, frames: solid(64, 29), scale: 0 },
+    { width: 100, height: 41, frames: solid(100, 41), scale: 0 },
+  ]);
+  const humanCorpse = buildTexture([
+    { width: 8, height: 8, frames: solid(8, 8) },
+    { width: 86, height: 36, frames: solid(86, 36), scale: 0 },
+  ]);
+  const { renderer, ctl, tick } = makeController({ entities: [liveBat], peers: [] }, {
+    258: enemyArchive(15),
+    401: animalCorpses,
+    380: humanCorpse,
+  });
+  const cam = { x: 0, y: 1.6, z: 0, yaw: 0, pitch: 0 };
+  ctl.syncState({ entities: [liveBat], peers: [] }, 0);
+  let it = ctl.update(cam, 0.1, tick(), renderer).find((i) => i.id === 'bat-1');
+  assert.equal(it.entry.archive, 258, 'living Giant Bat uses archive 258');
+
+  // Kill the bat and advance past DYING_SECONDS into steady corpse state.
+  ctl.syncState({ entities: [deadBat], peers: [] }, 0.2);
+  for (let i = 0; i < 15; i++) ctl.update(cam, 0.1, tick(), renderer);
+  it = ctl.items.find((i) => i.id === 'bat-1');
+  assert.equal(it.entry.archive, 401, 'dead Giant Bat renders archive 401, not human corpse 380');
+  assert.equal(it.record, 0, 'dead Giant Bat renders record 0');
+});
+
 test('install wires api events and exposes the documented surface', () => {
   const handlers = {};
   const api = { state: null, files: [], on(n, f) { handlers[n] = f; }, emit() {} };
