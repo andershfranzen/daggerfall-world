@@ -79,12 +79,20 @@ export const RESERVED_CODES = new Set([
   'Escape', 'Tab', 'Enter', 'NumpadEnter',
 ]);
 
+const KEY_SYMBOLS = Object.freeze({
+  Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']',
+});
+
 export function keyLabel(code) {
   if (!code) return '—';
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);
   if (code === 'Space') return 'Space';
   if (code.startsWith('Arrow')) return { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' }[code];
+  const mod = /^(Shift|Alt|Control|Meta)(Left|Right)$/.exec(code);
+  if (mod) return mod[1] === 'Control' ? 'Ctrl' : mod[1];
+  const sym = KEY_SYMBOLS[code];
+  if (sym) return sym;
   return code.replace(/^Numpad/, 'Num ');
 }
 

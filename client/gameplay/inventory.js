@@ -1,6 +1,6 @@
 // Inventory screen: equipment (dressed paper doll, slots with armour ratings), the classic tabbed
-// pack list, an inspector that compares an item with what it would replace, a sticky action bar
-// with in-panel feedback, gold and carried weight, and nearby loot piles.
+// pack list, an inspector that compares an item with what it would replace, an action bar with
+// in-panel feedback (both in the right-hand column), gold and carried weight, and nearby loot piles.
 // Server rules: server/rpg/inventory.js. Contract: client/gameplay/inventory/CONTRACT.md.
 
 import { getItemArtSource } from './inventory/icons.js';
@@ -192,9 +192,8 @@ export function install(api) {
 
     root.append(...[
       summary(r),
-      el('div', { class: 'inv-layout' }, equipment(r, sel, cmp), pack(r, sel, cmp)),
+      el('div', { class: 'inv-layout' }, equipment(r, sel, cmp), pack(r), side(r, sel, cmp)),
       ui.book ? bookView() : ui.loot ? lootView() : nearbyLoot(),
-      actionBar(r, sel, cmp),
     ].filter(Boolean));
     const list = root.querySelector('.inv-list');
     if (list) {
@@ -311,10 +310,14 @@ export function install(api) {
     return fig;
   }
 
-  // ---------------------------------------------------------------- pack (right)
+  // ---------------------------------------------------------------- pack (centre) and inspector + actions (right)
 
-  function pack(r, sel, cmp) {
-    return el('section', { class: 'inv-pack', 'aria-label': 'Pack' }, tabs(r), filterRow(r), listView(r), inspector(r, sel, cmp));
+  function pack(r) {
+    return el('section', { class: 'inv-pack', 'aria-label': 'Pack' }, tabs(r), filterRow(r), listView(r));
+  }
+
+  function side(r, sel, cmp) {
+    return el('div', { class: 'inv-side' }, inspector(r, sel, cmp), actionBar(r, sel, cmp));
   }
 
   function tabs(r) {

@@ -25,38 +25,60 @@
   left: 50%;
   translate: -50% 0;
   display: flex;
-  gap: 2px;
+  align-items: stretch;
+  gap: 0;
   z-index: 5;
-  font: 0.86rem/1.2 var(--serif, Georgia, serif);
+  font: 500 0.8125rem/1 var(--font-ui, system-ui, sans-serif);
 }
+/* In the status bar (hud/layout.css) the chip is part of one glass bar with the place name:
+   no box of its own, just a hairline divider before each button. */
 .atmo-chip button {
-  min-height: 1.9rem;
-  padding: 0.2rem 0.65rem;
-  color: #dfe6ef;
-  background: rgb(14 18 26 / 0.78);
-  border: 1px solid rgb(150 170 195 / 0.38);
-  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35em;
+  box-sizing: border-box;
+  min-height: var(--hud-pill-h, 2.125rem);
+  margin: 0;
+  padding: 0 0.6rem;
+  color: var(--text, #e4eaf2);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border-subtle, rgba(145, 168, 198, 0.22));
+  border-radius: 0;
   cursor: pointer;
-  text-shadow: 0 1px 0 rgb(0 0 0 / 0.8);
+  text-shadow: 0 1px 1px rgb(0 0 0 / 0.8);
   font: inherit;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
+  transition: background-color 120ms ease, color 120ms ease;
 }
-.atmo-chip button:hover { border-color: rgb(180 200 225 / 0.7); background: rgb(22 28 40 / 0.86); }
-.atmo-chip button:focus-visible { outline: 2px solid #a9c4e6; outline-offset: 2px; }
-.atmo-chip-audio { min-width: 2.1rem; }
+.atmo-chip button:last-child { border-top-right-radius: var(--radius-sm, 3px); border-bottom-right-radius: var(--radius-sm, 3px); }
+.atmo-chip button:hover { color: #fff; background: rgb(111 182 255 / 0.1); }
+.atmo-chip button:focus-visible { outline: 2px solid var(--accent, #6fb6ff); outline-offset: -2px; }
+.atmo-chip-audio { min-width: 2.1rem; font-size: 0.95em; }
 .atmo-chip.atmo-chip-under-menu { visibility: hidden; }
-.atmo-chip-audio[data-state="muted"], .atmo-chip-audio[data-state="off"] { color: #8f9aab; }
-.atmo-chip[data-resting="true"] .atmo-chip-time { border-color: #8fb0d8; color: #f2f6fb; }
+.atmo-chip-audio[data-state="muted"], .atmo-chip-audio[data-state="off"] { color: var(--text-3, #74849a); }
+.atmo-chip[data-resting="true"] .atmo-chip-time { color: var(--accent-hi, #b6dcff); background: rgb(30 66 108 / 0.5); }
+/* Outside the status bar (fallback position) the chip carries its own glass. */
+.atmo-chip:not(#hud-status > .atmo-chip) {
+  background: rgb(11 15 22 / 0.76);
+  border: 1px solid var(--border-subtle, rgba(145, 168, 198, 0.22));
+  border-radius: var(--radius-sm, 3px);
+  -webkit-backdrop-filter: blur(6px);
+          backdrop-filter: blur(6px);
+}
+.atmo-chip:not(#hud-status > .atmo-chip) button:first-child { border-left: 0; }
 
 @media (max-width: 640px) {
-  .atmo-chip { top: calc(max(0.6rem, env(safe-area-inset-top)) + 5rem); font-size: 0.8rem; }
+  .atmo-chip { top: calc(max(0.6rem, env(safe-area-inset-top)) + 5rem); font-size: 0.75rem; }
+  .atmo-chip button { padding: 0 0.45rem; }
 }
 
 /* ---- panels */
 .atmo-panel { display: grid; gap: 0.7rem; max-width: 36rem; }
 .atmo-panel h3, .atmo-panel h4 { margin: 0; }
-.atmo-date { font-size: 1.15rem; letter-spacing: 0.03em; }
+.atmo-date { font-family: var(--font-heading, Georgia, serif); font-size: 1.15rem; letter-spacing: 0.03em; }
 .atmo-when { margin: 0; color: #c9d3df; }
 .atmo-when strong { font-variant-numeric: tabular-nums; font-size: 1.1rem; color: #eef3f9; }
 .atmo-holiday { margin: 0.25rem 0 0; color: #bcd3ee; font-weight: 600; letter-spacing: 0.02em; }
@@ -65,26 +87,22 @@
 .atmo-vitals { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
 .atmo-vital { display: grid; grid-template-columns: 5.5rem 1fr auto; align-items: center; gap: 0.6rem; }
 .atmo-vital meter { width: 100%; height: 0.7rem; }
-.atmo-vital-num { font-variant-numeric: tabular-nums; color: #c9d3df; font-size: 0.9rem; }
+.atmo-vital-num { font-family: var(--font-mono, monospace); font-variant-numeric: tabular-nums; color: #c9d3df; font-size: 0.9rem; }
 
 .atmo-rest-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-.atmo-rest-form input[type="number"] {
-  width: 4.5rem; padding: 0.35rem 0.45rem; font: inherit;
-  color: #eef3f9; background: #0f141c; border: 1px solid #5c6b80; border-radius: 2px;
-}
-.atmo-rest-form input:focus-visible { outline: 2px solid #a9c4e6; outline-offset: 1px; }
+.atmo-rest-form input[type="number"] { width: 4.5rem; padding: 0.35rem 0.45rem; font: 500 0.9rem/1.2 var(--font-mono, monospace); }
 .atmo-rest-status { min-height: 1.4em; margin: 0; color: #dfe8f3; }
 
 .atmo-toggles { display: flex; flex-wrap: wrap; gap: 1.2rem; }
 .atmo-toggles label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
-.atmo-vols { border: 1px solid rgb(150 170 195 / 0.3); border-radius: 2px; padding: 0.5rem 0.8rem 0.7rem; margin: 0; display: grid; gap: 0.45rem; }
+.atmo-vols { border: 1px solid var(--border-subtle, rgb(150 170 195 / 0.3)); border-radius: var(--radius-md, 4px); padding: 0.5rem 0.8rem 0.7rem; margin: 0; display: grid; gap: 0.45rem; }
 .atmo-vols:disabled { opacity: 0.55; }
 .atmo-vols legend { padding: 0 0.3rem; color: #9fb2c8; font-size: 0.82rem; letter-spacing: 0.12em; text-transform: uppercase; }
 .atmo-vol { display: grid; grid-template-columns: 8.5rem 1fr 3rem; align-items: center; gap: 0.6rem; }
-.atmo-vol input[type="range"] { width: 100%; accent-color: #8fb0d8; }
-.atmo-vol-out { text-align: right; font-variant-numeric: tabular-nums; color: #c9d3df; }
+.atmo-vol input[type="range"] { width: 100%; }
+.atmo-vol-out { text-align: right; font-family: var(--font-mono, monospace); font-size: 0.85rem; font-variant-numeric: tabular-nums; color: #c9d3df; }
 .atmo-arr { display: flex; align-items: center; gap: 0.6rem; }
-.atmo-arr select { font: inherit; color: #eef3f9; background: #0f141c; border: 1px solid #5c6b80; border-radius: 2px; padding: 0.25rem 0.4rem; }
+.atmo-arr select { padding: 0.3rem 1.9em 0.3rem 0.5rem; }
 .atmo-now { margin: 0; color: #dfe8f3; }
 .atmo-sources { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.3rem; color: #c9d3df; font-size: 0.92rem; }
 

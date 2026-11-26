@@ -1,181 +1,182 @@
-/* Account panel (client/auth/account.js). Cool slate and silver, pixel-RPG framing,
- * so the only warm colour on the page comes from the painting behind it.
- * Pixel faces come from the website's /fonts/ (OFL); system fallbacks keep it readable without them. */
-
-@font-face {
-  font-family: "DFW Pixelify";
-  src: url("/fonts/pixelify-sans-latin-400-normal.woff2") format("woff2");
-  font-weight: 400;
-  font-display: swap;
-}
-@font-face {
-  font-family: "DFW Pixelify";
-  src: url("/fonts/pixelify-sans-latin-600-normal.woff2") format("woff2");
-  font-weight: 600;
-  font-display: swap;
-}
-@font-face {
-  font-family: "DFW Silkscreen";
-  src: url("/fonts/silkscreen-latin-400-normal.woff2") format("woff2");
-  font-display: swap;
-}
+/* Account panel (client/auth/account.js). Same dark-glass slate window as #join-form
+ * (hud/interface.css): system UI type, a 1px rule, sapphire for the selected tab and the main action.
+ * The only warm colour on the page comes from the painting behind it.
+ * Tokens come from hud/interface.css; the fallbacks keep the panel readable without it. */
 
 .acct {
-  --acct-slate-0: #0e1217;
-  --acct-slate-1: #161c24;
-  --acct-slate-2: #222b36;
-  --acct-slate-3: #34404e;
-  --acct-silver: #c9d2dc;
-  --acct-silver-hi: #eef2f6;
-  --acct-silver-dim: #8b97a5;
-  --acct-steel: #5d6b7b;
-  --acct-ice: #6fb6ff;
-  --acct-err: #f0a0a6;
-  --acct-ok: #a6d8c0;
-  --acct-pixel: "DFW Five", "DFW Pixel", "DFW Pixelify", "Pixelify Sans", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  --acct-caps: "DFW Silkscreen", "Silkscreen", ui-monospace, Menlo, Consolas, monospace;
+  --acct-text: var(--text, #e4eaf2);
+  --acct-text-2: var(--text-2, #a5b3c6);
+  --acct-text-3: var(--text-3, #74849a);
+  --acct-line: var(--border-subtle, rgba(145, 168, 198, 0.22));
+  --acct-line-strong: var(--border-strong, rgba(145, 168, 198, 0.4));
+  --acct-accent: var(--accent, #6fb6ff);
+  --acct-accent-hi: var(--accent-hi, #b6dcff);
+  --acct-accent-bg: var(--accent-bg, #1e426c);
+  --acct-accent-bg-hi: var(--accent-bg-hi, #28568c);
+  --acct-err: var(--danger, #e87a84);
+  --acct-ok: var(--ok, #6ee0b8);
+  --acct-ease: 120ms ease;
 
+  box-sizing: border-box;
   margin: 0 0 1.1rem;
   padding: 0 1.15rem 1.15rem;
-  color: var(--acct-silver);
-  font: 15px/1.45 var(--acct-pixel);
-  background: linear-gradient(180deg, rgb(34 43 54 / 0.92), rgb(14 18 23 / 0.94));
-  /* Stepped double border: a 1px silver line, a dark gap, then a dim steel line. */
-  box-shadow:
-    inset 0 0 0 1px var(--acct-silver-dim),
-    inset 0 0 0 3px var(--acct-slate-0),
-    inset 0 0 0 4px var(--acct-steel),
-    0 4px 0 0 rgb(0 0 0 / 0.45);
-  image-rendering: pixelated;
+  color: var(--acct-text);
+  font: 400 0.9375rem/1.45 var(--font-ui, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
+  background: linear-gradient(rgba(24, 33, 46, 0.94), rgba(15, 21, 30, 0.96) 9rem);
+  border: 1px solid var(--acct-line);
+  border-radius: var(--radius-md, 5px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 18px 48px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.5);
 }
 
 .acct[aria-busy="true"] { cursor: progress; }
 
-/* Window name band, the same as the website's window bars. */
+/* The tabs already name the mode, so the window carries one quiet "Account" header instead of
+   repeating "Sign in". The heading stays in the document for the form's accessible name. */
 .acct-title {
-  margin: 0 -1.15rem 0.9rem;
-  padding: 0.6rem 1rem;
-  font: 400 0.78rem/1.2 var(--acct-caps);
-  letter-spacing: 0.14em;
-  text-align: center;
+  position: relative;
+  margin: 0 -1.15rem 0.85rem;
+  padding: 0.7rem 1.15rem 0.6rem;
+  font: 600 0.75rem/1.2 var(--font-ui, system-ui, sans-serif);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--acct-silver-hi);
-  text-shadow: 2px 2px 0 #000;
-  background: linear-gradient(#343c49 0 50%, #262c36 50% 100%);
-  border-bottom: 2px solid #030407;
-  box-shadow: inset 0 2px 0 rgb(169 180 198 / 0.35);
+  color: transparent;
+  border-bottom: 1px solid var(--acct-line);
+  overflow: hidden;
+  white-space: nowrap;
 }
-/* Signed in: a compact status row needs no tall band above it. */
-.acct > .acct-row:first-child { padding-top: 1rem; }
+.acct-title::before {
+  content: "Account";
+  position: absolute;
+  inset: 0.7rem 1.15rem auto;
+  color: var(--acct-text-2);
+}
+/* Signed in: a compact status bar needs no header above it. */
+.acct > .acct-row:first-child { padding-top: 0.75rem; }
+.acct:has(> .acct-row:first-child) { padding-bottom: 0.75rem; }
 
 .acct-tabs {
   display: flex;
   gap: 4px;
-  margin-bottom: 0.8rem;
+  margin-bottom: 0.9rem;
+  padding: 3px;
+  background: rgba(6, 9, 14, 0.55);
+  border: 1px solid var(--acct-line);
+  border-radius: var(--radius-md, 5px);
 }
 
 .acct-tab {
   flex: 1;
-  padding: 0.35rem 0.5rem;
-  font: 400 0.7rem/1.2 var(--acct-caps);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--acct-silver-dim);
-  background: var(--acct-slate-1);
-  border: 1px solid var(--acct-slate-3);
-  border-radius: 0;
+  min-height: 2rem;
+  padding: 0.3rem 0.6rem;
+  font: 600 0.8125rem/1.2 var(--font-ui, system-ui, sans-serif);
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: var(--acct-text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 3px);
   cursor: pointer;
+  transition: background-color var(--acct-ease), border-color var(--acct-ease), color var(--acct-ease);
 }
 .acct-tab[aria-pressed="true"] {
-  color: var(--acct-slate-0);
-  background: linear-gradient(var(--acct-silver-hi) 0 50%, var(--acct-silver) 50% 100%);
-  border-color: var(--acct-silver-hi);
+  color: #fff;
+  background: var(--acct-accent-bg);
+  border-color: var(--acct-accent);
+  box-shadow: inset 0 1px 0 rgba(182, 220, 255, 0.18);
   text-shadow: none;
 }
-.acct-tab:hover:not([aria-pressed="true"]) { color: var(--acct-silver-hi); border-color: var(--acct-steel); }
+.acct-tab:hover:not([aria-pressed="true"]) { color: var(--acct-text); background: rgba(34, 46, 63, 0.7); }
 
-.acct-form { display: grid; gap: 0.65rem; }
-.acct-field { display: grid; gap: 0.25rem; }
+.acct-form { display: grid; gap: 0.7rem; }
+.acct-field { display: grid; gap: 0.3rem; }
 
 .acct .acct-field label,
 .acct .acct-check label {
   display: block;
   margin: 0;
-  font: 600 0.95rem/1.3 var(--acct-pixel);
+  font: 600 0.8125rem/1.25 var(--font-ui, system-ui, sans-serif);
   font-variant: normal;
-  letter-spacing: 0;
+  letter-spacing: 0.01em;
   text-transform: none;
-  color: var(--acct-silver-hi);
+  color: var(--acct-text-2);
 }
 
 .acct input[type="text"],
 .acct input[type="password"] {
+  box-sizing: border-box;
   width: 100%;
-  padding: 0.45rem 0.55rem;
-  font: 400 1rem/1.3 var(--acct-pixel);
-  color: var(--acct-silver-hi);
-  background: var(--acct-slate-0);
-  border: 0;
-  border-radius: 0;
-  box-shadow: inset 2px 2px 0 rgb(0 0 0 / 0.6), inset 0 0 0 1px var(--acct-slate-3);
+  padding: 0.5rem 0.65rem;
+  font: 400 0.9375rem/1.35 var(--font-ui, system-ui, sans-serif);
+  color: var(--acct-text);
+  background: rgba(6, 9, 14, 0.85);
+  border: 1px solid var(--acct-line-strong);
+  border-radius: var(--radius-sm, 3px);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+  transition: border-color var(--acct-ease), box-shadow var(--acct-ease);
 }
-.acct input[aria-invalid="true"] { box-shadow: inset 2px 2px 0 rgb(0 0 0 / 0.6), inset 0 0 0 1px var(--acct-err); }
+.acct input[type="text"]:focus,
+.acct input[type="password"]:focus {
+  outline: none;
+  border-color: var(--acct-accent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(111, 182, 255, 0.22);
+}
+.acct input[aria-invalid="true"] { border-color: var(--acct-err); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(232, 122, 132, 0.18); }
 
-.acct-check { display: flex; align-items: center; gap: 0.45rem; font-size: 0.9rem; }
-.acct .acct-check label { font-weight: 400; color: var(--acct-silver); }
-.acct .acct-check input { appearance: auto; width: 1rem; height: 1rem; margin: 0; accent-color: var(--acct-ice); }
+.acct-check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; }
+.acct .acct-check label { font-weight: 400; color: var(--acct-text-2); cursor: pointer; }
 
-.acct-note { margin: 0; font-size: 0.85rem; color: var(--acct-silver-dim); }
+.acct-note { margin: 0; font-size: 0.8125rem; color: var(--acct-text-3); }
 .acct-err { color: var(--acct-err); }
-.acct-warn { color: var(--acct-ice); }
-.acct-code { margin: 0; font-family: ui-monospace, monospace; letter-spacing: 0.04em; overflow-wrap: anywhere; user-select: all; }
+.acct-warn { color: var(--acct-accent-hi); }
+.acct-code { margin: 0; font-family: var(--font-mono, ui-monospace, monospace); letter-spacing: 0.04em; overflow-wrap: anywhere; user-select: all; }
 
-.acct-status { margin: 0; min-height: 1.3em; font-size: 0.9rem; }
+.acct-status { margin: 0; min-height: 1.3em; font-size: 0.875rem; }
 .acct-status:empty { min-height: 0; }
 .acct-status[data-kind="error"] { color: var(--acct-err); }
 .acct-status[data-kind="ok"] { color: var(--acct-ok); }
-.acct-status[data-kind="info"] { color: var(--acct-silver-dim); }
+.acct-status[data-kind="info"] { color: var(--acct-text-2); }
 
 .acct-btn {
-  min-height: 2.5rem;
-  padding: 0.5rem 1rem;
-  font: 400 0.75rem/1.2 var(--acct-caps);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  border: 0;
-  border-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.375rem;
+  padding: 0.4rem 1rem;
+  font: 600 0.875rem/1.2 var(--font-ui, system-ui, sans-serif);
+  letter-spacing: 0.01em;
+  text-transform: none;
+  border: 1px solid var(--acct-line-strong);
+  border-radius: var(--radius-sm, 3px);
   cursor: pointer;
+  transition: background var(--acct-ease), border-color var(--acct-ease), color var(--acct-ease), transform var(--acct-ease);
 }
-/* Sapphire, bevelled like the website's Play button. */
+/* Sapphire: the one main action. */
 .acct-btn-primary {
   color: #fff;
-  text-shadow: 2px 2px 0 #000;
-  background: linear-gradient(#2e6cc0 0 50%, #1c4a8e 50% 100%);
-  border: 2px solid;
-  border-color: #9fd0ff #0b2147 #0b2147 #9fd0ff;
-  box-shadow: 0 0 0 2px #030407, 3px 3px 0 2px rgb(0 0 0 / 0.5);
+  background: linear-gradient(#2f6aac, var(--acct-accent-bg));
+  border-color: rgba(111, 182, 255, 0.65);
+  box-shadow: inset 0 1px 0 rgba(182, 220, 255, 0.22), 0 1px 2px rgba(0, 0, 0, 0.45);
 }
-.acct-btn-primary:hover:not(:disabled) { background: linear-gradient(#3b7fd6 0 50%, #2e6cc0 50% 100%); }
-.acct-btn-primary:active:not(:disabled) { transform: translate(2px, 2px); border-color: #0b2147 #9fd0ff #9fd0ff #0b2147; box-shadow: 0 0 0 2px #030407, 1px 1px 0 2px rgb(0 0 0 / 0.5); }
-/* Steel, bevelled. */
+.acct-btn-primary:hover:not(:disabled) { background: linear-gradient(#3878c0, var(--acct-accent-bg-hi)); border-color: var(--acct-accent); }
+.acct-btn-primary:active:not(:disabled) { transform: translateY(1px); background: var(--acct-accent-bg); }
+/* Quiet slate. */
 .acct-btn-quiet {
-  color: var(--acct-silver-hi);
-  text-shadow: 2px 2px 0 #000;
-  background: linear-gradient(#485262 0 50%, #343c49 50% 100%);
-  border: 2px solid;
-  border-color: #a9b4c6 #161a21 #161a21 #a9b4c6;
-  box-shadow: 0 0 0 2px #030407;
+  color: var(--acct-text);
+  background: linear-gradient(#222e3f, #18212e);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 2px rgba(0, 0, 0, 0.45);
 }
-.acct-btn-quiet:hover:not(:disabled) { color: #b6dcff; background: linear-gradient(#556072 0 50%, #485262 50% 100%); }
+.acct-btn-quiet:hover:not(:disabled) { color: #fff; background: linear-gradient(#2b3a4f, #222e3f); border-color: rgba(170, 192, 222, 0.55); }
+.acct-btn-quiet:active:not(:disabled) { transform: translateY(1px); }
+.acct-row .acct-btn-quiet { min-height: 1.875rem; padding: 0.2rem 0.7rem; font-size: 0.8125rem; }
 .acct button:disabled,
 .acct input:disabled { opacity: 0.6; cursor: progress; }
 
 .acct :focus-visible {
-  outline: 2px solid var(--acct-ice);
-  outline-offset: 3px;
+  outline: 2px solid var(--acct-accent);
+  outline-offset: 2px;
 }
 .acct input[type="text"]:focus-visible,
-.acct input[type="password"]:focus-visible { outline-offset: 2px; }
+.acct input[type="password"]:focus-visible { outline: none; }
 
 .acct-row {
   display: flex;
@@ -184,12 +185,25 @@
   gap: 0.75rem;
   flex-wrap: wrap;
 }
-.acct-who { font-size: 0.95rem; }
-.acct-name { color: var(--acct-silver-hi); font-weight: 600; }
+.acct-who { font-size: 0.9rem; color: var(--acct-text-2); }
+.acct-who::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 0.5em;
+  vertical-align: 0.1em;
+  border-radius: 50%;
+  background: var(--acct-ok);
+  box-shadow: 0 0 6px rgba(110, 224, 184, 0.55);
+}
+.acct-name { color: var(--acct-text); font-weight: 600; }
 
 @media (prefers-reduced-motion: reduce) {
-  .acct-btn-primary:active:not(:disabled) { transform: none; }
+  .acct-btn:active:not(:disabled) { transform: none; }
 }
 @media (forced-colors: active) {
   .acct, .acct-btn, .acct-tab, .acct input { border: 1px solid CanvasText; }
+  .acct-title { color: CanvasText; }
+  .acct-title::before { content: none; }
 }

@@ -42,15 +42,15 @@ export function renderWizard(root, d, ctl) {
   const nav = h('div', { class: 'cc-nav' },
     button('Cancel', () => ctl.cancel(), { class: 'btn cc-cancel' }),
     h('span', { class: 'cc-nav-spacer' }),
-    d.stepIndex > 0 ? button('Back', () => { d.back(); ctl.update(); }) : null,
+    d.stepIndex > 0 ? button('Back', () => { d.back(); ctl.update(); }, { class: 'btn cc-back' }) : null,
     d.step === 'summary'
-      ? button('Begin your adventure', () => ctl.create(), { class: 'btn btn-primary', disabled: !!problem || ctl.busy })
+      ? button('Begin your adventure', () => ctl.create(), { class: 'btn btn-primary cc-next cc-begin', disabled: !!problem || ctl.busy })
       : button('Next', () => {
         if (d.next()) {
           if ((d.step === 'attributes') && !d.roll) ctl.roll();
           ctl.update();
         }
-      }, { class: 'btn btn-primary', disabled: !!problem, title: problem ?? '' }),
+      }, { class: 'btn btn-primary cc-next', disabled: !!problem, title: problem ?? '' }),
   );
 
   root.replaceChildren(
