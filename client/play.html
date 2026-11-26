@@ -120,7 +120,7 @@
 
     <div id="hud-popovers">
       <aside id="hud-roster" hidden aria-label="People in town">
-        <h3>In town</h3>
+        <h3>People here</h3>
         <ul id="roster-list"></ul>
       </aside>
 
@@ -198,12 +198,15 @@
 
     <div id="game-menu" role="dialog" aria-modal="true" aria-labelledby="menu-title" hidden>
       <div class="menu-frame">
-        <div id="menu-tabs" role="tablist" aria-orientation="vertical" aria-label="Menu pages"></div>
+        <header class="menu-topbar">
+          <div id="menu-tabs" role="tablist" aria-orientation="horizontal" aria-label="Menu sections"></div>
+          <button id="menu-close" type="button" class="btn btn-small">Close</button>
+        </header>
+        <div id="menu-subtabs" class="menu-subtabs" role="tablist" aria-label="Section pages" hidden></div>
         <section class="menu-main">
           <header class="menu-head">
             <h2 id="menu-title">Menu</h2>
-            <span id="menu-hint" class="menu-hint">Esc closes · ↑↓ pages · Tab moves</span>
-            <button id="menu-close" type="button" class="btn btn-small">Close</button>
+            <span id="menu-hint" class="menu-hint">Esc closes · ←→ sections · Tab moves</span>
           </header>
           <div id="menu-panel" role="tabpanel" tabindex="-1"></div>
         </section>

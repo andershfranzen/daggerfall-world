@@ -1,15 +1,16 @@
 /* Conversation panel (client/gameplay/npcs.js). Scoped to .npc-root; cool tones only. */
 .npc-root {
-  --npc-panel: #18212b;
-  --npc-deep: #111820;
-  --npc-line: #34465a;
-  --npc-ink: #dde6ef;
-  --npc-dim: #8fa1b4;
-  --npc-accent: #8db6da;
-  --npc-good: #7fc0a8;
+  --npc-panel: var(--surface-1, #111721);
+  --npc-deep: var(--surface-0, #0a0e14);
+  --npc-line: var(--border-subtle, rgba(145, 168, 198, 0.22));
+  --npc-ink: var(--text, #e4eaf2);
+  --npc-dim: var(--text-2, #a5b3c6);
+  --npc-accent: var(--accent, #6fb6ff);
+  --npc-good: var(--ok, #6ee0b8);
   --npc-warn: #b9a6d8;
-  --npc-bad: #d27a6a;
+  --npc-bad: var(--danger, #e87a84);
   color: var(--npc-ink);
+  font: 14px/1.45 var(--font-ui, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
   display: grid;
   gap: 10px;
   min-width: 0;
@@ -18,47 +19,48 @@
 .npc-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; }
 .npc-portrait {
   width: 76px; height: 76px; display: grid; place-items: end center; overflow: hidden;
-  background: linear-gradient(180deg, #1d2a37, var(--npc-deep)); border: 1px solid var(--npc-line); border-radius: var(--radius, 3px);
+  background: linear-gradient(180deg, var(--surface-2, #18212e), var(--npc-deep)); border: 1px solid var(--npc-line); border-radius: var(--radius-sm, 3px);
 }
 .npc-head:has(.npc-portrait:not([hidden])) { grid-template-columns: 76px minmax(0, 1fr) auto; }
 .npc-portrait canvas { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
-.npc-name { margin: 0; font-family: var(--serif, serif); font-size: 1.15rem; letter-spacing: 0.03em; }
+.npc-name { margin: 0; font-family: inherit; font-weight: 600; font-size: 1.15rem; letter-spacing: 0.03em; }
 .npc-title, .npc-standing, .npc-guild, .npc-rel { margin: 2px 0 0; color: var(--npc-dim); font-size: 0.85rem; }
 .npc-rel { font-size: 0.78rem; }
-.npc-att { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; padding: 1px 5px; border: 1px solid currentColor; border-radius: 2px; }
+.npc-att { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; padding: 1px 5px; border: 1px solid currentColor; border-radius: var(--radius-sm, 3px); }
 .npc-att-friendly { color: var(--npc-good); }
 .npc-att-neutral { color: var(--npc-accent); }
 .npc-att-cold { color: var(--npc-warn); }
 .npc-att-hostile { color: var(--npc-bad); }
-.npc-gold { margin: 0; color: var(--npc-accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.npc-gold { margin: 0; color: var(--npc-accent); font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace); font-size: 0.88rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .npc-say {
   margin: 0; padding: 10px 12px; background: var(--npc-panel); border-left: 3px solid var(--npc-accent);
-  font-family: var(--serif, serif); font-style: italic; line-height: 1.45; white-space: pre-wrap;
+  font-style: italic; line-height: 1.5; border-radius: 0 var(--radius-sm, 3px) var(--radius-sm, 3px) 0; white-space: pre-wrap;
 }
 .npc-topics { display: flex; flex-wrap: wrap; gap: 6px; }
 .npc-topic { font-size: 0.85rem; }
 .npc-journal { border-color: var(--npc-accent); }
-.npc-box { background: var(--npc-panel); border: 1px solid var(--npc-line); border-radius: var(--radius, 3px); padding: 8px 10px; }
+.npc-box { background: var(--npc-panel); border: 1px solid var(--npc-line); border-radius: var(--radius-sm, 3px); padding: 8px 10px; }
 .npc-h4 { margin: 4px 0 6px; color: var(--npc-dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .npc-services { display: flex; flex-wrap: wrap; gap: 6px; }
 .npc-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
 .npc-row {
   display: grid; grid-template-columns: 1fr 4.5em 4.5em 4em auto; gap: 8px; align-items: center;
-  padding: 4px 2px; border-bottom: 1px solid rgba(52, 70, 90, 0.6); font-size: 0.88rem;
+  padding: 4px 2px; border-bottom: 1px solid rgba(145, 168, 198, 0.1); font-size: 0.88rem;
 }
 .npc-row:last-child { border-bottom: 0; }
 .npc-poor .npc-price { color: var(--npc-bad); }
 .npc-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.npc-num, .npc-price { text-align: right; font-variant-numeric: tabular-nums; color: var(--npc-dim); }
-.npc-qty { width: 4em; font: inherit; font-size: 0.85rem; padding: 2px 4px; background: var(--npc-deep); color: inherit; border: 1px solid var(--npc-line); }
+.npc-num, .npc-price { text-align: right; font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace); font-size: 0.82rem; font-variant-numeric: tabular-nums; color: var(--npc-dim); }
+.npc-qty { width: 4em; font: inherit; font-size: 0.85rem; padding: 2px 4px; background: var(--npc-deep); color: inherit; border: 1px solid var(--npc-line); border-radius: var(--radius-sm, 3px); font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace); }
+.npc-qty:focus-visible, .npc-tab:focus-visible { outline: 2px solid var(--npc-accent); outline-offset: 1px; }
 .npc-shop-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
 .npc-tabs { display: flex; gap: 2px; }
 .npc-tab {
   font: inherit; font-size: 0.82rem; padding: 3px 10px; color: var(--npc-dim); background: var(--npc-deep);
-  border: 1px solid var(--npc-line); border-bottom-width: 2px; cursor: pointer;
+  border: 1px solid var(--npc-line); border-bottom-width: 2px; border-radius: var(--radius-sm, 3px) var(--radius-sm, 3px) 0 0; cursor: pointer;
 }
-.npc-tab[aria-selected='true'] { color: var(--npc-ink); border-bottom-color: var(--npc-accent); background: #22344a; }
-.npc-purse { color: var(--npc-dim); font-size: 0.8rem; }
+.npc-tab[aria-selected='true'] { color: var(--npc-ink); border-bottom-color: var(--npc-accent); background: var(--accent-bg, #1e426c); }
+.npc-purse { color: var(--npc-dim); font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace); font-size: 0.78rem; }
 .npc-empty { color: var(--npc-dim); margin: 6px 0; }
 .npc-actions { display: flex; justify-content: flex-end; }
 @container menu-page (max-width: 420px) {

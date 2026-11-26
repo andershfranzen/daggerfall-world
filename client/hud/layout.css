@@ -60,24 +60,26 @@
   align-items: start;
   gap: var(--hud-gap);
 }
+/* Place, connection, clock and sound share one glass bar the height of the compass and buttons. */
 #hud-status {
   grid-area: status;
   justify-self: start;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.3rem;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 4px;
+  height: var(--hud-pill-h, 2.125rem);
   min-width: 0;
   max-width: 100%;
 }
-#hud-place { max-width: 100%; }
-#hud-compass { grid-area: compass; justify-self: center; width: clamp(9.5rem, 26vw, 16rem); height: 2.1rem; }
-#hud-compass.has-classic-compass { width: 138px; height: 34px; }
+#hud-place { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+#hud-compass { grid-area: compass; justify-self: center; width: clamp(9.5rem, 26vw, 16rem); height: var(--hud-pill-h, 2.125rem); }
+body[data-classic-compass="true"] #hud-compass.has-classic-compass { width: 138px; height: 34px; }
 #hud-actions { grid-area: actions; justify-self: end; flex-wrap: nowrap; }
 #hud-actions .btn { white-space: nowrap; }
 
-/* The clock and sound chip (gameplay/atmosphere.js) lives in the status column. */
-#hud-status > .atmo-chip { position: static; translate: none; top: auto; left: auto; z-index: auto; pointer-events: auto; }
+/* The clock and sound chip (gameplay/atmosphere.js) lives in the status bar, after the place. */
+#hud-status > .atmo-chip { position: static; translate: none; top: auto; left: auto; z-index: auto; pointer-events: auto; flex: none; }
 #hud-status > .atmo-chip button { white-space: nowrap; }
 
 /* ---------------------------------------------------------------- notices */
@@ -112,9 +114,10 @@ body[data-menu] #hud-toasts {
   padding: 4px 6px 8px 4px; /* room for the frame's outer edge and drop shadow */
   margin: -4px -6px -8px -4px;
 }
-#hud-roster, #hud-help { flex: 0 1 auto; min-height: 4rem; max-height: 100%; width: min(17rem, 100%); }
-#hud-help { width: min(20rem, 100%); flex-shrink: 4; } /* the long reference gives way before the roster */
-#hud-roster { max-height: 60%; }
+#hud-roster, #hud-help { flex: 0 1 auto; min-height: 0; max-height: 100%; width: min(17rem, 100%); }
+#hud-help { width: min(24rem, 100%); flex-shrink: 4; } /* the long reference gives way before the roster */
+/* The roster keeps its natural height (a short list never scrolls); the reference shrinks instead. */
+#hud-roster { flex-shrink: 0; max-height: 60%; }
 
 /* ---------------------------------------------------------------- centre */
 
@@ -190,7 +193,7 @@ body[data-talk] #chat-log, #hud-chat:has(> #hud-talk:not([hidden])) #chat-log { 
 #hud-vitals { position: static; width: var(--vitals-w); max-width: 100%; box-sizing: border-box; }
 #hud-bar {
   position: static;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
   max-width: 100%;
   box-sizing: border-box;
@@ -217,33 +220,29 @@ body[data-talk] #chat-log, #hud-chat:has(> #hud-talk:not([hidden])) #chat-log { 
     max(0.8rem, env(safe-area-inset-bottom)) max(0.8rem, env(safe-area-inset-left));
   box-sizing: border-box;
 }
+/* One column: top bar (tabs + close) · optional sub-tabs · the page (head + body). */
 #game-menu .menu-frame {
   display: grid;
-  grid-template-columns: minmax(10rem, 12.5rem) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-  width: min(64rem, 100%);
-  height: min(46rem, 100%);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: min(72rem, 100%);
+  height: min(50rem, 100%);
   min-height: 0;
 }
+#game-menu .menu-frame > .menu-topbar { grid-row: 1; }
+#game-menu .menu-frame > #menu-subtabs { grid-row: 2; }
+#game-menu .menu-frame > .menu-main { grid-row: 3; min-height: 0; }
+/* Markup without a top bar wrapper: the tabs still take the top row. */
+#game-menu .menu-frame > #menu-tabs { grid-row: 1; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border-subtle, rgba(145, 168, 198, 0.22)); }
 /* A page is the whole interface while open: the HUD chrome around the frame (top bar, docks,
    popovers) steps out instead of peeking past the edges. Toasts and the banner stay. The chat
    dock keeps its state (a conversation resumes when the page closes). */
 body[data-menu] :is(#hud-top, #hud-popovers, #hud-bottom) { visibility: hidden; }
 
-/* Pages are grouped on the rail: You · World · People · System (shell.js sets data-group-start). */
-#menu-tabs { scroll-padding: 0.6rem; }
-.menu-tab[data-group-start]:not(:first-child) { margin-top: 1.25rem; position: relative; }
-.menu-tab[data-group-start]:not(:first-child)::after {
-  content: attr(data-group-label);
-  position: absolute;
-  left: 0.15rem;
-  bottom: calc(100% + 0.2rem);
-  font: 400 0.56rem/1 var(--caps, monospace);
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--text-3, #7d889c);
-  pointer-events: none;
-}
+/* Pages are grouped along the top bar: You · World · People · System (shell.js sets
+   data-group-start); interface.css draws a hairline between groups. The bar wraps on wide
+   screens and scrolls sideways on narrow ones. */
+#menu-tabs { scroll-padding: 0.6rem; overflow-x: visible; overflow-y: visible; }
 
 /* ================================================================ responsive */
 
@@ -260,22 +259,22 @@ body[data-menu] :is(#hud-top, #hud-popovers, #hud-bottom) { visibility: hidden; 
   #hud-bottom { flex-wrap: nowrap; }
   #hud-chat { flex-shrink: 1; min-width: 12rem; max-height: calc(100dvh - 4rem); }
   #hud-dock { flex: 0 1 auto; min-width: 9rem; }
-  #hud-status { flex-direction: row; align-items: center; flex-wrap: wrap; }
-  #hud-place { padding: 0.2rem 0.55rem 0.25rem; }
+  #hud { --hud-pill-h: 1.85rem; }
   #hud-place .conn { display: none; }
-  #hud-compass { height: 1.8rem; width: clamp(8rem, 22vw, 12rem); }
-  #hud-actions .btn { min-height: 1.75rem; padding: 0 0.5rem; font-size: 0.66rem; letter-spacing: 0.06em; text-indent: 0; }
+  #hud-compass { width: clamp(8rem, 22vw, 12rem); }
+  #hud-actions .btn { padding: 0 0.5rem; font-size: 0.72rem; }
 
   #hud-vitals { width: auto; }
-  #hud-bar .bar-btn { min-width: 3.9em; padding: 0.28rem 0.35rem 0.24rem; gap: 0.12rem; }
-  #hud-bar .bar-btn::before { height: 14px; width: 28px; }
+  /* The dock wraps in its own column rather than pushing the chat off screen. */
+  #hud-bar { flex-wrap: wrap; }
+  #hud-bar .bar-btn { height: 1.75rem; padding: 0 0.4rem; gap: 0.3rem; }
 
   #game-menu { padding: 0; }
-  #game-menu .menu-frame { width: 100%; height: 100%; grid-template-columns: minmax(8.5rem, 10.5rem) minmax(0, 1fr); }
-  #menu-tabs { padding: 0.4rem 0 0.4rem 0.4rem; }
-  .menu-tab { padding: 0.32rem 0.5rem; font-size: 0.72rem; }
-  .menu-tab[data-group-start]:not(:first-child) { margin-top: 0.5rem; }
-  .menu-tab[data-group-start]:not(:first-child)::after { content: none; }
+  #game-menu .menu-frame { width: 100%; height: 100%; border-radius: 0; }
+  #game-menu .menu-topbar { padding: 0.25rem 0.4rem; }
+  #menu-tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; }
+  .menu-tab { padding: 0.28rem 0.5rem; font-size: 0.75rem; scroll-snap-align: start; }
+  .menu-tab kbd { display: none; }
   .menu-head { padding: 0.35rem 0.7rem 0.3rem; }
   .menu-hint { display: none; }
   #menu-panel { padding: 0.6rem 0.8rem 0.8rem; }
@@ -314,15 +313,19 @@ body[data-menu] :is(#hud-top, #hud-popovers, #hud-bottom) { visibility: hidden; 
     grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas: "top" "notes" "pop" "bottom";
   }
+  #hud { --hud-pill-h: 1.95rem; }
+  /* Row one: where and when, full width. Row two: the compass gives way to the actions. */
   #hud-top {
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "status actions" "status compass";
+    grid-template-areas: "status status" "compass actions";
     row-gap: 0.35rem;
   }
-  #hud-compass { display: block; justify-self: end; width: min(100%, 12rem); height: 1.9rem; }
-  #hud-actions { flex-wrap: wrap; gap: 0.25rem; }
-  #hud-actions .btn { min-height: 1.85rem; padding: 0 0.5rem; font-size: 0.66rem; letter-spacing: 0.05em; text-indent: 0; }
-  .town-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 0.95rem; }
+  #hud-status { justify-self: stretch; }
+  #hud-place { flex: 1 1 auto; }
+  #hud-compass { display: block; justify-self: stretch; width: auto; min-width: 6rem; }
+  #hud-actions { flex-wrap: wrap; gap: 3px; }
+  #hud-actions .btn { padding: 0 0.5rem; font-size: 0.75rem; }
+  .town-name { font-size: 0.88rem; }
   #hud-popovers { align-items: stretch; align-self: start; max-height: 100%; }
   #hud-roster, #hud-help { width: 100%; }
 
@@ -332,25 +335,23 @@ body[data-menu] :is(#hud-top, #hud-popovers, #hud-bottom) { visibility: hidden; 
   #hud-dock > .mg-chip { align-self: flex-start; }
   #hud-vitals { width: 100%; }
   /* Every page button stays reachable: the bar wraps into even rows instead of scrolling. */
-  #hud-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(3.9rem, 1fr)); }
+  #hud-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(4.4rem, 1fr)); }
   #hud-bar .bar-sep { display: none; }
-  #hud-bar .bar-btn { min-width: 0; padding: 0.3rem 0.2rem 0.26rem; }
-  #hud-bar .bar-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 0.92em; letter-spacing: 0.02em; }
+  #hud-bar .bar-btn { min-width: 0; height: 2rem; padding: 0 0.2rem; }
+  #hud-bar .bar-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 0.92em; }
+  #hud-bar kbd { display: none; } /* the labels need the room; Controls lists every key */
 
   #game-menu { padding: 0; }
-  #game-menu .menu-frame { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); width: 100%; height: 100%; }
+  #game-menu .menu-frame { width: 100%; height: 100%; border-radius: 0; }
+  #game-menu .menu-topbar { padding: 0.3rem 0.35rem; gap: 0.35rem; }
   #menu-tabs {
-    flex-direction: row;
+    flex-wrap: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: 0.4rem;
-    box-shadow: inset 0 -1px 0 var(--sh-steel-lo);
     scroll-snap-type: x proximity;
     scrollbar-width: thin;
   }
   .menu-tab { flex: none; scroll-snap-align: start; }
-  .menu-tab[data-group-start]:not(:first-child) { margin-top: 0; margin-left: 0.6rem; }
-  .menu-tab[data-group-start]:not(:first-child)::after { content: none; }
   .menu-tab kbd, .menu-hint { display: none; }
 }
 
@@ -371,5 +372,5 @@ body[data-menu] :is(#hud-top, #hud-popovers, #hud-bottom) { visibility: hidden; 
 
 /* Very narrow: the plaque gives way to the actions. */
 @media (max-width: 400px) {
-  #hud-place { padding: 0.25rem 0.5rem 0.3rem; }
+  #hud-place { padding: 0 0.45rem; }
 }

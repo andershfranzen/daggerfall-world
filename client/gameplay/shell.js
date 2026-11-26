@@ -38,6 +38,54 @@ export function groupPanels(list) {
   return keyed.map((k, j) => ({ ...k.p, group: k.label, groupStart: j === 0 || keyed[j - 1].g !== k.g }));
 }
 
+// The live menu: seven top-level categories along the top bar, each with sub-tabs for its pages.
+// PANEL_GROUPS above stays for callers (and tests) that still want the rail order.
+export const MENU_CATEGORIES = Object.freeze([
+  { id: 'character', title: 'Character', key: 'KeyC', panels: ['character', 'health', 'law', 'property'] },
+  { id: 'inventory', title: 'Inventory', key: 'KeyI', panels: ['inventory'] },
+  { id: 'magic', title: 'Magic', key: 'KeyB', panels: ['spellbook'] },
+  { id: 'journal', title: 'Journal', key: 'KeyJ', panels: ['journal', 'notebook', 'admiralty'] },
+  { id: 'maps', title: 'Maps', key: 'KeyM', panels: ['map', 'automap', 'wilderness', 'places', 'sailing', 'seaChart'] },
+  { id: 'social', title: 'Social', key: 'KeyO', panels: ['party', 'townServices'] },
+  { id: 'system', title: 'System', key: 'F10', panels: ['settings', 'audio', 'rest'] },
+].map((c) => Object.freeze({ ...c, panels: Object.freeze(c.panels) })));
+/** Pages opened by the world (a shop counter, a conversation), never listed in the menu tabs. */
+export const CONTEXTUAL_PANELS = Object.freeze(['shop', 'interaction', 'dialogue', 'alchemy', 'spellmaker', 'shipyard', 'passage', 'spellchoice']);
+const CATEGORY_OF = new Map(MENU_CATEGORIES.flatMap((c) => c.panels.map((id) => [id, c.id])));
+const CONTEXTUAL = new Set(CONTEXTUAL_PANELS);
+
+/**
+ * Registered pages laid out by category. Unknown pages join Character when the legacy rail put
+ * them with "You", otherwise Maps, so every registered page stays reachable from the tabs.
+ * Returns { categories: [{ ...category, pages }], contextual: [page] } with empty categories dropped.
+ */
+export function menuLayout(list) {
+  const legacy = new Map(groupPanels(list).map((p) => [p.id, p.group]));
+  const pages = new Map(MENU_CATEGORIES.map((c) => [c.id, []]));
+  const contextual = [];
+  for (const p of list) {
+    if (CONTEXTUAL.has(p.id)) { contextual.push(p); continue; }
+    const cat = CATEGORY_OF.get(p.id) ?? (legacy.get(p.id) === 'You' ? 'character' : 'maps');
+    pages.get(cat).push(p);
+  }
+  for (const c of MENU_CATEGORIES) {
+    const order = c.panels;
+    pages.get(c.id).sort((a, b) => {
+      const ia = order.indexOf(a.id), ib = order.indexOf(b.id);
+      return (ia < 0 ? order.length : ia) - (ib < 0 ? order.length : ib);
+    });
+  }
+  return {
+    categories: MENU_CATEGORIES.map((c) => ({ ...c, pages: pages.get(c.id) })).filter((c) => c.pages.length),
+    contextual,
+  };
+}
+
+/** The category a page sits in for a layout, or null for a contextual page. */
+export function categoryFor(layout, id) {
+  return layout.categories.find((c) => c.pages.some((p) => p.id === id)) ?? null;
+}
+
 /** The contextual name of the Use action for a target (bar button label). */
 export function useLabel(e) {
   const it = interactionFor(e);
@@ -59,6 +107,7 @@ export function loadSettings(storage = globalThis.localStorage) {
     uiScale: num(raw.uiScale, 0.8, 1.4, 1),
     clickAttack: raw.clickAttack !== false,
     showTarget: raw.showTarget !== false,
+    classicCompass: raw.classicCompass === true,
     bindings: normalizeBindings(raw.bindings),
   };
 }
@@ -148,7 +197,7 @@ function restoreEdited(list, root) {
 export function createShell({ api, input, actions, settings }) {
   const $ = (id) => document.getElementById(id);
   const ui = {
-    menu: $('game-menu'), tabs: $('menu-tabs'), title: $('menu-title'), panel: $('menu-panel'),
+    menu: $('game-menu'), tabs: $('menu-tabs'), subtabs: $('menu-subtabs'), title: $('menu-title'), panel: $('menu-panel'),
     close: $('menu-close'), hint: $('menu-hint'),
     vitals: $('hud-vitals'), breath: $('hud-breath'), target: $('hud-target'), toasts: $('hud-toasts'), bar: $('hud-bar'),
     readyBtn: $('hud-ready-btn'), menuBtn: $('hud-menu-btn'), helpDl: $('hud-help-list'),
@@ -158,6 +207,7 @@ export function createShell({ api, input, actions, settings }) {
   let openKey = null; // watchKey of the open panel at its last render
   let returnFocus = null;
   let rebinding = null; // action awaiting a key
+  const lastInCategory = new Map(); // category id → page id last opened there
   const dialogue = []; // recent interaction lines {who, text, at}
 
   // ---------------------------------------------------- panels: built-in fallbacks
@@ -176,25 +226,60 @@ export function createShell({ api, input, actions, settings }) {
 
   // ---------------------------------------------------- open / close / render
 
+  const bindingFor = (id, fallback) => (id in settings.bindings ? settings.bindings[id] : fallback);
+
   function renderTabs() {
-    const list = groupPanels(api.panels());
-    ui.tabs.replaceChildren(...list.map((p) => {
-      const code = p.id in settings.bindings ? settings.bindings[p.id] : p.key;
-      const b = h('button', {
-        type: 'button', role: 'tab', id: `menu-tab-${p.id}`, class: 'menu-tab',
-        'aria-selected': String(p.id === open), 'aria-controls': 'menu-panel',
-        tabindex: p.id === open ? '0' : '-1', dataset: { panel: p.id, group: p.group },
-        'data-group-start': p.groupStart ? '' : null, 'data-group-label': p.groupStart ? p.group : null,
-        onclick: () => openPanel(p.id),
-      }, h('span', { class: 'menu-tab-name', text: p.title }), code ? h('kbd', { text: keyLabel(code) }) : null);
-      return b;
+    const layout = menuLayout(api.panels());
+    const current = open ? categoryFor(layout, open) : null;
+    ui.tabs.replaceChildren(...layout.categories.map((c) => {
+      const selected = c === current;
+      const code = bindingFor(c.pages[0].id, c.pages[0].key ?? c.key);
+      return h('button', {
+        type: 'button', role: 'tab', id: `menu-cat-${c.id}`, class: 'menu-tab',
+        'aria-selected': String(selected), 'aria-controls': 'menu-panel',
+        tabindex: selected || (!current && c === layout.categories[0]) ? '0' : '-1',
+        dataset: { category: c.id, panel: c.pages[0].id },
+        onclick: () => openCategory(c.id),
+      }, h('span', { class: 'menu-tab-name', text: c.title }), code ? h('kbd', { text: keyLabel(code) }) : null);
     }));
-    // Keep the selected page in view on a rail or tab strip that scrolls.
-    const sel = open && $(`menu-tab-${open}`);
-    if (sel && ui.tabs.scrollHeight + ui.tabs.scrollWidth > ui.tabs.clientHeight + ui.tabs.clientWidth) {
-      sel.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+
+    // Sub-tabs: the pages of the open category, or a lone marker for a page the world opened.
+    const contextual = open && !current ? api.getPanel(open) : null;
+    const subs = current ? (current.pages.length > 1 ? current.pages : []) : contextual ? [contextual] : [];
+    ui.subtabs.replaceChildren(...subs.map((p) => h('button', {
+      type: 'button', role: 'tab', id: `menu-tab-${p.id}`, class: 'menu-subtab',
+      'aria-selected': String(p.id === open), 'aria-controls': 'menu-panel',
+      tabindex: p.id === open ? '0' : '-1', dataset: { panel: p.id, contextual: contextual ? 'true' : null },
+      onclick: () => openPanel(p.id),
+    }, h('span', { class: 'menu-tab-name', text: p.title }))));
+    ui.subtabs.hidden = !subs.length;
+    ui.subtabs.dataset.contextual = contextual ? 'true' : 'false';
+    ui.menu.dataset.category = current?.id ?? (contextual ? 'contextual' : '');
+
+    for (const strip of [ui.tabs, ui.subtabs]) {
+      const sel = strip.querySelector('[aria-selected="true"]');
+      if (sel && strip.scrollWidth > strip.clientWidth) sel.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     }
     updateBar();
+  }
+
+  /** Open a category on the page last visited there, else its first page. */
+  function openCategory(catId) {
+    const c = menuLayout(api.panels()).categories.find((x) => x.id === catId);
+    if (!c) return;
+    const last = lastInCategory.get(catId);
+    openPanel(c.pages.some((p) => p.id === last) ? last : c.pages[0].id);
+  }
+
+  /** The tab that names the open page: its sub-tab when shown, else its category tab. */
+  function selectedTab() {
+    return (!ui.subtabs.hidden && ui.subtabs.querySelector('[aria-selected="true"]'))
+      || ui.tabs.querySelector('[aria-selected="true"]') || null;
+  }
+
+  /** Pages in menu order, for gamepad LB/RB cycling (contextual pages are not in the cycle). */
+  function menuPages() {
+    return menuLayout(api.panels()).categories.flatMap((c) => c.pages);
   }
 
   function renderPanel({ keepFocus = true } = {}) {
@@ -206,7 +291,8 @@ export function createShell({ api, input, actions, settings }) {
     const edited = keepFocus ? editedFields(ui.panel) : [];
     openKey = watchKey(p, api.state);
     ui.title.textContent = p.title;
-    ui.panel.setAttribute('aria-labelledby', `menu-tab-${p.id}`);
+    const tab = selectedTab();
+    if (tab) ui.panel.setAttribute('aria-labelledby', tab.id); else ui.panel.removeAttribute('aria-labelledby');
     ui.panel.dataset.panel = p.id;
     const body = h('div', { class: `panel-body panel-${p.id}` });
     try {
@@ -216,6 +302,9 @@ export function createShell({ api, input, actions, settings }) {
       body.replaceChildren(h('p', { class: 'menu-error', role: 'alert', text: `This page could not be drawn: ${err.message}` }));
     }
     ui.panel.replaceChildren(body);
+    // Character creation is a focused dialog: shell.css hides the section tabs around it.
+    if (body.querySelector('.cc-wizard') || body.classList.contains('cc-wizard')) ui.menu.dataset.wizard = 'true';
+    else delete ui.menu.dataset.wizard;
     restoreEdited(edited, ui.panel);
     ui.panel.scrollTop = scroll;
     if (fkey) restoreFocus(fkey, ui.panel);
@@ -225,6 +314,8 @@ export function createShell({ api, input, actions, settings }) {
     const first = !open;
     if (first) returnFocus = document.activeElement;
     open = id;
+    const cat = CATEGORY_OF.get(id) ?? (CONTEXTUAL.has(id) ? null : categoryFor(menuLayout(api.panels()), id)?.id);
+    if (cat) lastInCategory.set(cat, id);
     api._setModal(true, id);
     input.setSuspended(true);
     ui.menu.hidden = false;
@@ -236,7 +327,7 @@ export function createShell({ api, input, actions, settings }) {
     // Focus: a control the page marks [autofocus], else its first control that is not a text
     // field (a focused search box would swallow the page hotkeys), else the selected tab.
     const list = focusables(ui.panel);
-    const target = list.find((el) => el.hasAttribute('autofocus')) ?? list.find((el) => !isTextField(el)) ?? $(`menu-tab-${id}`);
+    const target = list.find((el) => el.hasAttribute('autofocus')) ?? list.find((el) => !isTextField(el)) ?? selectedTab();
     (first || !ui.menu.contains(document.activeElement) ? target : document.activeElement)?.focus({ preventScroll: true });
   }
 
@@ -250,6 +341,7 @@ export function createShell({ api, input, actions, settings }) {
     ui.menu.hidden = true;
     delete document.body.dataset.menu;
     ui.panel.replaceChildren();
+    delete ui.menu.dataset.wizard;
     updateBar();
     api.emit('panel', { id: was, open: false });
     const back = returnFocus && document.contains(returnFocus) && returnFocus !== document.body ? returnFocus : $('view');
@@ -267,7 +359,7 @@ export function createShell({ api, input, actions, settings }) {
   ui.close.addEventListener('click', closePanel);
   ui.menu.addEventListener('pointerdown', (e) => { if (e.target === ui.menu) closePanel(); });
 
-  // Keyboard inside the menu: Tab trap, arrow keys on the rail, Esc closes.
+  // Keyboard inside the menu: Tab trap, ←→ Home End on the section and page tabs, Esc closes.
   ui.menu.addEventListener('keydown', (e) => {
     if (rebinding) return; // handled by the capture listener
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePanel(); return; }
@@ -279,16 +371,24 @@ export function createShell({ api, input, actions, settings }) {
       else if (!e.shiftKey && i === list.length - 1) { e.preventDefault(); list[0].focus(); }
       return;
     }
-    if (e.target.getAttribute?.('role') === 'tab' && ['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+    const strip = e.target.getAttribute?.('role') === 'tab' ? e.target.closest('[role="tablist"]') : null;
+    if (strip && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
       e.preventDefault();
-      const tabs = [...ui.tabs.querySelectorAll('[role="tab"]')];
+      const tabs = [...strip.querySelectorAll('[role="tab"]')];
+      if (!tabs.length) return;
       let i = tabs.indexOf(e.target);
-      if (e.key === 'ArrowUp') i = (i - 1 + tabs.length) % tabs.length;
-      else if (e.key === 'ArrowDown') i = (i + 1) % tabs.length;
+      if (e.key === 'ArrowLeft') i = (i - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'ArrowRight') i = (i + 1) % tabs.length;
       else if (e.key === 'Home') i = 0;
       else i = tabs.length - 1;
-      openPanel(tabs[i].dataset.panel);
-      $(`menu-tab-${tabs[i].dataset.panel}`)?.focus();
+      const t = tabs[i];
+      if (strip === ui.tabs) {
+        openCategory(t.dataset.category);
+        $(`menu-cat-${t.dataset.category}`)?.focus();
+      } else {
+        openPanel(t.dataset.panel);
+        $(`menu-tab-${t.dataset.panel}`)?.focus();
+      }
     }
   });
 
@@ -399,26 +499,25 @@ export function createShell({ api, input, actions, settings }) {
   function updateHelp() {
     if (!ui.helpDl) return;
     const b = settings.bindings;
+    const keys = (...codes) => codes.map(keyLabel).join(' ');
     const rows = [
-      ['W A S D', 'Walk and sidestep'], ['← → / Q E', 'Turn'], ['↑ ↓', 'Look up and down'],
-      ['Click view', 'Capture mouse, then move it to look (Esc releases)'], ['Touch drag', 'Look around'],
-      [keyLabel(b.ready), 'Ready or sheathe weapon'],
-      [`${keyLabel(b.attack)} / Click`, 'Attack once the mouse is captured (readies first if sheathed)'],
-      ['Right-drag', 'Directional strike'],
-      [keyLabel(b.interact), 'Talk, use or loot target (in the current activation mode)'],
-      [[b.modeSteal, b.modeGrab, b.modeInfo, b.modeTalk].map(keyLabel).join(' '), 'Activation mode: Steal, Grab, Info, Talk'],
-      [`${keyLabel(b.run)} / ${keyLabel(b.slow)}`, 'Hold to run / walk slowly'],
-      [keyLabel(b.jump), 'Jump; hold to swim up or rise while levitating'],
-      [keyLabel(b.crouch), 'Crouch and sneak; hold to dive or sink'],
-      ['Walk into a wall', 'Climb (skill sets how soon)'],
-      [[b.character, b.inventory, b.spellbook, b.journal].map(keyLabel).join(' '), 'Character, inventory, spells, journal'],
-      [[b.map, b.party].map(keyLabel).join(' '), 'Map, party'],
-      ...api.panels().filter(p => !p.builtin && p.key && !(p.id in b) && !Object.values(b).includes(p.key)).map(p => [keyLabel(p.key), p.title]),
+      ['W A S D', 'Move'], ['← → · Q E', 'Turn'], ['↑ ↓', 'Look up / down'],
+      ['Click view', 'Capture mouse to look · Esc releases'], ['Touch drag', 'Look'],
+      [`${keys(b.run)} · ${keys(b.slow)}`, 'Run · walk slowly (hold)'],
+      [keys(b.jump), 'Jump · swim up'], [keys(b.crouch), 'Crouch · dive'],
+      ['Into a wall', 'Climb'],
+      [keys(b.ready), 'Ready / sheathe weapon'],
+      [`${keys(b.attack)} · Click`, 'Attack'], ['Right-drag', 'Directional strike'],
+      [keys(b.interact), 'Talk · use · loot'],
+      [keys(b.modeSteal, b.modeGrab, b.modeInfo, b.modeTalk), 'Steal · Grab · Info · Talk mode'],
       ...(api.getPanel('spellbook')?.builtin === false ? [['V', 'Cast readied spell']] : []),
-      [`Esc / ${keyLabel(b.settings)}`, 'Close menus / settings'],
-      [`Enter / ${keyLabel(b.chat)}`, 'Speak'],
-      [keyLabel(b.people), 'People here'],
-      ['Gamepad', 'Sticks move/look · A use · X attack · Y ready · LB run · RS crouch · A/B swim up/down · Start menu'],
+      [keys(b.character, b.inventory, b.spellbook, b.journal), 'Character · Inventory · Magic · Journal'],
+      [keys(b.map, b.party), 'Maps · Social'],
+      ...api.panels().filter(p => !p.builtin && p.key && !(p.id in b) && !Object.values(b).includes(p.key)).map(p => [keyLabel(p.key), p.title]),
+      [`Esc · ${keys(b.settings)}`, 'Close menus · System'],
+      [`Enter · ${keys(b.chat)}`, 'Speak'],
+      [keys(b.people), 'People here'],
+      ['Gamepad', 'Start menu · A use · X attack · Y ready · LB/RB pages'],
     ];
     ui.helpDl.replaceChildren(...rows.flatMap(([k, d]) => [h('dt', { text: k }), h('dd', { text: d })]));
   }
@@ -429,9 +528,11 @@ export function createShell({ api, input, actions, settings }) {
     if (!open) return false;
     if (pressed.has(PAD.B) || pressed.has(PAD.START)) { closePanel(); return true; }
     if (pressed.has(PAD.LB) || pressed.has(PAD.RB)) {
-      const list = groupPanels(api.panels());
+      const list = menuPages();
+      if (!list.length) return true;
+      const step = pressed.has(PAD.RB) ? 1 : -1;
       let i = list.findIndex((p) => p.id === open);
-      i = (i + (pressed.has(PAD.RB) ? 1 : -1) + list.length) % list.length;
+      i = i < 0 ? (step > 0 ? 0 : list.length - 1) : (i + step + list.length) % list.length;
       openPanel(list[i].id);
       return true;
     }
@@ -507,6 +608,7 @@ export function createShell({ api, input, actions, settings }) {
     input.sensitivity = settings.sensitivity;
     input.invertY = settings.invertY;
     document.documentElement.style.setProperty('--ui-scale', String(settings.uiScale));
+    document.body.dataset.classicCompass = settings.classicCompass ? 'true' : 'false';
   }
 
   return {
@@ -697,48 +799,55 @@ const builtinPanels = {
       oninput: (ev) => { on(Number(ev.target.value)); ev.target.nextElementSibling && (ev.target.nextElementSibling.textContent = Number(ev.target.value).toFixed(2)); },
       onchange: () => apply(),
     });
-    const check = (id, value, on) => h('input', { id, type: 'checkbox', checked: value, onchange: (ev) => { on(ev.target.checked); apply(); } });
+    const check = (id, value, on) => h('input', { id, type: 'checkbox', class: 'setting-check', checked: value, onchange: (ev) => { on(ev.target.checked); apply(); } });
+    const toggle = (label, control) => h('label', { class: 'setting setting-toggle' }, control, h('span', { class: 'setting-name', text: label }));
+    const card = (id, title, ...body) => h('section', { class: `settings-card settings-${id}`, 'aria-labelledby': `settings-h-${id}` },
+      h('h4', { id: `settings-h-${id}`, text: title }), ...body);
 
-    el.append(h('h4', { text: 'Controls' }),
-      field('Look sensitivity', h('span', { class: 'setting-range' },
-        range('set-sens', 0.2, 3, 0.05, settings.sensitivity, (v) => { settings.sensitivity = v; }),
-        h('output', { for: 'set-sens', text: settings.sensitivity.toFixed(2) }))),
-      field('Invert look up/down', check('set-invert', settings.invertY, (v) => { settings.invertY = v; })),
-      field('Click to attack', check('set-click', settings.clickAttack, (v) => { settings.clickAttack = v; })),
-      h('h4', { text: 'Interface' }),
-      field('Interface size', h('span', { class: 'setting-range' },
-        range('set-scale', 0.8, 1.4, 0.05, settings.uiScale, (v) => { settings.uiScale = v; }),
-        h('output', { for: 'set-scale', text: settings.uiScale.toFixed(2) }))),
-      field('Show target name', check('set-target', settings.showTarget, (v) => { settings.showTarget = v; })),
+    const grid = h('div', { class: 'settings-grid' });
+    grid.append(
+      card('controls', 'Controls',
+        field('Look sensitivity', h('span', { class: 'setting-range' },
+          range('set-sens', 0.2, 3, 0.05, settings.sensitivity, (v) => { settings.sensitivity = v; }),
+          h('output', { for: 'set-sens', text: settings.sensitivity.toFixed(2) }))),
+        toggle('Invert look up/down', check('set-invert', settings.invertY, (v) => { settings.invertY = v; })),
+        toggle('Click to attack', check('set-click', settings.clickAttack, (v) => { settings.clickAttack = v; }))),
+      card('interface', 'Interface',
+        field('Interface size', h('span', { class: 'setting-range' },
+          range('set-scale', 0.8, 1.4, 0.05, settings.uiScale, (v) => { settings.uiScale = v; }),
+          h('output', { for: 'set-scale', text: settings.uiScale.toFixed(2) }))),
+        toggle('Show target name', check('set-target', settings.showTarget, (v) => { settings.showTarget = v; })),
+        toggle('Classic Daggerfall compass', check('set-classic-compass', settings.classicCompass, (v) => { settings.classicCompass = v; }))),
     );
 
-    el.append(h('h4', { text: 'Key bindings' }),
-      h('p', { class: 'sheet-sub', text: 'Choose an action, then press a key. Backspace clears it, Esc cancels. W A S D, Q E, arrows, Tab, Enter and Esc are fixed.' }),
-      h('table', { class: 'bindings' }, h('tbody', {}, ...Object.keys(DEFAULT_BINDINGS).map((action) => h('tr', {},
-        h('th', { scope: 'row', text: BINDING_LABELS[action] }),
-        h('td', {}, h('button', {
+    grid.append(card('bindings', 'Key bindings',
+      h('p', { class: 'settings-note', text: 'Pick an action, then press a key. Backspace clears · Esc cancels. W A S D, Q E, arrows, Tab, Enter and Esc are fixed.' }),
+      h('div', { class: 'bindings-grid' }, ...Object.keys(DEFAULT_BINDINGS).map((action) => h('div', { class: 'binding' },
+        h('span', { class: 'binding-name', id: `bind-label-${action}`, text: BINDING_LABELS[action] }),
+        h('button', {
           type: 'button', class: 'btn btn-small bind-btn', id: `bind-${action}`,
           'aria-label': `${BINDING_LABELS[action]}: ${keyLabel(settings.bindings[action])}. Change`,
-          onclick: (ev) => { startRebind(action); ev.currentTarget.textContent = 'Press a key…'; },
+          onclick: (ev) => { startRebind(action); ev.currentTarget.textContent = 'Press a key…'; ev.currentTarget.dataset.listening = 'true'; },
           text: keyLabel(settings.bindings[action]),
-        })),
-      )))),
+        }),
+      ))),
       h('div', { class: 'menu-actions' },
         h('button', { type: 'button', class: 'btn', onclick: () => { settings.bindings = { ...DEFAULT_BINDINGS }; apply(); }, text: 'Restore default keys' }),
       ),
-    );
+    ));
 
-    el.append(h('h4', { text: 'Gamepad' }), h('dl', { class: 'sheet-grid' },
-      ...[['Left stick', 'Walk'], ['Right stick', 'Look'], ['A', 'Talk / use · confirm in menus'], ['B', 'Close menu'], ['X / RT', 'Attack'], ['Y', 'Ready weapon'],
-        ['Start', 'Menu'], ['Back', 'Map'], ['LB / RB', 'Previous / next menu page'], ['D-pad', 'Move between controls']]
-        .flatMap(([k, d]) => [h('dt', { text: k }), h('dd', { text: d })])));
+    grid.append(card('gamepad', 'Gamepad', h('dl', { class: 'settings-pad' },
+      ...[['Left stick', 'Walk'], ['Right stick', 'Look'], ['A', 'Use · confirm'], ['B', 'Close menu'], ['X / RT', 'Attack'], ['Y', 'Ready weapon'],
+        ['Start', 'Menu'], ['Back', 'Map'], ['LB / RB', 'Previous / next page'], ['D-pad', 'Move between controls']]
+        .flatMap(([k, d]) => [h('dt', { text: k }), h('dd', { text: d })]))));
 
-    el.append(h('h4', { text: 'Account' }),
-      h('p', { class: 'sheet-sub', text: api.account ? `Signed in as ${api.account.username}.` : 'Playing as a guest on this server.' }),
+    grid.append(card('account', 'Account',
+      h('p', { class: 'settings-note', text: api.account ? `Signed in as ${api.account.username}.` : 'Playing as a guest on this server.' }),
       h('div', { class: 'menu-actions' },
         h('button', { type: 'button', class: 'btn', onclick: leave, text: 'Leave the world' }),
         api.account && globalThis.dfwAccount?.logout
-          ? h('button', { type: 'button', class: 'btn', onclick: () => globalThis.dfwAccount.logout(), text: 'Sign out' }) : null));
+          ? h('button', { type: 'button', class: 'btn', onclick: () => globalThis.dfwAccount.logout(), text: 'Sign out' }) : null)));
+    el.append(grid);
   },
 };
 
