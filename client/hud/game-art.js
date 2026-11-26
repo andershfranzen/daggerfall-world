@@ -16,6 +16,9 @@ const PICTURES = Object.freeze({
   'floor-up': ['AMAP00I0.IMG', [237, 171, 21, 19]],
   west: ['TRAVDI05.IMG', null, true],
   east: ['TRAVCI05.IMG', null, true],
+  // Authentic 1996 Daggerfall cracked grey granite (INVE00I0) and oxidized verdigris marble (POPU00I0).
+  stone: ['INVE00I0.IMG', [52, 18, 102, 168]],
+  marble: ['POPU00I0.IMG', [12, 10, 120, 44]],
 });
 
 export function installGameArt(api) {

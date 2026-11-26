@@ -238,6 +238,10 @@ body[data-talk] #chat-log, #hud-chat:has(> #hud-talk:not([hidden])) #chat-log { 
    popovers) steps out instead of peeking past the edges. Toasts and the banner stay. The chat
    dock keeps its state (a conversation resumes when the page closes). */
 body[data-menu] :is(#hud-top, #hud-popovers, #hud-bottom) { visibility: hidden; }
+/* During a fast-travel journey (3rd-person rise, Iliac Bay map, arrival descent), hide first-person
+   overlays, crosshair, prompts, HUD chrome and floating labels so the transition stays clean. */
+body[data-journey] :is(#hud-top, #hud-popovers, #hud-bottom, #hud-crosshair, #hud-prompts, #labels, .hud-arrival) { visibility: hidden !important; }
+body[data-journey] :is(canvas.fp-weapon, canvas.fp-spell, canvas.fp-horse) { display: none !important; }
 
 /* Pages are grouped along the top bar: You · World · People · System (shell.js sets
    data-group-start); interface.css draws a hairline between groups. The bar wraps on wide

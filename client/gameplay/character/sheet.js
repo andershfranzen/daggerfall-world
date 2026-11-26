@@ -93,9 +93,9 @@ export function renderSheet(root, ch, ctl) {
     h('table', { class: 'cc-table cc-skill-table' },
       h('thead', null, h('tr', null, h('th', null, 'Skill'), h('th', null, 'Attr.'), h('th', null, 'Value'), h('th', null, 'Practice'))),
       h('tbody', null, skillRows)),
-    recent.size ? h('div', { class: 'cc-row' },
+    recent.size ? h('div', { class: 'cc-recent-row' },
       h('span', { class: 'cc-note' }, `Recently improved: ${[...recent].join(', ')}`),
-      button('Clear', () => ctl.clearRecent())) : null,
+      button('Clear', () => ctl.clearRecent(), { class: 'btn btn-small' })) : null,
   );
 
   root.replaceChildren(h('div', { class: 'cc-sheet' },

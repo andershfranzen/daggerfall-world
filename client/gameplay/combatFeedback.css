@@ -4,7 +4,7 @@
   --cf-font:var(--pixel,"DFW Pixel",ui-monospace,monospace);--cf-caps:var(--caps,var(--cf-font));
   --cf-red:#ff5f52;--cf-ink:#05070a}
 body:not([data-screen=game]) #combat-numbers{display:none}
-body[data-menu] #combat-numbers{visibility:hidden}
+body[data-menu] #combat-numbers,body[data-journey] #combat-numbers{visibility:hidden}
 
 /* ---- floating numbers */
 .cf-pop{position:absolute;left:0;top:0;white-space:nowrap;text-align:center;
@@ -59,7 +59,7 @@ body[data-menu] #combat-numbers{visibility:hidden}
   background:linear-gradient(var(--sh-slate-1,#18202a),var(--sh-slate-0,#11161c));
   box-shadow:var(--sh-bevel,inset 0 0 0 1px #4b5768),0 0 0 1px var(--cf-ink),3px 3px 0 rgba(0,0,0,.45);
   clip-path:polygon(0 4px,4px 4px,4px 0,calc(100% - 4px) 0,calc(100% - 4px) 4px,100% 4px,100% calc(100% - 4px),calc(100% - 4px) calc(100% - 4px),calc(100% - 4px) 100%,4px 100%,4px calc(100% - 4px),0 calc(100% - 4px))}
-.cf-plate[hidden],body[data-menu] .cf-plate,#hud:has(#hud-popovers > aside:not([hidden])) .cf-plate{display:none}
+.cf-plate[hidden],body[data-menu] .cf-plate,body[data-journey] .cf-plate,#hud:has(#hud-popovers > aside:not([hidden])) .cf-plate{display:none}
 .cf-plate-name{font:600 .9rem/1 var(--cf-font);color:#f0b3a8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cf-plate-num{font:600 .8rem/1 var(--cf-font);color:var(--text-2,#aab4c4);font-variant-numeric:tabular-nums}
 .cf-plate-bar{grid-column:1/-1;position:relative;height:.7rem;background:var(--cf-ink);box-shadow:inset 0 0 0 1px var(--sh-steel-lo,#4b5768)}

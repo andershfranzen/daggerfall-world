@@ -1,31 +1,31 @@
 /* Character panel: creation wizard and character sheet. Scoped to .cc-panel (the shell's panel body).
- * Dark-slate theme tokens from :root (with fallbacks); vitals share the HUD's --vital-* colours. */
+ * Authentic 1996 Daggerfall carved grey granite & oxidized verdigris marble theme. */
 
 .cc-panel {
-  --cc-ink: var(--surface-0, #0e1318);
-  --cc-iron: var(--surface-1, #161d25);
-  --cc-iron-2: var(--surface-2, #1e2731);
-  --cc-iron-3: var(--surface-3, #26313d);
-  --cc-line: var(--border-subtle, #2c3946);
-  --cc-line-strong: var(--border-strong, #44566a);
-  --cc-text: var(--text, #e4e8ec);
-  --cc-dim: var(--text-2, #9aa7b4);
-  --cc-faint: var(--text-3, #6f7f90);
-  --cc-accent: var(--accent, #8fbfe6);
-  --cc-accent-strong: var(--accent-hi, #cfe4f5);
-  --cc-accent-bg: var(--accent-bg, rgb(110 168 216 / 0.14));
-  --cc-good: var(--ok, #8cc7a4);
-  --cc-bad: var(--danger, #e38a7a);
-  --cc-health: var(--vital-hp, #cf555f);
-  --cc-fatigue: var(--vital-ft, #3fa68a);
-  --cc-magicka: var(--vital-mp, #3b82d6);
-  --cc-r: var(--radius-sm, 4px);
-  --cc-r-md: var(--radius-md, 6px);
-  --cc-mono: var(--font-mono, ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace);
-  --cc-heading: var(--font-heading, var(--font-ui, system-ui, sans-serif));
+  --cc-ink: var(--surface-0, #141517);
+  --cc-iron: var(--surface-1, #232529);
+  --cc-iron-2: var(--surface-2, #31343a);
+  --cc-iron-3: var(--surface-3, #40444c);
+  --cc-line: var(--border-subtle, #4c5058);
+  --cc-line-strong: var(--border-strong, #737882);
+  --cc-text: var(--text, #e6e9ee);
+  --cc-dim: var(--text-2, #b4bac4);
+  --cc-faint: var(--text-3, #838a94);
+  --cc-accent: var(--accent, #5fa3a5);
+  --cc-accent-strong: var(--accent-hi, #a4dadb);
+  --cc-accent-bg: var(--accent-bg, #235052);
+  --cc-good: var(--ok, #68b074);
+  --cc-bad: var(--danger, #d46c6c);
+  --cc-health: var(--vital-hp, #b53434);
+  --cc-fatigue: var(--vital-ft, #3a8b48);
+  --cc-magicka: var(--vital-mp, #3560b2);
+  --cc-r: 0px;
+  --cc-r-md: 0px;
+  --cc-mono: var(--font-mono, "DFW Five", "DFW Pixel", ui-monospace, monospace);
+  --cc-heading: var(--font-heading, "DFW Five", "DFW Pixel", sans-serif);
   color: var(--cc-text);
-  font-family: var(--font-ui, system-ui, sans-serif);
-  font-size: 14px;
+  font-family: var(--font-ui, "DFW Five", "DFW Pixel", sans-serif);
+  font-size: 15px;
   line-height: 1.45;
 }
 
@@ -50,8 +50,8 @@
 .cc-wizard-head { display: flex; flex-direction: column; gap: 0.5rem; border-bottom: 1px solid var(--cc-line); padding-bottom: 0.6rem; }
 .cc-steps { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0; padding: 0; list-style: none; }
 .cc-step-btn {
-  background: var(--cc-iron); border: 1px solid var(--cc-line); border-radius: 999px; padding: 0.2rem 0.7rem;
-  font-size: 0.74rem !important; font-weight: 500; color: var(--cc-dim) !important; cursor: pointer; white-space: nowrap;
+  background: var(--cc-iron); border: 1px solid var(--cc-line); border-radius: var(--cc-r); padding: 0.22rem 0.65rem;
+  font-size: 0.74rem !important; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cc-dim) !important; cursor: pointer; white-space: nowrap;
   transition: border-color 0.12s, background 0.12s, color 0.12s;
 }
 .cc-step-btn:hover:not(:disabled) { border-color: var(--cc-line-strong); color: var(--cc-text) !important; }
@@ -182,8 +182,37 @@
 .cc-tag.is-minor { border-color: #6f8aa3; background: #1f2d3c; }
 .cc-tag-group { margin-left: 0.3rem; font-size: 0.65rem; color: var(--cc-accent-strong); }
 .cc-cost { color: var(--cc-dim); font-family: var(--cc-mono); font-size: 0.68rem; }
-.cc-details { border: 1px solid var(--cc-line); border-radius: var(--cc-r-md); padding: 0.4rem 0.6rem; background: var(--cc-iron); }
-.cc-details > summary { cursor: pointer; font-size: 0.88rem; color: var(--cc-accent); }
+.cc-details {
+  border: 2px solid;
+  border-color: #6c717a #121316 #121316 #6c717a;
+  border-radius: 0;
+  padding: 0.45rem 0.75rem;
+  background: #272a2f;
+  box-shadow: 0 0 0 1px #060708;
+}
+.cc-details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--cc-heading);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cc-text);
+  text-shadow: 1px 1px 0 #000;
+}
+.cc-details > summary::-webkit-details-marker { display: none; }
+.cc-details > summary::before {
+  content: "▸";
+  font-size: 0.78rem;
+  color: var(--cc-accent-strong);
+  transition: transform 0.1s linear;
+}
+.cc-details[open] > summary::before { transform: rotate(90deg); }
+.cc-details[open] > summary { padding-bottom: 0.4rem; margin-bottom: 0.4rem; border-bottom: 1px solid var(--cc-line); }
 .cc-abilities { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.4rem; }
 .cc-ability { display: grid; grid-template-columns: 12rem 1fr; gap: 0.5rem; align-items: start; }
 .cc-ability-name { font-size: 0.85rem; padding-top: 0.15rem; }
@@ -207,33 +236,80 @@
 .cc-sheet { display: flex; flex-direction: column; gap: 0.9rem; }
 .cc-banner {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem;
-  border: 1px solid var(--cc-accent); background: var(--cc-accent-bg); border-radius: var(--cc-r-md); padding: 0.6rem 0.8rem;
+  border: 2px solid; border-color: #7ab8ba #112a2b #112a2b #7ab8ba; background: var(--cc-accent-bg); border-radius: 0; padding: 0.65rem 0.85rem;
+  box-shadow: 0 0 0 1px #060708;
 }
 .cc-banner p { flex: 1 1 20rem; font-size: 0.9rem; }
-.cc-id { display: grid; grid-template-columns: auto 1fr minmax(13rem, 1fr); gap: 1rem; align-items: center; }
+.cc-id {
+  display: grid;
+  grid-template-columns: auto 1fr minmax(14rem, 1fr);
+  gap: 1.1rem;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  background-color: #292c31;
+  border: 2px solid;
+  border-color: #7c818a #131518 #131518 #7c818a;
+  border-radius: 0;
+  box-shadow: 0 0 0 1px #060708;
+}
+.has-classic-stone .cc-id {
+  background-image: linear-gradient(rgba(30, 32, 36, 0.72), rgba(22, 24, 28, 0.8)), var(--classic-stone);
+  background-size: auto, 204px 336px;
+  image-rendering: pixelated;
+}
 @container menu-page (max-width: 520px) { .cc-id { grid-template-columns: auto 1fr; } .cc-vitals { grid-column: 1 / -1; } }
+.cc-id-text h2 {
+  font-size: 1.35rem;
+  color: #f0f3f7;
+  text-shadow: 1px 1px 0 #000;
+  letter-spacing: 0.05em;
+}
 .cc-id-text p { color: var(--cc-dim); }
-.cc-level { display: flex; align-items: center; gap: 0.6rem; color: var(--cc-text) !important; }
-.cc-level-track { flex: 1; max-width: 10rem; height: 6px; border: 1px solid var(--cc-line-strong); border-radius: 999px; background: var(--cc-ink); overflow: hidden; }
-.cc-level-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--cc-accent), var(--cc-accent-strong)); }
-.cc-vitals { display: flex; flex-direction: column; gap: 0.3rem; }
-.cc-bar { display: grid; grid-template-columns: 4.5rem 1fr auto; gap: 0.5rem; align-items: center; font-size: 0.8rem; }
-.cc-bar-label { color: var(--cc-dim); }
-.cc-bar-track { height: 8px; border: 1px solid var(--cc-line); border-radius: 999px; background: var(--cc-ink); overflow: hidden; }
-.cc-bar-fill { display: block; height: 100%; transition: width 0.25s; }
-.cc-bar-health .cc-bar-fill { background: var(--cc-health); }
-.cc-bar-fatigue .cc-bar-fill { background: var(--cc-fatigue); }
-.cc-bar-magicka .cc-bar-fill { background: var(--cc-magicka); }
-.cc-bar-num { font-family: var(--cc-mono); font-variant-numeric: tabular-nums; min-width: 5.5em; text-align: right; }
-.cc-sheet-cols { display: grid; grid-template-columns: minmax(14rem, 0.8fr) minmax(0, 1.4fr); gap: 1.2rem; align-items: start; }
+.cc-level { display: flex; align-items: center; gap: 0.65rem; color: var(--cc-text) !important; margin-top: 0.35rem !important; }
+.cc-level-track {
+  flex: 1; max-width: 10.5rem; height: 9px;
+  border: 2px solid; border-color: #0e1012 #636872 #636872 #0e1012; border-radius: 0; background: #101214;
+  overflow: hidden;
+}
+.cc-level-fill { display: block; height: 100%; background: linear-gradient(180deg, #7cc4c6 0 50%, #448486 50% 100%); }
+.cc-vitals { display: flex; flex-direction: column; gap: 0.42rem; }
+.cc-bar { display: grid; grid-template-columns: 4.8rem 1fr auto; gap: 0.55rem; align-items: center; font-size: 0.84rem; }
+.cc-bar-label { font-family: var(--cc-heading); text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; color: var(--cc-dim); }
+.cc-bar-track {
+  height: 11px; border: 2px solid; border-color: #0e1012 #636872 #636872 #0e1012; border-radius: 0; background: #101214;
+  overflow: hidden;
+}
+.cc-bar-fill {
+  display: block; height: 100%; transition: width 0.2s;
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0 45%, rgba(0, 0, 0, 0.22) 45% 100%);
+}
+.cc-bar-health .cc-bar-fill { background-color: var(--cc-health); }
+.cc-bar-fatigue .cc-bar-fill { background-color: var(--cc-fatigue); }
+.cc-bar-magicka .cc-bar-fill { background-color: var(--cc-magicka); }
+.cc-bar-num { font-family: var(--cc-mono); font-size: 0.82rem; font-variant-numeric: tabular-nums; min-width: 5.8em; text-align: right; color: var(--cc-text); }
+
+.cc-sheet-cols { display: grid; grid-template-columns: minmax(15rem, 0.82fr) minmax(0, 1.38fr); gap: 1rem; align-items: start; }
 @container menu-page (max-width: 560px) { .cc-sheet-cols { grid-template-columns: 1fr; } }
+.cc-attrs, .cc-skills {
+  padding: 0.75rem 0.9rem;
+  background: #272a2f;
+  border: 2px solid;
+  border-color: #6c717a #121316 #121316 #6c717a;
+  border-radius: 0;
+  box-shadow: 0 0 0 1px #060708;
+}
 .cc-attrs .cc-spins { grid-template-columns: 1fr; }
 .cc-skill-table tr.is-raised th, .cc-skill-table tr.is-raised .cc-skill-val { color: var(--cc-good); }
-.cc-gov { color: var(--cc-dim); font-family: var(--cc-mono); font-size: 0.7rem; text-align: left !important; padding-left: 0.5rem !important; }
+.cc-gov { color: var(--cc-dim); font-family: var(--cc-mono); font-size: 0.72rem; text-align: left !important; padding-left: 0.5rem !important; }
 .cc-skill-val { width: 3.5em; }
-.cc-skill-prog { width: 5.5em; padding-left: 0.6rem !important; }
-.cc-mini-track { display: block; height: 4px; background: var(--cc-ink); border: 1px solid var(--cc-line); border-radius: 999px; overflow: hidden; }
+.cc-skill-prog { width: 6em; padding-left: 0.6rem !important; }
+.cc-mini-track { display: block; height: 7px; background: #101214; border: 1px solid #525760; border-radius: 0; overflow: hidden; }
 .cc-mini-fill { display: block; height: 100%; background: var(--cc-accent); }
+.cc-recent-row {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem;
+  margin-top: 0.75rem; padding-top: 0.55rem; border-top: 1px solid var(--cc-line);
+}
+.cc-recent-row .btn { min-height: 1.6rem; padding: 0.14rem 0.55rem; font-size: 0.72rem; }
 
 @media (prefers-reduced-motion: reduce) {
   .cc-bar-fill, .cc-choice { transition: none; }
@@ -249,14 +325,11 @@
   z-index: 2;
   margin: 0 -0.4rem -0.4rem;
   padding: 0.6rem 0.4rem 0.9rem;
-  background: var(--surface-1, #161d25);
-  border-top: 1px solid var(--cc-line-strong);
+  background: var(--surface-1, #232529);
+  border-top: 2px solid var(--cc-line-strong);
 }
 
-/* Workaround for the shell menu (client/gameplay/shell.css): the frame has a fixed height but its grid row
- * and .menu-main default to min-height:auto, so a tall panel grows past the frame instead of scrolling and
- * its lower controls end up outside the dialog. Scoped to this panel; harmless once the shell sets these. */
-#game-menu .menu-frame:has(.cc-panel) { grid-template-rows: minmax(0, 1fr); }
+/* Keep .menu-main shrinkable inside the 3-row menu frame without breaking row 1/2 sizing. */
 #game-menu .menu-main:has(.cc-panel) { min-height: 0; }
 
 @media (min-width: 60rem) {

@@ -168,6 +168,7 @@ export function install(api) {
   document.body.append(flash);
   let cast = null; // { frames, element, t }
   let screen = api.screen ?? null;
+  let inJourney = false;
 
   async function playCast(element) {
     const request = ++castRequest;
@@ -182,7 +183,7 @@ export function install(api) {
   function drawHands(dt) {
     if (!cast) return;
     const step = Math.floor(cast.t / CAST_FRAME_S);
-    if (step >= CAST_SEQUENCE.length || screen !== 'game') { cast = null; hands.hidden = true; return; }
+    if (step >= CAST_SEQUENCE.length || screen !== 'game' || inJourney) { cast = null; hands.hidden = true; return; }
     const w = innerWidth, h = innerHeight;
     if (hands.width !== w || hands.height !== h) { hands.width = w; hands.height = h; }
     const g = hands.getContext('2d');
@@ -252,8 +253,16 @@ export function install(api) {
   api.on('frame', ({ dt, renderer } = {}) => {
     drawHands(Number(dt) || 0.016);
     drawMissiles(renderer);
-    const hide = !(readyTrapSpell() ?? selectedSpell()) || screen !== 'game' || api.modalOpen;
+    const hide = !(readyTrapSpell() ?? selectedSpell()) || screen !== 'game' || api.modalOpen || inJourney;
     if (chip.hidden !== hide) chip.hidden = hide;
+  });
+  api.on('journey', (j) => {
+    inJourney = !!(j && j.phase && j.phase !== 'done');
+    if (inJourney) {
+      cast = null;
+      hands.hidden = true;
+      chip.hidden = true;
+    }
   });
   api.on('screen', (name) => {
     screen = typeof name === 'string' ? name : name?.screen ?? null;
@@ -319,7 +328,7 @@ export function install(api) {
   }
 
   window.addEventListener('keydown', (e) => {
-    if (e.code !== CAST_KEY || e.repeat || e.ctrlKey || e.metaKey || e.altKey || api.modalOpen || screen !== 'game') return;
+    if (e.code !== CAST_KEY || e.repeat || e.ctrlKey || e.metaKey || e.altKey || api.modalOpen || inJourney || screen !== 'game') return;
     const t = e.target;
     if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
     e.preventDefault();

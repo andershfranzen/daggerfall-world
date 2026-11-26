@@ -44,7 +44,7 @@
   text-align: left; font: inherit; font-size: 0.88rem; color: inherit; background: transparent;
   border: 1px solid transparent; padding: 3px 6px; border-radius: var(--radius-sm, 3px); cursor: pointer;
 }
-.mg-row:hover { background: rgba(111, 182, 255, 0.08); }
+.mg-row:hover { background: rgba(95, 163, 165, 0.14); }
 .mg-row:focus-visible { outline: 1px solid var(--mg-accent); }
 .mg-row[aria-pressed='true'] { background: var(--mg-sel); border-color: var(--mg-accent); }
 .mg-row[data-support='unsupported'] { color: var(--mg-dim); }
@@ -81,22 +81,22 @@
 }
 .mg-btn:hover:not(:disabled) { border-color: var(--mg-accent); }
 .mg-btn:disabled { opacity: 0.5; cursor: default; }
-.mg-btn-primary { background: var(--mg-sel); border-color: var(--mg-accent); color: var(--accent-hi, #b6dcff); }
-.mg-btn-primary:hover:not(:disabled) { background: #26507f; }
+.mg-btn-primary { background: var(--mg-sel); border-color: var(--mg-accent); color: var(--accent-hi, #a4dadb); }
+.mg-btn-primary:hover:not(:disabled) { background: var(--accent-bg-hi, #2e676a); }
 .mg-btn-quiet { margin-left: auto; color: var(--mg-dim); }
 .mg-empty { color: var(--mg-dim); font-style: italic; margin: 8px; }
 .mg-foot { color: var(--mg-dim); font-size: 0.78rem; }
 .mg-active { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; font-size: 0.78rem; }
-.mg-active li { padding: 2px 8px; border: 1px solid var(--mg-line); border-radius: 999px; color: var(--mg-arcane); background: var(--mg-panel); }
+.mg-active li { padding: 2px 8px; border: 1px solid var(--mg-line); border-radius: 0; color: var(--mg-arcane); background: var(--mg-panel); }
 
 /* Readied spell chip: lower left, above chat; never covers the weapon. */
 .mg-chip {
   position: fixed; left: 12px; bottom: calc(12px + var(--mg-chip-lift, 180px)); z-index: 22;
   display: flex; align-items: center; gap: 6px; padding: 3px 8px 3px 4px;
-  font: 500 12.5px/1.2 var(--font-ui, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif); color: var(--text, #e4eaf2);
-  background: var(--glass-bg, rgba(11, 15, 22, 0.82)); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
-  border: 1px solid var(--border-subtle, rgba(145, 168, 198, 0.22)); border-radius: var(--radius-sm, 3px); cursor: pointer;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  font: 500 12.5px/1.2 var(--font-ui, "Trebuchet MS", sans-serif); color: var(--text, #e6e9ee);
+  background: #25272b;
+  border: 2px solid; border-color: #7c818a #131518 #131518 #7c818a; border-radius: 0; cursor: pointer;
+  box-shadow: 0 0 0 1px #060708, 2px 2px 0 rgba(0, 0, 0, 0.55);
 }
 .mg-chip[hidden] { display: none; }
 .mg-chip:hover { border-color: var(--border-strong, rgba(145, 168, 198, 0.4)); }

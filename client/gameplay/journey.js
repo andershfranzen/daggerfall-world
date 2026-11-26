@@ -70,23 +70,27 @@ export function blendCamera(a, b, t) {
 }
 
 const STYLE = `
-.journey{position:fixed;inset:0;z-index:60;background:#05080b;opacity:0;transition:opacity .35s linear;display:grid;
-  grid-template-rows:1fr auto;color:#e6edf5;font:15px/1.35 var(--font-sans,system-ui,sans-serif)}
+.journey{position:fixed;inset:0;z-index:60;background:#0a0b0d;opacity:0;pointer-events:none;transition:opacity .35s linear;display:grid;
+  grid-template-rows:1fr auto;color:#e6e9ee;font:15px/1.4 var(--font-ui,"DFW Five","DFW Pixel","Pixelify Sans",sans-serif);font-variant-ligatures:none}
 .journey[hidden]{display:none}
-.journey.is-shown{opacity:1}
+.journey.is-shown{opacity:1;pointer-events:auto}
 .journey-map{grid-row:1/3;grid-column:1;width:100%;height:100%;image-rendering:pixelated;display:block}
-.journey-hud{grid-row:2;grid-column:1;align-self:end;justify-self:center;margin:0 1rem 1.2rem;padding:.75rem 1rem .8rem;
-  width:min(40rem,calc(100% - 2rem));box-sizing:border-box;background:rgba(10,16,24,.82);border:1px solid rgba(150,175,205,.35);
-  border-radius:4px;display:grid;grid-template-columns:1fr auto;gap:.3rem .9rem;align-items:center}
-.journey-title{margin:0;font-size:1.1rem;letter-spacing:.02em;grid-column:1}
-.journey-title b{font-weight:600;color:#cfe6ff}
-.journey-route{margin:0;font-size:.85rem;color:#a9b8c9;grid-column:1}
+.journey-hud{grid-row:2;grid-column:1;align-self:end;justify-self:center;margin:0 1rem 1.35rem;padding:.85rem 1.15rem .9rem;
+  width:min(42rem,calc(100% - 2rem));box-sizing:border-box;
+  background-color:#26292e;
+  border:2px solid;border-color:#888d96 #121316 #121316 #888d96;
+  border-radius:0;box-shadow:0 0 0 2px #060708,5px 5px 0 rgba(0,0,0,.72);
+  display:grid;grid-template-columns:1fr auto;gap:.35rem 1rem;align-items:center}
+.has-classic-stone .journey-hud{background-image:linear-gradient(rgba(28,30,34,.74),rgba(18,20,24,.84)),var(--classic-stone);background-size:auto,204px 336px;image-rendering:pixelated}
+.journey-title{margin:0;font:600 1.12rem/1.2 var(--font-heading,"DFW Five","DFW Pixel",sans-serif);letter-spacing:.05em;text-transform:uppercase;color:#e6e9ee;text-shadow:1px 1px 0 #000;grid-column:1}
+.journey-title b{font-weight:700;color:#a4dadb}
+.journey-route{margin:0;font-size:.84rem;color:#b4bac4;grid-column:1}
 .journey-skip{grid-column:2;grid-row:1/3}
-.journey-bar{grid-column:1/3;height:8px;border-radius:4px;background:rgba(150,175,205,.18);overflow:hidden}
-.journey-fill{display:block;height:100%;width:0;background:linear-gradient(90deg,#6fa8dc,#cfe6ff)}
-.journey-meta{grid-column:1/3;margin:0;font-size:.85rem;color:#a9b8c9;display:flex;flex-wrap:wrap;gap:.15rem .9rem}
-.journey-meta b{color:#e6edf5;font-weight:600}
-@media (max-width:520px),(max-height:420px){.journey-hud{margin:0 .5rem .5rem;padding:.5rem .7rem;width:calc(100% - 1rem)}
+.journey-bar{grid-column:1/3;height:10px;border-radius:0;background:#101214;border:2px solid;border-color:#0e1012 #636872 #636872 #0e1012;overflow:hidden}
+.journey-fill{display:block;height:100%;width:0;background:linear-gradient(180deg,#7cc4c6 0 50%,#3d7b7d 50% 100%)}
+.journey-meta{grid-column:1/3;margin:.1rem 0 0;font-size:.82rem;color:#b4bac4;display:flex;flex-wrap:wrap;gap:.2rem 1rem}
+.journey-meta b{color:#e6e9ee;font-weight:600}
+@media (max-width:520px),(max-height:420px){.journey-hud{margin:0 .5rem .5rem;padding:.55rem .75rem;width:calc(100% - 1rem)}
   .journey-title{font-size:1rem}.journey-route{display:none}}
 @media (prefers-reduced-motion:reduce){.journey{transition:none}}
 `;
@@ -243,7 +247,9 @@ export function install(api) {
     let view = high;
     if (j.phase === 'rise') view = blendCamera(j.originCamera, high, smooth01((now - j.phaseAt) / RISE_S));
     else if (j.phase === 'fall') view = blendCamera(high, camera, smooth01((now - j.phaseAt) / FALL_S));
-    S.items = travellerItems(feet, yaw, view, now);
+    // Avoid drawing the 2D billboard right inside the camera lens at the start of rise or end of fall.
+    const camDist = Math.hypot(view.x - feet.x, view.z - feet.z);
+    S.items = camDist >= 2.2 ? travellerItems(feet, yaw, view, now) : [];
     return view;
   });
 
@@ -336,21 +342,26 @@ export function install(api) {
       g.drawImage(S.world.canvas, view.cx - view.w / 2, view.cy - view.h / 2, view.w, view.h, 0, 0, cw, ch);
     }
     const P = (x, y) => toCanvas(view, cw, ch, x + 0.5, y + 0.5);
-    // Route: the classic stepped line, travelled part solid.
+    // Route: dark ink casing + dashed bone-white trail, travelled leg solid verdigris-white.
     const pts = j.route.points;
     const f = elapsed.progress;
     const here = routeAt(pts, f);
     g.lineCap = 'round';
     g.lineJoin = 'round';
+    g.strokeStyle = 'rgba(8,10,12,.88)';
+    g.lineWidth = 4.5 * dpr;
+    g.beginPath();
+    for (let i = 0; i < pts.length; i++) { const p = P(pts[i].x, pts[i].y); if (i) g.lineTo(p.x, p.y); else g.moveTo(p.x, p.y); }
+    g.stroke();
     g.setLineDash([6 * dpr, 6 * dpr]);
-    g.strokeStyle = 'rgba(230,240,255,.85)';
-    g.lineWidth = 2 * dpr;
+    g.strokeStyle = 'rgba(230,235,242,.82)';
+    g.lineWidth = 2.2 * dpr;
     g.beginPath();
     for (let i = 0; i < pts.length; i++) { const p = P(pts[i].x, pts[i].y); if (i) g.lineTo(p.x, p.y); else g.moveTo(p.x, p.y); }
     g.stroke();
     g.setLineDash([]);
-    g.strokeStyle = '#cfe6ff';
-    g.lineWidth = 3.5 * dpr;
+    g.strokeStyle = '#a4dadb';
+    g.lineWidth = 3.2 * dpr;
     g.beginPath();
     let first = true;
     for (const p0 of pts) {
@@ -366,21 +377,23 @@ export function install(api) {
     const pin = (p, label, filled) => {
       const c = P(p.x, p.y);
       const above = crowded && !filled;
-      g.fillStyle = filled ? '#cfe6ff' : 'rgba(10,16,24,.9)';
-      g.strokeStyle = '#cfe6ff';
+      g.fillStyle = filled ? '#a83434' : 'rgba(22,24,28,.95)';
+      g.strokeStyle = filled ? '#eef7f7' : '#a4dadb';
       g.lineWidth = 2 * dpr;
       g.beginPath();
-      g.arc(c.x, c.y, 5 * dpr, 0, Math.PI * 2);
+      g.arc(c.x, c.y, 5.2 * dpr, 0, Math.PI * 2);
       g.fill();
       g.stroke();
-      g.font = `600 ${13 * dpr}px system-ui, sans-serif`;
+      g.font = `600 ${14 * dpr}px "DFW Five", "DFW Pixel", "Pixelify Sans", sans-serif`;
       const tw = g.measureText(label).width;
-      // Short trips: the origin's label sits to the left of its pin, clear of the traveller above it.
       const lx = Math.min(cw - tw - 10 * dpr, Math.max(6 * dpr, above ? c.x - tw - 40 * dpr : c.x - tw / 2));
-      const ly = above ? c.y + 5 * dpr : c.y + 20 * dpr;
-      g.fillStyle = 'rgba(10,16,24,.78)';
-      g.fillRect(lx - 5 * dpr, ly - 13 * dpr, tw + 10 * dpr, 18 * dpr);
-      g.fillStyle = '#e6edf5';
+      const ly = above ? c.y + 5 * dpr : c.y + 21 * dpr;
+      g.fillStyle = 'rgba(22,24,28,.92)';
+      g.strokeStyle = filled ? '#a4dadb' : '#737882';
+      g.lineWidth = 1.2 * dpr;
+      g.fillRect(lx - 6 * dpr, ly - 13 * dpr, tw + 12 * dpr, 19 * dpr);
+      g.strokeRect(lx - 6 * dpr, ly - 13 * dpr, tw + 12 * dpr, 19 * dpr);
+      g.fillStyle = filled ? '#ffffff' : '#e6e9ee';
       g.fillText(label, lx, ly);
     };
     pin(j.from, j.fromName, false);
@@ -463,6 +476,7 @@ export function install(api) {
     j.phase = phase;
     j.phaseAt = performance.now() / 1000;
     j.raised = phase === 'rise' || phase === 'cover' || phase === 'reveal' || phase === 'fall';
+    if (doc?.body) doc.body.dataset.journey = phase;
     api.emit('journey', { phase, raised: j.raised, to: j.toId });
   }
 
@@ -505,6 +519,7 @@ export function install(api) {
     };
     S.j = j;
     api.movementLocked = true;
+    if (doc?.pointerLockElement) doc.exitPointerLock?.();
     makeGate();
     worldMap();
     // Warm the art the journey draws.
@@ -543,6 +558,7 @@ export function install(api) {
     const o = S.overlay;
     if (o) setTimeout(() => { if (!S.j) o.root.hidden = true; }, abort ? 0 : 400);
     api.movementLocked = false;
+    if (doc?.body) delete doc.body.dataset.journey;
     api.emit('journey', { phase: 'done', raised: false, to: j.toId });
     if (j.text) api.message(j.text);
     if (j.at != null) markShown(j.at);
@@ -585,7 +601,10 @@ export function install(api) {
           break;
         }
         case 'reveal':
-          if (inPhase >= REVEAL_S) setPhase(j, 'fall');
+          if (inPhase >= REVEAL_S) {
+            if (S.overlay) S.overlay.root.hidden = true;
+            setPhase(j, 'fall');
+          }
           break;
         case 'fall':
           if (inPhase >= FALL_S) { finish(); return; }
@@ -630,7 +649,7 @@ export function install(api) {
     if (!S.j) return;
     if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Space' || e.code === 'Escape') {
       e.preventDefault();
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       skipJourney();
     }
   }, true);

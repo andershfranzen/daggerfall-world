@@ -1373,7 +1373,7 @@ function isTextEntry(el) {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (S.screen !== 'game' || e.defaultPrevented || shell?.rebinding) return;
+  if (S.screen !== 'game' || e.defaultPrevented || shell?.rebinding || api.journey?.active) return;
   const typing = document.activeElement === ui.chatInput || isTextEntry(document.activeElement);
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === 'Tab') return; // keyboard focus moves normally
@@ -1491,7 +1491,7 @@ function gameFrame(now, dt) {
     input.setTraversalBindings(settings.bindings);
     S.boundFor = settings.bindings;
   }
-  const look = input.look(dt);
+  const look = api.journey?.active ? { yaw: 0, pitch: 0 } : input.look(dt);
   S.yaw = wrapAngle(S.yaw + look.yaw);
   S.pitch = clamp(S.pitch + look.pitch, -PITCH_LIMIT, PITCH_LIMIT);
   // api.movementLocked: a feature holds the player still (travel journey on screen).

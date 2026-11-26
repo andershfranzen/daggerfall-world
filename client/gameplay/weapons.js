@@ -98,6 +98,7 @@ export function install(api) {
   const frameCache = new Map(); // `${file}:${material}:${r}:${f}` → canvas
   const reported = new Set();
   let screen = null;
+  let inJourney = false;
   let current = null; // { key, spec, animator, art|null }
   let pending = 0; // ms timestamp of an unanswered attack this module sent
 
@@ -154,7 +155,7 @@ export function install(api) {
   }
 
   function visible() {
-    return screen === 'game' && !api.modalOpen && !!current?.art && current.animator.visible;
+    return screen === 'game' && !api.modalOpen && !inJourney && !!current?.art && current.animator.visible;
   }
 
   function draw() {
@@ -193,7 +194,17 @@ export function install(api) {
   api.on('state', () => sync());
   api.on('screen', (name) => {
     screen = typeof name === 'string' ? name : name?.screen ?? null;
-    canvas.hidden = screen !== 'game';
+    canvas.hidden = screen !== 'game' || inJourney;
+  });
+  api.on('journey', (j) => {
+    inJourney = !!(j && j.phase && j.phase !== 'done');
+    canvas.hidden = screen !== 'game' || inJourney;
+    if (inJourney) {
+      drag = null;
+      keyDraw = null;
+      if (current?.animator.drawing) current.animator.cancelDraw(speed());
+    }
+    draw();
   });
   api.on('event', (msg) => {
     const ev = msg?.event ?? msg;
@@ -223,10 +234,10 @@ export function install(api) {
   const withTarget = (args) => (api.target != null ? { ...args, targetId: String(api.target) } : args);
   let drag = null;
   const target = view ?? window;
-  const ready = () => screen === 'game' && !api.modalOpen && !!rpg()?.readied && !!current && !pending;
+  const ready = () => screen === 'game' && !api.modalOpen && !inJourney && !!rpg()?.readied && !!current && !pending;
 
   window.addEventListener('pointerdown', (e) => {
-    if (e.button !== 2 || e.target !== target || screen !== 'game' || api.modalOpen) return;
+    if (e.button !== 2 || e.target !== target || screen !== 'game' || api.modalOpen || inJourney) return;
     e.stopImmediatePropagation();
     e.preventDefault();
     drag = { id: e.pointerId, dx: 0, dy: 0, travel: 0, lastX: e.clientX, lastY: e.clientY, sent: false, bow: false };
@@ -285,6 +296,7 @@ export function install(api) {
   }, true);
   api.on('attackIntent', (d) => {
     if (!d || !current || screen !== 'game') return;
+    if (inJourney) { d.preventDefault(); return; }
     const a = current.animator;
     const busy = !!pending || a.attacking || (a.isBow && a.cooldown > 0) || !!drag;
     if (a.isBow) {

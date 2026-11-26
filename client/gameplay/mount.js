@@ -37,6 +37,7 @@ export function install(api) {
     clock: 0,
     pending: false,
     raised: false, // journey camera on screen
+    inJourney: false,
   };
   const doc = globalThis.document;
   const character = () => api.state?.character ?? null;
@@ -50,9 +51,9 @@ export function install(api) {
 
   (api.viewTransforms ||= []).push((camera, f) => {
     const on = riding();
-    if (on && f?.moving) S.clock += f.dt ?? 0;
-    drawHorse(on && !S.raised, on && f?.moving);
-    return on ? { ...camera, y: camera.y + RIDE_EYE_LIFT } : camera;
+    if (on && f?.moving && !S.inJourney) S.clock += f.dt ?? 0;
+    drawHorse(on && !S.inJourney, on && f?.moving && !S.inJourney);
+    return on && !S.raised ? { ...camera, y: camera.y + RIDE_EYE_LIFT } : camera;
   });
 
   // ------------------------------------------------------------------ first-person art
@@ -238,7 +239,11 @@ export function install(api) {
     }
     refresh();
   });
-  api.on('journey', (j) => { S.raised = !!j?.raised; });
+  api.on('journey', (j) => {
+    S.raised = !!j?.raised;
+    S.inJourney = !!(j && j.phase && j.phase !== 'done');
+    if (S.inJourney && S.canvas) S.canvas.hidden = true;
+  });
 
   refresh();
   return {
