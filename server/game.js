@@ -11,7 +11,7 @@ import { openSqliteChatLog, createChatLogService } from './chat-log.js';
 import { createHiscoresService, isHiscoresPath } from './hiscores/index.js';
 import { createSceneSpatialIndex } from './scale/spatial-grid.js';
 import { createSiteHandler } from './static.js';
-import { handlePublicWorldMap, PUBLIC_MAP_PATH } from './public-world-map.js';
+import { handlePublicWorldMap, handlePublicWorldPois, PUBLIC_MAP_PATH, PUBLIC_MAP_POIS_PATH } from './public-world-map.js';
 import { createLocalAssets } from './local-assets.js';
 import { createRpgRuntime, DEFAULT_LOCATION } from './rpg/runtime.js';
 import { handleWildernessScene, WILDERNESS_SCENE_PATH } from './rpg/wilderness/http.js';
@@ -333,7 +333,14 @@ export function createGameServer(options = {}) {
   const http = createServer((req, res) => {
     const path = req.url.split('?')[0];
     if (path === PUBLIC_MAP_PATH) {
-      return handlePublicWorldMap(req, res, players, services.travel, services.sailing, cfg.worldBus ? { worldBus: cfg.worldBus } : undefined);
+      const mapExtra = {
+        ...(cfg.worldBus ? { worldBus: cfg.worldBus } : {}),
+        ...(services.worldClock ? { worldClock: services.worldClock } : {}),
+      };
+      return handlePublicWorldMap(req, res, players, services.travel, services.sailing, mapExtra);
+    }
+    if (path === PUBLIC_MAP_POIS_PATH) {
+      return handlePublicWorldPois(req, res, services.travel);
     }
     if (hiscores && isHiscoresPath(path)) {
       Promise.resolve()

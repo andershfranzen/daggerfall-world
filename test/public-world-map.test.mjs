@@ -2,7 +2,7 @@
 // real HTTP route on the game server with two real WebSocket clients.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { publicMapLocation, publicWorldMap, PUBLIC_MAP_PATH } from '../server/public-world-map.js';
+import { publicMapLocation, publicWorldMap, publicWorldPois, PUBLIC_MAP_PATH, PUBLIC_MAP_POIS_PATH } from '../server/public-world-map.js';
 import { Catalog } from '../client/gameplay/travel/catalog.js';
 import { discoverFeatures, startLiveWorld, accountSession, LiveClient, tempDir, localArena2, withWorldClock } from './support/rpg-session.mjs';
 import { walkingRoute } from './support/walking-route.mjs';
@@ -92,6 +92,34 @@ describe('projection', () => {
     const map = publicWorldMap(crew, lookup, 0, { aboard: () => vessel });
     assert.deepEqual(map.locations, [{ id: 'sea:215,245', kind: 'sea', name: 'Iliac Bay', region: null, x: 215, y: 245, count: 2, inside: 1 }]);
     assert.equal(map.unplaced, 0);
+    assert.equal(map.vessels, 1);
+  });
+
+  test('publishes optional Tamrielic worldTime and wilderness region without leaking private fields', () => {
+    const players = [{ id: 'p1', name: 'SecretName', rpg: { location: 'wilderness:109,159' } }];
+    const map = publicWorldMap(players, lookup, 0, null, {
+      regionOf: () => 'Daggerfall',
+      worldClock: () => ({ minutes: 523530 }),
+    });
+    assert.equal(map.locations[0].region, 'Daggerfall');
+    assert.equal(map.vessels, 0);
+    assert.equal(map.worldTime.year, 405);
+    assert.equal(map.worldTime.monthName, 'Morning Star');
+    assert.equal(map.worldTime.timeLabel, '13:30');
+    assert.ok(!JSON.stringify(map).includes('SecretName'));
+  });
+
+  test('publicWorldPois exports compact public tuples and skips ships', () => {
+    const gaz = publicWorldPois({
+      source: 'files',
+      locations: [
+        { id: GOTHWAY, region: 'Daggerfall', regionIndex: 17, index: 197, name: 'Gothway Garden', type: 'hamlet', x: 109, y: 159 },
+        { id: 'town:Daggerfall/Ship', region: 'Daggerfall', regionIndex: 17, index: 999, name: 'Ship', type: 'ships', x: 207, y: 213 },
+      ],
+    });
+    assert.equal(gaz.source, 'files');
+    assert.equal(gaz.pois.length, 1);
+    assert.deepEqual(gaz.pois[0], [17, 'Gothway Garden', gaz.types.indexOf('hamlet'), 109, 159, GOTHWAY]);
   });
 });
 

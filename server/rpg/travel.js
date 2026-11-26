@@ -369,6 +369,8 @@ export function install(ctx, { loadWorld = loadWorldFromDir } = {}) {
     /** Political region of a place address (wilderness pixels via POLITIC.PAK), or null while MAPS.BSA loads. */
     regionOf: (location) => (world && source === 'files' ? regionOfPlace(location, world) : null),
     climateOf: (location) => climateOfPlace(location, world),
+    /** Read-only snapshot of catalogue locations for the public world map gazetteer. */
+    get locations() { return world?.catalog?.locations ?? []; },
   };
   ctx.services.travel = service;
 
