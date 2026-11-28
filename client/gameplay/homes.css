@@ -1,0 +1,344 @@
+/* Personal Homes panel (client/gameplay/homes.js).
+ * Authentic 1996 Daggerfall carved grey granite slabs & oxidized verdigris marble accents.
+ * Hard 2px pixel bevels, zero rounded corners, zero gold/orange accents.
+ */
+
+.hm-root {
+  --hm-deep: var(--surface-0, #141517);
+  --hm-panel: var(--surface-1, #232529);
+  --hm-raise: var(--surface-2, #31343a);
+  --hm-hi: var(--surface-3, #40444c);
+  --hm-line: var(--border-subtle, #4c5058);
+  --hm-line-hi: var(--border-strong, #737882);
+  --hm-ink: var(--text, #e6e9ee);
+  --hm-dim: var(--text-2, #b4bac4);
+  --hm-mute: var(--text-3, #838a94);
+  --hm-accent: var(--accent, #5fa3a5);
+  --hm-accent-hi: var(--accent-hi, #a4dadb);
+  --hm-accent-bg: var(--accent-bg, #235052);
+  --hm-ok: var(--ok, #68b074);
+  --hm-danger: var(--danger, #d46c6c);
+  --hm-font: var(--font-ui, "DFW Five", "DFW Pixel", ui-monospace, monospace);
+  --hm-caps: var(--font-caps, "DFW Caps", "Silkscreen", ui-monospace, monospace);
+
+  color: var(--hm-ink);
+  font: 15px/1.45 var(--hm-font);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.hm-root > *, .hm-card, .hm-grid > *, .hm-row { min-width: 0; }
+
+/* ---- Top Header & Sub-tabs ---- */
+.hm-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #232529;
+  border: 2px solid;
+  border-color: #7c818a #131518 #131518 #7c818a;
+  box-shadow: 0 0 0 1px #060708;
+}
+.hm-title-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.hm-title {
+  margin: 0;
+  font: 600 1.05rem/1.2 var(--hm-font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--hm-ink);
+  text-shadow: 1px 1px 0 #000;
+}
+.hm-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #121316;
+  box-shadow: 0 1px 0 #484c54;
+}
+.hm-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font: 600 0.78rem/1.15 var(--hm-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hm-dim);
+  background: linear-gradient(180deg, #3c4047 0 50%, #2b2e34 50% 100%);
+  border: 2px solid;
+  border-color: #7c818a #131518 #131518 #7c818a;
+  border-radius: 0;
+  cursor: pointer;
+}
+.hm-tab:hover { color: #fff; border-color: #9ba1ab #131518 #131518 #9ba1ab; }
+.hm-tab.is-active {
+  color: #eef7f7;
+  background: linear-gradient(180deg, #346f72 0 50%, #214a4c 50% 100%);
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+}
+
+.hm-live {
+  margin: 0;
+  padding: 6px 10px;
+  background: #1b2f31;
+  border: 2px solid;
+  border-color: #5fa3a5 #102425 #102425 #5fa3a5;
+  color: var(--hm-accent-hi);
+  font-size: 0.86rem;
+}
+.hm-live:empty { display: none; }
+
+/* ---- Granite Cards & Layout ---- */
+.hm-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .hm-grid { grid-template-columns: 1fr; }
+}
+.hm-stack { display: grid; gap: 10px; }
+
+.hm-card {
+  display: grid;
+  gap: 10px;
+  padding: 11px 13px;
+  background: #272a2f;
+  border: 2px solid;
+  border-color: #7c818a #131518 #131518 #7c818a;
+  border-radius: 0;
+  box-shadow: 0 0 0 1px #060708;
+}
+.hm-card-accent {
+  background: #1d3436;
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+  border-left-width: 3px;
+}
+.hm-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid #141517;
+  box-shadow: 0 1px 0 #484c54;
+}
+.hm-h {
+  margin: 0;
+  font: 600 0.94rem/1.2 var(--hm-font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--hm-ink);
+  text-shadow: 1px 1px 0 #000;
+}
+.hm-label {
+  display: block;
+  font: 400 0.68rem/1.2 var(--hm-caps);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hm-dim);
+}
+.hm-note { margin: 0; font-size: 0.85rem; color: var(--hm-dim); }
+.hm-meta { margin: 0; font-size: 0.8rem; color: var(--hm-mute); }
+
+/* ---- Badges & Buttons ---- */
+.hm-badges { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.hm-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  font: 600 0.72rem/1.15 var(--hm-font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--hm-dim);
+  background: #16181c;
+  border: 1px solid #4c5058;
+}
+.hm-badge-verdigris {
+  color: var(--hm-accent-hi);
+  background: #173436;
+  border-color: #5fa3a5;
+}
+.hm-badge-ok {
+  color: #a6e3b0;
+  background: #172e1d;
+  border-color: #4f8c5a;
+}
+.hm-badge-danger {
+  color: #f3b5b5;
+  background: #331919;
+  border-color: #a85454;
+}
+
+.hm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 11px;
+  font: 600 0.8rem/1.15 var(--hm-font);
+  letter-spacing: 0.04em;
+  color: var(--hm-ink);
+  background: linear-gradient(180deg, #43474f 0 50%, #34383f 50% 100%);
+  border: 2px solid;
+  border-color: #828791 #141619 #141619 #828791;
+  border-radius: 0;
+  cursor: pointer;
+}
+.hm-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #525760 0 50%, #41454d 50% 100%);
+}
+.hm-btn:disabled { opacity: 0.48; cursor: not-allowed; }
+.hm-btn-primary {
+  color: #eef7f7;
+  background: linear-gradient(180deg, #346f72 0 50%, #245153 50% 100%);
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+}
+.hm-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #3f8386 0 50%, #2c6265 50% 100%);
+}
+.hm-btn-danger {
+  color: #ffd8d8;
+  background: linear-gradient(180deg, #6d3131 0 50%, #4d1f1f 50% 100%);
+  border-color: #b46c6c #250f0f #250f0f #b46c6c;
+}
+.hm-btn.is-active {
+  color: #eef7f7;
+  background: linear-gradient(180deg, #346f72 0 50%, #245153 50% 100%);
+  border-color: #a4dadb #112a2b #112a2b #a4dadb;
+}
+
+/* ---- Lists & Rows ---- */
+.hm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+.hm-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #1a1c20;
+  border: 1px solid #40444c;
+}
+.hm-row.is-selected {
+  background: #1d3436;
+  border-color: #5fa3a5;
+  border-left: 3px solid #a4dadb;
+}
+.hm-row-main { flex: 1 1 auto; display: grid; gap: 2px; min-width: 0; }
+.hm-row-title { font-weight: 600; color: var(--hm-ink); font-size: 0.88rem; }
+.hm-actions { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+
+/* ---- Forms & Inputs ---- */
+.hm-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-end;
+}
+.hm-field { display: grid; gap: 3px; flex: 1 1 6rem; min-width: 0; }
+.hm-input, .hm-select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  font: 14px/1.2 var(--hm-font);
+  color: var(--hm-ink);
+  background: #141517;
+  border: 2px solid;
+  border-color: #101114 #6c717a #6c717a #101114;
+  border-radius: 0;
+}
+
+/* ---- Interactive Floor-Plan Build Grid ---- */
+.hm-floorplan {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  min-height: 210px;
+  background:
+    repeating-linear-gradient(0deg, rgba(95, 163, 165, 0.1) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(90deg, rgba(95, 163, 165, 0.1) 0 1px, transparent 1px 24px),
+    #14171a;
+  border: 2px solid;
+  border-color: #101114 #6c717a #6c717a #101114;
+  overflow: hidden;
+  cursor: crosshair;
+}
+.hm-fp-door {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  border: 2px dashed #d46c6c;
+  background: rgba(212, 108, 108, 0.12);
+  display: grid;
+  place-items: center;
+  font-size: 0.62rem;
+  color: #f3b5b5;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.hm-fp-item {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 2px 5px;
+  font-size: 0.68rem;
+  line-height: 1.1;
+  color: #eef7f7;
+  background: #235052;
+  border: 2px solid #7ab8ba;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.hm-fp-item.is-chest { background: #2c4a39; border-color: #68b074; }
+.hm-fp-item.is-trader { background: #2a3e54; border-color: #8cc2e8; }
+.hm-fp-preview {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 2px 6px;
+  font-size: 0.68rem;
+  color: #fff;
+  background: rgba(95, 163, 165, 0.45);
+  border: 2px dashed #a4dadb;
+  pointer-events: none;
+}
+.hm-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 6px;
+}
+.hm-cat-item {
+  display: grid;
+  gap: 4px;
+  padding: 7px 8px;
+  background: #1a1c20;
+  border: 2px solid #3d4148;
+  text-align: left;
+  cursor: pointer;
+  color: var(--hm-ink);
+  font-family: var(--hm-font);
+}
+.hm-cat-item:hover { border-color: #737882; }
+.hm-cat-item.is-selected {
+  background: #1d3436;
+  border-color: #a4dadb;
+}

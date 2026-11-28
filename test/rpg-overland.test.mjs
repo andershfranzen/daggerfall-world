@@ -487,7 +487,7 @@ describe('guards', () => {
 // ---------------------------------------------------------------------------- real data
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const ARENA2 = ['gamedata/DaggerfallGameFiles/arena2', 'gamedata/DaggerfallGameFiles/ARENA2'].map((d) => root + d).find((d) => existsSync(d));
+const ARENA2 = [process.env.ARENA2_DIR, root + 'gamedata/DaggerfallGameFiles/arena2', root + 'gamedata/DaggerfallGameFiles/ARENA2'].find((d) => d && existsSync(d));
 
 describe('real ARENA2 (Gothway Garden)', { skip: !ARENA2 && 'operator ARENA2 is not installed' }, () => {
   test('walk north out of Gothway Garden, cross into the next pixel, come back and walk into town', async () => {

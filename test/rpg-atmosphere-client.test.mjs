@@ -217,7 +217,7 @@ test('8-bit PCM converts as DFU does and audio files are found by name', () => {
 });
 
 // ---- local install (never committed; skipped when absent)
-const ARENA2 = process.env.DFW_ARENA2 || join(import.meta.dirname, '..', 'gamedata', 'DaggerfallGameFiles', 'arena2');
+const ARENA2 = process.env.ARENA2_DIR || process.env.DFW_ARENA2 || join(import.meta.dirname, '..', 'gamedata', 'DaggerfallGameFiles', 'arena2');
 const haveAudio = existsSync(join(ARENA2, 'MIDI.BSA')) && existsSync(join(ARENA2, 'DAGGER.SND'));
 
 test('local ARENA2: every MIDI.BSA song decodes and every playlist entry exists', { skip: !haveAudio && 'no local ARENA2 audio' }, async () => {

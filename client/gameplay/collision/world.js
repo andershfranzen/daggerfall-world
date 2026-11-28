@@ -27,6 +27,7 @@ import { PostIndex } from './posts.js';
 
 const F_WALK = 1; // upward-facing, may be stood on
 const F_SOLID = 2; // blocks movement and sight (everything except the ground plane)
+const F_GROUND = 4; // ground / terrain triangles (block rays & projectiles, not horizontal body slides)
 
 export class CollisionWorld {
   /**
@@ -73,8 +74,8 @@ export class CollisionWorld {
 
   /** Read-only triangle index buffers can be built in a worker. Movement scratch stays per world. */
   spatialIndex() {
-    const { bounds, walkBounds, flags, minY, maxY, cell, ox, oz, nx, nz, solid, walk } = this;
-    return { bounds, walkBounds, flags, minY, maxY, cell, ox, oz, nx, nz, solid, walk };
+    const { bounds, walkBounds, flags, minY, maxY, cell, ox, oz, nx, nz, solid, walk, ground } = this;
+    return { bounds, walkBounds, flags, minY, maxY, cell, ox, oz, nx, nz, solid, walk, ground };
   }
 
   #indexTriangles(geo, cell, g0, g1, walkGroundEnd) {
@@ -101,7 +102,8 @@ export class CollisionWorld {
       // Winding is not reliable for walkability (single-sided props, flipped planes), so any
       // near-horizontal face can be stood on, as in client/lib/ground.js.
       let f = Math.abs(ny) / len >= WALKABLE_NY ? F_WALK : 0;
-      if (!ground) f |= F_SOLID;
+      if (ground) f |= F_GROUND;
+      else f |= F_SOLID;
       this.flags[t] = f;
       this.minY[t] = Math.min(ay, by, cy);
       this.maxY[t] = Math.max(ay, by, cy);
@@ -133,6 +135,7 @@ export class CollisionWorld {
     this.nz = Math.max(1, Math.ceil((maxZ - this.oz) / cell) + 1);
     this.solid = this.#buildGrid(F_SOLID);
     this.walk = this.#buildGrid(F_WALK);
+    this.ground = this.#buildGrid(F_GROUND);
   }
 
   /** CSR grid of triangles with any of `mask` flags. Oversized triangles go to `big`. */
@@ -578,7 +581,7 @@ export class CollisionWorld {
 
   // ---- line of sight -----------------------------------------------------------------------
 
-  /** True when no solid triangle intersects the open segment between two 3D points. */
+  /** True when no solid or ground triangle intersects the open segment between two 3D points. */
   segmentClear(x1, y1, z1, x2, y2, z2, ignoreTriangle) {
     if (this.posts?.blocksSegment(x1, y1, z1, x2, y2, z2)) return false;
     const P = this.positions;
@@ -590,7 +593,14 @@ export class CollisionWorld {
       const o = t * 9;
       return segTri(x1, y1, z1, dx, dy, dz, P, o);
     };
+    const ground = this.ground;
     for (let i = 0; i < this.solid.big.length; i++) if (test(this.solid.big[i])) return false;
+    if (ground) for (let i = 0; i < ground.big.length; i++) if (test(ground.big[i])) return false;
+    const testCell = (c) => {
+      for (let i = this.solid.start[c], e = this.solid.start[c + 1]; i < e; i++) if (test(this.solid.items[i])) return true;
+      if (ground) for (let i = ground.start[c], e = ground.start[c + 1]; i < e; i++) if (test(ground.items[i])) return true;
+      return false;
+    };
     // Amanatides–Woo traversal of the XZ grid.
     const { cell, ox, oz, nx, nz } = this;
     let cx = Math.floor((x1 - ox) / cell), cz = Math.floor((z1 - oz) / cell);
@@ -600,10 +610,7 @@ export class CollisionWorld {
     let tMaxX = stepX ? ((ox + (cx + (stepX > 0 ? 1 : 0)) * cell - x1) / dx) : Infinity;
     let tMaxZ = stepZ ? ((oz + (cz + (stepZ > 0 ? 1 : 0)) * cell - z1) / dz) : Infinity;
     for (let guard = 0; guard < 100000; guard++) {
-      if (cx >= 0 && cz >= 0 && cx < nx && cz < nz) {
-        const c = cz * nx + cx;
-        for (let i = this.solid.start[c], e = this.solid.start[c + 1]; i < e; i++) if (test(this.solid.items[i])) return false;
-      }
+      if (cx >= 0 && cz >= 0 && cx < nx && cz < nz && testCell(cz * nx + cx)) return false;
       if (cx === ex && cz === ez) break;
       if (tMaxX > 1 && tMaxZ > 1) break;
       if (tMaxX < tMaxZ) { cx += stepX; tMaxX += tDeltaX; }
@@ -611,10 +618,7 @@ export class CollisionWorld {
       else {
         // Exactly through a corner: visit both side cells (supercover).
         for (const [qx, qz] of [[cx + stepX, cz], [cx, cz + stepZ]]) {
-          if (qx >= 0 && qz >= 0 && qx < nx && qz < nz) {
-            const c = qz * nx + qx;
-            for (let i = this.solid.start[c], e = this.solid.start[c + 1]; i < e; i++) if (test(this.solid.items[i])) return false;
-          }
+          if (qx >= 0 && qz >= 0 && qx < nx && qz < nz && testCell(qz * nx + qx)) return false;
         }
         cx += stepX; cz += stepZ; tMaxX += tDeltaX; tMaxZ += tDeltaZ;
       }
@@ -636,7 +640,7 @@ export class CollisionWorld {
   /** Approximate retained memory (bytes) of the index and geometry. */
   get byteSize() {
     const g = (q) => q.start.byteLength + q.items.byteLength + q.big.byteLength;
-    return this.positions.byteLength + this.flags.byteLength + this.minY.byteLength * 2 + this.stamp.byteLength + g(this.solid) + g(this.walk) + (this.posts?.byteSize ?? 0);
+    return this.positions.byteLength + this.flags.byteLength + this.minY.byteLength * 2 + this.stamp.byteLength + g(this.solid) + g(this.walk) + (this.ground ? g(this.ground) : 0) + (this.posts?.byteSize ?? 0);
   }
 }
 

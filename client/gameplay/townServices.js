@@ -194,6 +194,16 @@ export function install(api) {
       el('dl', { class: 'tsv-purse' }, el('dt', { text: 'Gold carried' }), el('dd', { text: String(ch.gold ?? 0) }),
         el('dt', { text: 'Account here' }), el('dd', { text: place ? String(ts().accounts?.[regionKey(place.region)]?.gold ?? 0) : '—' }))));
 
+    const contextualLinks = [
+      api.getPanel?.('market') ? el('button', { type: 'button', class: 'tsv-btn', onclick: () => api.openPanel('market') }, 'Market Board') : null,
+      api.getPanel?.('pvp') ? el('button', { type: 'button', class: 'tsv-btn', onclick: () => api.openPanel('pvp') }, 'Land PvP & Arena') : null,
+      api.getPanel?.('coopWorld') ? el('button', { type: 'button', class: 'tsv-btn', onclick: () => api.openPanel('coopWorld') }, 'Co-op & Delves') : null,
+    ].filter(Boolean);
+    if (contextualLinks.length) {
+      wrap.append(el('section', { class: 'tsv-box', 'aria-label': 'Town boards and halls' },
+        el('h3', { class: 'tsv-h4', text: 'Town Boards & Activities' }),
+        el('div', { class: 'tsv-row' }, contextualLinks)));
+    }
     wrap.append(countersSection(here));
     const cols = el('div', { class: 'tsv-cols' });
     cols.append(bankSection(bank, place));

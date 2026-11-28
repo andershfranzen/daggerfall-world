@@ -15,7 +15,7 @@ import { readQrc } from '../server/rpg/quests/qrc.js';
 import { expand } from '../server/rpg/quests/text.js';
 import { loadCatalog, catalogReport, metaFromName, parseQuestList } from '../server/rpg/quests/catalog.js';
 
-const ARENA2 = ['gamedata/DaggerfallGameFiles/arena2', 'gamedata/arena2', 'gamedata/ARENA2'].find((d) => existsSync(join(d, 'A0C00Y10.QBN')));
+const ARENA2 = [process.env.ARENA2_DIR, 'gamedata/DaggerfallGameFiles/arena2', 'gamedata/arena2', 'gamedata/ARENA2'].filter(Boolean).find((d) => existsSync(join(d, 'A0C00Y10.QBN')));
 const DFU_QUESTS = '.ref/daggerfall-unity/Assets/StreamingAssets/Quests';
 
 test('building macros preserve proper names, including when the quest supplies the article', () => {

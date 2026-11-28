@@ -1,4 +1,4 @@
-/* Party & Trade screen (client/gameplay/social.js). Scoped to .soc-root, plus channel chat lines.
+/* Social screen (client/gameplay/social.js): Fellowship, Trade, Friends & Blocks, Letters, Group Travel.
  * Authentic 1996 Daggerfall carved grey granite & oxidized verdigris marble. */
 
 .soc-root {
@@ -25,6 +25,52 @@
 }
 .soc-root > *, .soc-col, .soc-sec, .soc-row, .soc-pick, .soc-name, .soc-item-name { min-width: 0; }
 .soc-root .btn, .soc-root .btn-primary { width: auto; }
+
+/* ---- Top sub-tab bar ---- */
+.soc-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #121316;
+  box-shadow: 0 1px 0 #484c54;
+}
+.soc-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  font: 600 0.78rem/1.15 var(--soc-head);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--soc-dim);
+  background: linear-gradient(180deg, #3c4047 0 50%, #2b2e34 50% 100%);
+  border: 2px solid;
+  border-color: #7c818a #131518 #131518 #7c818a;
+  border-radius: 0;
+  cursor: pointer;
+}
+.soc-tab-btn:hover { color: #fff; border-color: #9ba1ab #131518 #131518 #9ba1ab; }
+.soc-tab-btn.is-active {
+  color: #eef7f7;
+  background: linear-gradient(180deg, #346f72 0 50%, #214a4c 50% 100%);
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+}
+.soc-tab-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font: 700 0.7rem/1.1 var(--soc-mono);
+  background: var(--soc-deep);
+  color: var(--soc-accent-hi);
+  border: 1px solid var(--soc-accent);
+}
+.soc-tab-badge.is-alert {
+  background: #6d2620;
+  color: #fff6e6;
+  border-color: #d6856a;
+}
+
+.soc-tab-panel { display: grid; gap: 12px; }
 
 .soc-live { margin: 0; color: var(--soc-accent-hi); font-size: 0.86rem; }
 .soc-live:empty { display: none; }
@@ -57,10 +103,14 @@
   background-size: auto, 204px 336px;
   image-rendering: pixelated;
 }
-.soc-invites, .soc-trade {
+.soc-invites, .soc-trade, .soc-report {
   border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
   border-left-width: 3px;
   background-color: #1f3739;
+}
+.soc-report {
+  border-color: #b86c64 #2a1210 #2a1210 #b86c64;
+  background-color: #311d1c;
 }
 .soc-sec-head {
   display: flex;
@@ -90,7 +140,7 @@
   white-space: nowrap;
 }
 .soc-h4 {
-  margin: 0 0 6px;
+  margin: 2px 0 4px;
   font: 600 0.74rem/1.2 var(--soc-head);
   color: var(--soc-accent-hi);
   text-transform: uppercase;
@@ -105,8 +155,81 @@
   background: rgba(35, 80, 82, 0.4);
   border-left: 2px solid var(--soc-accent);
 }
+.soc-warn-note {
+  margin: 0;
+  padding: 6px 9px;
+  font-size: 0.82rem;
+  color: #f7dfc0;
+  background: rgba(128, 72, 26, 0.35);
+  border-left: 2px solid #d49448;
+}
 
-/* ---- Fellowship slots ---- */
+/* ---- Shared forms & inputs ---- */
+.soc-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.soc-input-grow {
+  flex: 1 1 10rem;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 0.86rem;
+  background: var(--soc-deep);
+  color: var(--soc-ink);
+  border: 2px solid;
+  border-color: #0e1012 #5c616a #5c616a #0e1012;
+}
+.soc-input-sm {
+  flex: 0 1 8.5rem;
+  min-width: 6rem;
+  padding: 5px 8px;
+  font-size: 0.86rem;
+  background: var(--soc-deep);
+  color: var(--soc-ink);
+  border: 2px solid;
+  border-color: #0e1012 #5c616a #5c616a #0e1012;
+}
+.soc-select, .soc-select-sm {
+  padding: 4px 8px;
+  font-size: 0.84rem;
+  background: var(--soc-deep);
+  color: var(--soc-ink);
+  border: 2px solid;
+  border-color: #0e1012 #5c616a #5c616a #0e1012;
+}
+.soc-select { width: 100%; }
+.soc-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font: 14px/1.4 var(--font-ui, sans-serif);
+  background: var(--soc-deep);
+  color: var(--soc-ink);
+  border: 2px solid;
+  border-color: #0e1012 #5c616a #5c616a #0e1012;
+  resize: vertical;
+}
+.soc-privacy-form { display: grid; gap: 8px; }
+.soc-field { display: grid; gap: 3px; }
+.soc-field-label { font: 600 0.74rem/1.1 var(--soc-head); color: var(--soc-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.soc-check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.84rem; color: var(--soc-ink); cursor: pointer; }
+.soc-subblock { display: grid; gap: 5px; }
+
+/* ---- Fellowship slots & Location sharing ---- */
+.soc-share-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #17191c;
+  border: 1px solid #42464e;
+}
+.soc-share-label { font: 600 0.72rem/1 var(--soc-head); text-transform: uppercase; letter-spacing: 0.06em; color: var(--soc-dim); }
+
 .soc-slots { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
 .soc-slot {
   display: flex;
@@ -157,6 +280,77 @@
   background: var(--soc-deep);
 }
 .soc-badge-gold { border-color: #7ab8ba; color: #eef7f7; background: var(--soc-sel); }
+
+/* ---- Party Coordination / Ready Check ---- */
+.soc-travel-box, .soc-ready-check { display: grid; gap: 8px; }
+.soc-travel-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.soc-ready-check {
+  padding: 8px 10px;
+  background: rgba(31, 55, 57, 0.72);
+  border: 2px solid;
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+}
+.soc-ready-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.soc-ready-title { font: 600 0.86rem/1.2 var(--soc-head); color: #eef7f7; text-transform: uppercase; letter-spacing: 0.05em; }
+.soc-ready-list {
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 6px;
+}
+.soc-ready-row.is-ready { border-color: #559460 #0e1c11 #0e1c11 #559460; background: rgba(42, 82, 50, 0.25); }
+.soc-ready-row.is-blocked { border-color: #9e4840 #240a08 #240a08 #9e4840; background: rgba(94, 30, 26, 0.25); }
+.soc-quote-box { display: grid; gap: 6px; }
+.soc-ping-list { max-height: 9rem; overflow-y: auto; }
+
+/* ---- Mailbox & Threads ---- */
+.soc-mail-compose, .soc-reply-form {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
+  background: #17191c;
+  border: 2px solid;
+  border-color: #5fa3a5 #112a2b #112a2b #5fa3a5;
+}
+.soc-mail-list { max-height: 19rem; overflow-y: auto; }
+.soc-mail-row.is-unread {
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+  background: rgba(35, 80, 82, 0.28);
+}
+.soc-mail-row.is-unread .soc-name { color: #ffffff; }
+.soc-thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+.soc-letter-card {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #17191c;
+  border: 2px solid;
+  border-color: #0e1012 #5c616a #5c616a #0e1012;
+}
+.soc-letter-card.is-sent {
+  border-left: 3px solid var(--soc-accent);
+  background: #1b2226;
+}
+.soc-letter-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 0.84rem; }
+.soc-letter-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--soc-ink);
+  padding: 6px 8px;
+  background: #111316;
+  border: 1px solid #353941;
+}
+.soc-letter-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.soc-friends-list { max-height: 18rem; overflow-y: auto; }
 
 /* ---- Trade Satchel (idle overview) ---- */
 .soc-satchel-stats {

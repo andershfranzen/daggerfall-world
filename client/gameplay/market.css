@@ -1,0 +1,537 @@
+/* Contextual Player Market Board & House Trader UI (client/gameplay/market.js).
+ * Authentic 1996 Daggerfall carved grey granite & oxidized verdigris marble:
+ * hard 2px pixel bevels, 0px border-radius, crisp tabular numerals, high contrast. */
+
+.mkt-root {
+  --mkt-panel: var(--surface-1, #232529);
+  --mkt-deep: var(--surface-0, #141517);
+  --mkt-raise: var(--surface-2, #31343a);
+  --mkt-raise-hi: var(--surface-3, #40444c);
+  --mkt-line: var(--border-subtle, #4c5058);
+  --mkt-line-hi: var(--border-strong, #737882);
+  --mkt-ink: var(--text, #e6e9ee);
+  --mkt-dim: var(--text-2, #b4bac4);
+  --mkt-mute: var(--text-3, #838a94);
+  --mkt-sel: var(--accent-bg, #235052);
+  --mkt-sel-hi: var(--accent-bg-hi, #2e676a);
+  --mkt-accent: var(--accent, #5fa3a5);
+  --mkt-accent-hi: var(--accent-hi, #a4dadb);
+  --mkt-ok: var(--ok, #68b074);
+  --mkt-warn: #d8c18b;
+  --mkt-danger: var(--danger, #d46c6c);
+  --mkt-head: var(--font-heading, "DFW Five", "DFW Pixel", "Pixelify Sans", ui-sans-serif, sans-serif);
+  --mkt-mono: var(--font-mono, "DFW Five", "DFW Pixel", ui-monospace, Menlo, Consolas, monospace);
+
+  color: var(--mkt-ink);
+  font: 14px/1.45 var(--font-ui, "DFW Five", "DFW Pixel", ui-sans-serif, sans-serif);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mkt-root *,
+.mkt-root *::before,
+.mkt-root *::after {
+  box-sizing: border-box;
+}
+
+/* ---- Top Header Banner ---- */
+.mkt-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, #32363d 0%, #24272c 100%);
+  border: 2px solid;
+  border-color: #828791 #121316 #121316 #828791;
+  box-shadow: 0 0 0 1px #060708, 3px 3px 0 rgba(0, 0, 0, 0.55);
+}
+
+.mkt-banner-title {
+  display: grid;
+  gap: 2px;
+}
+
+.mkt-title {
+  margin: 0;
+  font: 600 1.08rem/1.15 var(--mkt-head);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #eef7f7;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.mkt-subtitle {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--mkt-dim);
+}
+
+.mkt-wallet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mkt-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--mkt-deep);
+  border: 2px solid;
+  border-color: #0e1012 #595e68 #595e68 #0e1012;
+  font: 600 0.82rem/1.1 var(--mkt-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--mkt-ink);
+}
+
+.mkt-stat-pill strong {
+  color: var(--mkt-accent-hi);
+}
+
+.mkt-stat-pill.is-gold strong {
+  color: #e6d7a8;
+}
+
+/* ---- Sub-Tab Navigation Strip ---- */
+.mkt-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #121316;
+  box-shadow: 0 1px 0 #484c54;
+}
+
+.mkt-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  font: 600 0.8rem/1.15 var(--mkt-head);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--mkt-dim);
+  background: linear-gradient(180deg, #3c4047 0 50%, #2b2e34 50% 100%);
+  border: 2px solid;
+  border-color: #7c818a #131518 #131518 #7c818a;
+  border-radius: 0;
+  text-shadow: 1px 1px 0 #000;
+  cursor: pointer;
+}
+
+.mkt-tab-btn:hover {
+  color: #fff;
+  background: linear-gradient(180deg, #4b5059 0 50%, #373b42 50% 100%);
+  border-color: #9ba1ab #131518 #131518 #9ba1ab;
+}
+
+.mkt-tab-btn.is-active {
+  color: #eef7f7;
+  background: linear-gradient(180deg, #346f72 0 50%, #214a4c 50% 100%);
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+}
+
+.mkt-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font: 700 0.7rem/1.1 var(--mkt-mono);
+  font-variant-numeric: tabular-nums;
+  background: var(--mkt-deep);
+  color: var(--mkt-accent-hi);
+  border: 1px solid var(--mkt-accent);
+}
+
+.mkt-badge.is-alert {
+  background: #5c2521;
+  color: #ffe8d9;
+  border-color: #d46c6c;
+}
+
+.mkt-badge.is-ok {
+  background: #1f4528;
+  color: #c8f2cf;
+  border-color: var(--mkt-ok);
+}
+
+/* ---- Status / Notice Banner ---- */
+.mkt-notice {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 0.86rem;
+  border: 2px solid;
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+  border-left-width: 4px;
+  background: rgba(31, 55, 57, 0.75);
+  color: #eef7f7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mkt-notice.is-error {
+  border-color: #c46a64 #2a1210 #2a1210 #c46a64;
+  background: rgba(84, 28, 25, 0.78);
+  color: #ffdcd8;
+}
+
+.mkt-notice.is-stale {
+  border-color: #c8a85c #2c2410 #2c2410 #c8a85c;
+  background: rgba(74, 58, 22, 0.78);
+  color: #fff0c8;
+}
+
+/* ---- Panels & Grid ---- */
+.mkt-panel {
+  display: grid;
+  gap: 10px;
+  padding: 11px 14px 13px;
+  background-color: #272a2f;
+  border: 2px solid;
+  border-color: #7c818a #131518 #131518 #7c818a;
+  box-shadow: 0 0 0 1px #060708;
+}
+
+.mkt-panel-verdigris {
+  background-color: #1f3638;
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+  border-left-width: 3px;
+}
+
+.mkt-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid #121316;
+  box-shadow: 0 1px 0 #484c54;
+}
+
+.mkt-h {
+  margin: 0;
+  font: 600 0.92rem/1.15 var(--mkt-head);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mkt-ink);
+  text-shadow: 1px 1px 0 #000;
+}
+
+.mkt-grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.85fr);
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .mkt-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- Filter Bar & Inputs ---- */
+.mkt-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.mkt-input,
+.mkt-select {
+  padding: 5px 8px;
+  font: 13px/1.25 var(--font-ui, sans-serif);
+  background: var(--mkt-deep);
+  color: var(--mkt-ink);
+  border: 2px solid;
+  border-color: #0e1012 #5c616a #5c616a #0e1012;
+  border-radius: 0;
+}
+
+.mkt-input:focus-visible,
+.mkt-select:focus-visible {
+  outline: 2px solid var(--mkt-accent-hi);
+  outline-offset: 1px;
+}
+
+.mkt-input-grow {
+  flex: 1 1 11rem;
+  min-width: 8rem;
+}
+
+.mkt-input-num {
+  width: 5.5rem;
+  font-family: var(--mkt-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ---- Buttons (Granite & Verdigris) ---- */
+.mkt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 1.9rem;
+  padding: 4px 11px;
+  font: 600 0.75rem/1.15 var(--mkt-head);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--mkt-ink);
+  text-shadow: 1px 1px 0 #000;
+  background: linear-gradient(180deg, #43474f 0 50%, #34383f 50% 100%);
+  border: 2px solid;
+  border-color: #828791 #141619 #141619 #828791;
+  border-radius: 0;
+  box-shadow: 0 0 0 1px #060708;
+  cursor: pointer;
+}
+
+.mkt-btn:hover:not(:disabled) {
+  color: #fff;
+  background: linear-gradient(180deg, #525760 0 50%, #41454d 50% 100%);
+  border-color: #9ba1ab #141619 #141619 #9ba1ab;
+}
+
+.mkt-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mkt-btn-primary {
+  color: #eef7f7;
+  background: linear-gradient(180deg, #346f72 0 50%, #245153 50% 100%);
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+}
+
+.mkt-btn-primary:hover:not(:disabled) {
+  color: #fff;
+  background: linear-gradient(180deg, #3f8386 0 50%, #2c6265 50% 100%);
+  border-color: var(--mkt-accent-hi) #112a2b #112a2b var(--mkt-accent-hi);
+}
+
+.mkt-btn-danger {
+  color: #ffe2df;
+  background: linear-gradient(180deg, #6d312e 0 50%, #52211f 50% 100%);
+  border-color: #b46a66 #240d0c #240d0c #b46a66;
+}
+
+/* ---- Tables / Lists ---- */
+.mkt-table-wrap {
+  overflow-x: auto;
+  background: var(--mkt-deep);
+  border: 2px solid;
+  border-color: #0e1012 #525760 #525760 #0e1012;
+}
+
+.mkt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.mkt-table th {
+  padding: 6px 9px;
+  text-align: left;
+  font: 600 0.72rem/1.2 var(--mkt-head);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mkt-accent-hi);
+  background: #1b1e22;
+  border-bottom: 2px solid #3c4048;
+  white-space: nowrap;
+}
+
+.mkt-table td {
+  padding: 7px 9px;
+  border-bottom: 1px solid #2b2f36;
+  vertical-align: middle;
+}
+
+.mkt-table tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.mkt-table tr:hover td {
+  background: rgba(95, 163, 165, 0.09);
+}
+
+.mkt-num {
+  font-family: var(--mkt-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mkt-price {
+  color: #e6d7a8;
+  font-weight: 600;
+}
+
+.mkt-item-cell {
+  display: grid;
+  gap: 2px;
+}
+
+.mkt-item-name {
+  font-weight: 600;
+  color: var(--mkt-ink);
+}
+
+.mkt-item-meta {
+  font-size: 0.76rem;
+  color: var(--mkt-dim);
+}
+
+.mkt-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  margin-right: 4px;
+  font: 600 0.66rem/1.15 var(--mkt-head);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: #23262b;
+  color: var(--mkt-dim);
+  border: 1px solid #4c5058;
+}
+
+.mkt-tag.is-trader {
+  background: #1d3c3e;
+  color: var(--mkt-accent-hi);
+  border-color: var(--mkt-accent);
+}
+
+.mkt-tag.is-enchanted {
+  background: #222b44;
+  color: #b8ccf6;
+  border-color: #5b78b8;
+}
+
+.mkt-tag.is-snipe {
+  background: #47321a;
+  color: #f3d79e;
+  border-color: #b58d46;
+}
+
+.mkt-tag.is-crafted {
+  background: #273828;
+  color: #b5dfb8;
+  border-color: #5b8f60;
+}
+
+.mkt-actions-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+/* ---- Forms & Quote Breakdown ---- */
+.mkt-form {
+  display: grid;
+  gap: 8px;
+}
+
+.mkt-field {
+  display: grid;
+  gap: 3px;
+}
+
+.mkt-field-label {
+  font: 600 0.72rem/1.1 var(--mkt-head);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mkt-dim);
+}
+
+.mkt-form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mkt-quote-box {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--mkt-deep);
+  border: 1px solid var(--mkt-line);
+  border-left: 3px solid var(--mkt-accent);
+  font: 0.8rem/1.35 var(--mkt-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.mkt-quote-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mkt-quote-line.is-total {
+  padding-top: 4px;
+  border-top: 1px solid #353940;
+  color: var(--mkt-accent-hi);
+  font-weight: 600;
+}
+
+/* ---- Pagination & Empty States ---- */
+.mkt-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--mkt-dim);
+}
+
+.mkt-empty {
+  margin: 0;
+  padding: 14px;
+  text-align: center;
+  color: var(--mkt-mute);
+  font-style: italic;
+}
+
+/* ---- Cap Meter Bar ---- */
+.mkt-cap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 8px;
+}
+
+.mkt-cap-card {
+  padding: 7px 10px;
+  background: var(--mkt-deep);
+  border: 1px solid var(--mkt-line);
+  display: grid;
+  gap: 4px;
+}
+
+.mkt-cap-label {
+  font: 600 0.72rem/1.1 var(--mkt-head);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mkt-dim);
+  display: flex;
+  justify-content: space-between;
+}
+
+.mkt-cap-bar {
+  height: 6px;
+  background: #1d2024;
+  border: 1px solid #3b3f47;
+}
+
+.mkt-cap-fill {
+  height: 100%;
+  background: var(--mkt-accent);
+}

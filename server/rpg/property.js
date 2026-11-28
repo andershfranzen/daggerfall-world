@@ -194,7 +194,9 @@ export function install(ctx) {
     const owned = new Set(Object.values(stateOf(p).houses).map((h) => h.interior));
     const houses = housesForSale(tp.houses, {
       town, monthIndex: Math.trunc(now / MINUTES_PER_MONTH), buildingCount: tp.buildingCount,
-      excluded: (h) => owned.has(h.interior) || services.quests?.active?.(p)?.some?.((q) => Object.values(q.places ?? {}).some((s) => s?.interior === h.interior)),
+      excluded: (h) => owned.has(h.interior)
+        || (typeof services.homes?.isAddressAvailable === 'function' && !services.homes.isAddressAvailable(h.interior))
+        || services.quests?.active?.(p)?.some?.((q) => Object.values(q.places ?? {}).some((s) => s?.interior === h.interior)),
     });
     return { status: 'ready', port: tp.port === true, houses, regionIndex: tp.regionIndex };
   }
@@ -427,6 +429,7 @@ export function install(ctx) {
     if (args.expectPrice !== undefined && args.expectPrice !== house.price) fail(`The price is now ${house.price} gold. Look again.`);
     const paid = pay(p, region, house.price);
     allocateHouse(p, { region, regionIndex: regionIndex ?? offers.regionIndex ?? null, town: place.town, house, price: house.price });
+    services.homes?.migrateLegacyDeeds?.(p);
     say(p, `You buy the house for ${house.price} gold (${paid.fromPurse} carried, ${paid.fromAccount} from your account). The deed is in your name.`, { house: st.houses[key] });
   });
 

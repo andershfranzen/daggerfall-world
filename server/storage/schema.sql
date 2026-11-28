@@ -32,11 +32,72 @@ CREATE INDEX IF NOT EXISTS players_rpg_gin_idx
   ON players USING GIN (rpg jsonb_path_ops);
 
 CREATE TABLE IF NOT EXISTS account_characters (
-  account_id TEXT PRIMARY KEY,
-  player_id BIGINT NOT NULL UNIQUE REFERENCES players(id) ON DELETE CASCADE,
+  player_id BIGINT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL,
+  slot INTEGER NOT NULL DEFAULT 1 CHECK (slot >= 1),
   username TEXT NOT NULL,
-  linked_at BIGINT NOT NULL
+  display_name TEXT NOT NULL DEFAULT '',
+  display_name_key TEXT NOT NULL DEFAULT '',
+  grandfathered BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  draft BOOLEAN NOT NULL DEFAULT FALSE,
+  linked_at BIGINT NOT NULL,
+  last_played_at BIGINT,
+  last_selected BOOLEAN NOT NULL DEFAULT FALSE,
+  archived_at BIGINT,
+  purge_after BIGINT,
+  UNIQUE (account_id, slot)
 );
+
+-- Additive migration for pre-v5 single-slot PostgreSQL databases:
+-- converts account_id PK -> player_id PK and backfills existing linked characters into slot 1 as grandfathered.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'account_characters'
+       AND column_name = 'slot'
+  ) THEN
+    ALTER TABLE account_characters DROP CONSTRAINT IF EXISTS account_characters_pkey;
+    ALTER TABLE account_characters ADD COLUMN slot INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE account_characters ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE account_characters ADD COLUMN display_name_key TEXT NOT NULL DEFAULT '';
+    ALTER TABLE account_characters ADD COLUMN grandfathered BOOLEAN NOT NULL DEFAULT TRUE;
+    ALTER TABLE account_characters ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+    ALTER TABLE account_characters ADD COLUMN draft BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE account_characters ADD COLUMN last_played_at BIGINT;
+    ALTER TABLE account_characters ADD COLUMN last_selected BOOLEAN NOT NULL DEFAULT TRUE;
+    ALTER TABLE account_characters ADD COLUMN archived_at BIGINT;
+    ALTER TABLE account_characters ADD COLUMN purge_after BIGINT;
+
+    UPDATE account_characters a
+       SET display_name = p.name,
+           display_name_key = LOWER(BTRIM(p.name)),
+           grandfathered = TRUE,
+           last_played_at = p.last_seen,
+           last_selected = TRUE
+      FROM players p
+     WHERE p.id = a.player_id;
+
+    ALTER TABLE account_characters ADD PRIMARY KEY (player_id);
+    ALTER TABLE account_characters ADD CONSTRAINT account_characters_account_slot_key UNIQUE (account_id, slot);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_account_characters_account
+  ON account_characters (account_id, slot);
+
+CREATE INDEX IF NOT EXISTS idx_account_characters_name_key
+  ON account_characters (display_name_key);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_characters_name_unique
+  ON account_characters (display_name_key)
+  WHERE NOT grandfathered AND display_name_key <> '';
+
+CREATE INDEX IF NOT EXISTS idx_account_characters_purge
+  ON account_characters (status, purge_after)
+  WHERE status = 'archived';
 
 CREATE TABLE IF NOT EXISTS world_state (
   key TEXT PRIMARY KEY,
@@ -46,6 +107,83 @@ CREATE TABLE IF NOT EXISTS world_state (
 
 CREATE INDEX IF NOT EXISTS world_state_key_prefix_idx
   ON world_state (key text_pattern_ops);
+
+-- ---------------------------------------------------------------- durable ops, escrow & claims
+
+CREATE TABLE IF NOT EXISTS durable_ops (
+  scope_key TEXT NOT NULL,
+  op_key TEXT NOT NULL,
+  params_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'committed',
+  result JSONB,
+  account_id TEXT,
+  character_id BIGINT,
+  resource_key TEXT,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  expires_at BIGINT,
+  PRIMARY KEY (scope_key, op_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_ops_account
+  ON durable_ops (account_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_durable_ops_expires
+  ON durable_ops (expires_at)
+  WHERE expires_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS escrow_records (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  owner_account_id TEXT,
+  owner_character_id BIGINT,
+  counterparty_character_id BIGINT,
+  source_ref TEXT,
+  gold BIGINT NOT NULL DEFAULT 0,
+  item_json JSONB,
+  status TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held', 'released', 'settled', 'refunded', 'expired')),
+  revision INTEGER NOT NULL DEFAULT 1,
+  expires_at BIGINT,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_escrow_owner_status
+  ON escrow_records (owner_character_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_escrow_counterparty_status
+  ON escrow_records (counterparty_character_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_escrow_due
+  ON escrow_records (status, expires_at)
+  WHERE expires_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_escrow_source
+  ON escrow_records (source_ref)
+  WHERE source_ref IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS claim_records (
+  id TEXT PRIMARY KEY,
+  owner_character_id BIGINT NOT NULL,
+  owner_account_id TEXT,
+  kind TEXT NOT NULL,
+  source_ref TEXT,
+  gold BIGINT NOT NULL DEFAULT 0,
+  item_json JSONB,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'expired', 'forfeited')),
+  reason TEXT,
+  revision INTEGER NOT NULL DEFAULT 1,
+  expires_at BIGINT,
+  created_at BIGINT NOT NULL,
+  claimed_at BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS idx_claims_owner_status
+  ON claim_records (owner_character_id, status, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS idx_claims_due
+  ON claim_records (status, expires_at)
+  WHERE expires_at IS NOT NULL;
 
 -- ---------------------------------------------------------------- accounts store
 
@@ -199,5 +337,6 @@ CREATE INDEX IF NOT EXISTS idx_hiscores_orders_treasury
 INSERT INTO schema_migrations (version, name)
 VALUES (2, 'initial_postgres_schema'),
        (3, 'account_recovery_and_chat_log'),
-       (4, 'chronicles_hiscores')
+       (4, 'chronicles_hiscores'),
+       (5, 'durable_ops_and_character_slots')
 ON CONFLICT (version) DO NOTHING;

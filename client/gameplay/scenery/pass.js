@@ -8,6 +8,7 @@
 import { DISTANCE_FOG } from '../../render/visibility.js';
 import { createProgram, PALETTE } from '../../render/renderer.js';
 import { BILLBOARD_STRIDE } from '../../world/scenery/index.js';
+import { DEFAULT_SKY_STATE } from '../../render/sky-dome.js';
 
 const HEAD = `
 #ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -129,6 +130,32 @@ function texture(gl, img) {
   return t;
 }
 
+const PANO_ROWS = 256;
+
+/**
+ * A panorama for the sky dome (client/render/sky-dome.js): the image in the top rows of a 256-row texture, so
+ * it may repeat around the horizon and filter across the seam on WebGL 1 as well.
+ */
+function panoTexture(gl, img, into = null) {
+  const t = into ?? gl.createTexture();
+  const row = img.width * 4;
+  const padded = new Uint8Array(row * PANO_ROWS);
+  padded.set(img.pixels.subarray(0, row * Math.min(img.height, PANO_ROWS)));
+  const last = img.pixels.subarray(row * (img.height - 1), row * img.height);
+  for (let y = img.height; y < PANO_ROWS; y++) padded.set(last, y * row);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, img.width, PANO_ROWS, 0, gl.RGBA, gl.UNSIGNED_BYTE, padded);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+const mix3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+
 /** Interleave terrain arrays: pos3 nrm3 tile2 rect4. */
 export function interleaveTerrain(terrain) {
   const n = terrain.positions.length / 3;
@@ -209,6 +236,45 @@ export class SceneryPass {
     if (!hadSky) { this.res = null; return; } // no sky program yet: the next draw initialises everything
     if (this.res.skyTex) this.gl?.deleteTexture(this.res.skyTex);
     this.res.skyTex = this.gl ? texture(this.gl, sky) : null;
+    this.#dropPano();
+  }
+
+  #dropPano() {
+    const gl = this.gl, pano = this.res?.pano;
+    if (!pano) return;
+    this.res.pano = null;
+    if (gl) for (const t of [pano.a.tex, pano.b.tex, pano.night]) if (t) gl.deleteTexture(t);
+  }
+
+  /**
+   * The classic panorama set into the renderer's sky dome: the two day frames around the current minute (a sky
+   * read with every frame, world/scenery/sky.js readClassicSky; otherwise its one frame) and the night image.
+   */
+  #drawDome(gl, renderer, r) {
+    const sky = this.data.sky;
+    const st = renderer.skyState ?? DEFAULT_SKY_STATE;
+    const timed = typeof sky.frameAt === 'function';
+    const want = timed ? st.frames : { frame: sky.frame ?? 0, next: sky.frame ?? 0, blend: 0 };
+    const pano = r.pano ??= { a: { frame: -1, tex: null, img: null }, b: { frame: -1, tex: null, img: null }, night: null };
+    if (pano.a.frame !== want.frame && pano.b.frame === want.frame) [pano.a, pano.b] = [pano.b, pano.a]; // time moved on one frame
+    for (const [slot, frame] of [[pano.a, want.frame], [pano.b, want.next]]) {
+      if (slot.frame === frame && slot.tex) continue;
+      slot.img = timed ? sky.frameAt(frame) : sky;
+      slot.tex = panoTexture(gl, slot.img, slot.tex);
+      slot.frame = frame;
+    }
+    if (!pano.night && sky.night) pano.night = panoTexture(gl, sky.night);
+    gl.depthFunc(gl.LEQUAL); // only where nothing was drawn: the depth buffer still holds its cleared 1.0 there
+    gl.depthMask(false);
+    renderer.drawSkyDome({
+      texA: pano.a.tex, texB: pano.b.tex, texN: pano.night, blend: want.blend,
+      top: mix3(pano.a.img.zenith, pano.b.img.zenith, want.blend),
+      mid: mix3(pano.a.img.mid ?? pano.a.img.zenith, pano.b.img.mid ?? pano.b.img.zenith, want.blend),
+      horizon: mix3(pano.a.img.horizon, pano.b.img.horizon, want.blend),
+    });
+    gl.activeTexture(gl.TEXTURE0);
+    gl.depthFunc(gl.LESS);
+    gl.depthMask(true);
   }
 
   /** Renderer pass entry point: fn(gl, renderer, camera). */
@@ -257,7 +323,12 @@ export class SceneryPass {
       gl.drawArrays(gl.TRIANGLES, 0, this.data.billboards.count);
     }
 
-    if (r.sky) {
+    const dome = typeof renderer.drawSkyDome === 'function';
+    if (r.sky && dome && renderer.skyState === null) {
+      // No sky to see (underwater): the renderer's plain gradient in the water's colour stays.
+    } else if (r.sky && dome && renderer.domeActive()) {
+      this.#drawDome(gl, renderer, r);
+    } else if (r.sky) {
       // Only where nothing was drawn: the depth buffer still holds its cleared 1.0 there.
       const p = r.sky;
       gl.useProgram(p.p);
@@ -281,6 +352,7 @@ export class SceneryPass {
 
   release() {
     const gl = this.gl, r = this.res;
+    this.#dropPano();
     this.res = null;
     if (!gl || !r) return;
     for (const k of ['flatBuf', 'terrainBuf', 'skyBuf']) if (r[k]) gl.deleteBuffer(r[k]);

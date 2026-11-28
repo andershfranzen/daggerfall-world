@@ -141,8 +141,9 @@ export function install(ctx, options = {}) {
     return climateRegionOf(loc);
   }
   const kindOf = (location) => parseLocation(location)?.kind ?? (String(location).startsWith('wilderness:') ? 'wilderness' : 'other');
-  /** Towns and their buildings have a City Watch; dungeons and the wilderness do not (classic). */
+  /** Towns and their buildings have a City Watch; dungeons, wilderness, and declared PvP scenes do not. */
   const policed = (location) => {
+    if (S.pvp?.isUnpolicedScene?.(location)) return false;
     const k = kindOf(location);
     return k === 'town' || k === 'interior';
   };
@@ -259,8 +260,9 @@ export function install(ctx, options = {}) {
    * A crime by `p`. Unwitnessed crimes change nothing but the guild tally. A witnessed crime in a policed place opens
    * (or upgrades) the character's single charge in that region and dispatches the watch. Returns the charge or null.
    */
-  function commit(p, crime, { location = ctx.location(p), witnessed = true, at = null } = {}) {
+  function commit(p, crime, { location = ctx.location(p), witnessed = true, at = null, pvp = false } = {}) {
     if (!isCrime(crime)) throw new TypeError(`unknown crime ${crime}`);
+    if (S.pvp?.isLegalPvpCrimeSuppressed?.(p, crime, { location, witnessed, pvp })) return null;
     const region = regionOf(location);
     ctx.emit('crimeCommitted', { player: p, crime, region, witnessed: !!witnessed });
     if (!witnessed || !policed(location) || custody(p)) return null;

@@ -1,0 +1,273 @@
+/* Co-op, Smaller Dungeons, Instances, Delves, Living World & Survival UI */
+
+.cw-panel {
+  display: grid;
+  gap: 14px;
+  color: #e8dfc9;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.cw-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid rgba(215, 180, 106, 0.32);
+  padding-bottom: 8px;
+}
+
+.cw-tab {
+  background: rgba(18, 25, 36, 0.85);
+  color: #cfc4a8;
+  border: 1px solid rgba(215, 180, 106, 0.28);
+  border-radius: 3px;
+  padding: 6px 11px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cw-tab.active {
+  background: linear-gradient(180deg, rgba(160, 120, 48, 0.45), rgba(85, 62, 24, 0.65));
+  color: #fff4d8;
+  border-color: #d7b46a;
+}
+
+.cw-status {
+  padding: 8px 12px;
+  border-left: 3px solid #d7b46a;
+  background: rgba(20, 29, 42, 0.8);
+  font-size: 13px;
+  color: #f3e4be;
+}
+
+.cw-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.cw-card {
+  background: rgba(14, 20, 30, 0.88);
+  border: 1px solid rgba(215, 180, 106, 0.32);
+  border-radius: 4px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.cw-card h3 {
+  margin: 0;
+  color: #e6c57a;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+}
+
+.cw-card h4 {
+  margin: 8px 0 0;
+  color: #d7b46a;
+  font-size: 14px;
+}
+
+.cw-muted {
+  margin: 0;
+  color: #b7ad96;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.cw-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #c8b282;
+}
+
+.cw-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.cw-between {
+  justify-content: space-between;
+}
+
+.cw-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.cw-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cw-form-row input {
+  background: rgba(9, 13, 20, 0.9);
+  border: 1px solid rgba(215, 180, 106, 0.35);
+  color: #f2e8cf;
+  padding: 5px 8px;
+  border-radius: 3px;
+  font-size: 13px;
+  min-width: 110px;
+}
+
+.cw-meta-box {
+  background: rgba(9, 13, 20, 0.72);
+  border: 1px solid rgba(114, 132, 156, 0.35);
+  border-radius: 3px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  display: grid;
+  gap: 4px;
+}
+
+.cw-item-card {
+  background: rgba(10, 15, 23, 0.8);
+  border: 1px solid rgba(215, 180, 106, 0.24);
+  border-radius: 3px;
+  padding: 10px;
+  display: grid;
+  gap: 7px;
+}
+
+.cw-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.cw-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 99px;
+  border: 1px solid rgba(215, 180, 106, 0.45);
+  background: rgba(160, 120, 48, 0.22);
+  color: #f4dfac;
+}
+
+.cw-btn,
+.cw-btn-sm,
+.cw-chip {
+  background: rgba(25, 34, 48, 0.92);
+  color: #ece2ca;
+  border: 1px solid rgba(215, 180, 106, 0.38);
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cw-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.cw-btn-sm {
+  padding: 3px 8px;
+  font-size: 11.5px;
+}
+
+.cw-chip {
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
+.cw-btn.primary,
+.cw-btn-sm.primary,
+.cw-chip.active {
+  background: linear-gradient(180deg, #8c6626, #5f4215);
+  border-color: #e4c174;
+  color: #fff7e2;
+}
+
+.cw-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+}
+
+.cw-warn {
+  color: #f3b588;
+}
+
+/* Meters */
+.cw-meter {
+  display: grid;
+  gap: 3px;
+}
+
+.cw-meter-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: #dfd3b8;
+}
+
+.cw-meter-track {
+  height: 7px;
+  background: rgba(7, 10, 15, 0.9);
+  border: 1px solid rgba(215, 180, 106, 0.28);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.cw-meter-fill {
+  height: 100%;
+  transition: width 160ms ease;
+}
+
+.cw-food .cw-meter-fill { background: linear-gradient(90deg, #a86426, #ddb050); }
+.cw-water .cw-meter-fill { background: linear-gradient(90deg, #2b6c9e, #66b4e6); }
+.cw-warmth .cw-meter-fill { background: linear-gradient(90deg, #b84426, #f09446); }
+.cw-boss .cw-meter-fill { background: linear-gradient(90deg, #8b1e24, #d94c4c); }
+
+/* In-world compact HUD overlay (top-right, clear of top bar & chat) */
+.cw-hud {
+  position: fixed;
+  top: 66px;
+  right: 16px;
+  z-index: 24;
+  width: 244px;
+  display: grid;
+  gap: 8px;
+  pointer-events: auto;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.cw-hud-card {
+  background: rgba(12, 18, 28, 0.86);
+  border: 1px solid rgba(215, 180, 106, 0.45);
+  border-radius: 4px;
+  padding: 9px 11px;
+  display: grid;
+  gap: 6px;
+  color: #eee4cc;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.cw-hud-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #ebd08c;
+}
+
+.cw-hud-sub {
+  font-size: 11.5px;
+  color: #bfb59d;
+}
+
+.cw-hud-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}

@@ -12,7 +12,7 @@ import { install as installTravel } from '../server/rpg/travel.js';
 import { regionOfPlace } from '../client/gameplay/travel/catalog.js';
 import { MINUTES_PER_DAY, MINUTES_PER_YEAR, weatherAt, regionOf } from '../client/gameplay/atmosphere/calendar.js';
 
-const ARENA2 = new URL('../gamedata/DaggerfallGameFiles/arena2/', import.meta.url).pathname;
+const ARENA2 = process.env.ARENA2_DIR || process.env.DFW_ARENA2 || new URL('../gamedata/DaggerfallGameFiles/arena2/', import.meta.url).pathname;
 const skip = existsSync(join(ARENA2, 'MAPS.BSA')) ? false : 'local Daggerfall data not present';
 const quiet = { info() {}, warn() {}, error() {} };
 const HOME = 'town:Daggerfall/Gothway Garden';

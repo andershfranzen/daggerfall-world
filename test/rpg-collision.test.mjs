@@ -154,4 +154,6 @@ test('open plane fallback: no obstacles, bounded', () => {
   const w = openPlaneWorld(50);
   assert.ok(near(w.move(0, 0, 100, 0).x, 50 - R));
   assert.equal(w.canSee(-40, -40, 40, 40), true);
+  assert.equal(w.segmentClear(0, 1.4, 0, 0, -1.0, -3), false, 'downward projectile ray hits ground plane');
+  assert.equal(w.segmentClear(0, 1.4, 0, 0, 0.2, -3), true, 'ray staying above ground stays clear');
 });

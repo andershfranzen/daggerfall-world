@@ -6,6 +6,11 @@ import {
   floorLabel, sliceFor, visiblePieces, describePosition, EYE_HEIGHT, clampScale,
 } from './model.js';
 import { fogged, parseCellKey, cellsBounds, cellIndexMap, isExplored, unpackCells, cellKey, Y_STEP, CELL } from './memory.js';
+import {
+  DEFAULT_ORBIT_YAW, DEFAULT_ORBIT_PITCH, MIN_ORBIT_PITCH, MAX_ORBIT_PITCH,
+  MIN_SLICE_OFFSET, MAX_SLICE_OFFSET, normalizeAutomapPrefs,
+} from './prefs.js';
+import { make3DView, pan3D, fit3D, sceneFor, exploredMask, sceneBounds, framePoints } from './view3d.js';
 
 const QUARTER = Math.PI / 2;
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -19,10 +24,14 @@ export function meshLocation(mesh) {
 const sameLocation = (a, b) => !!a && !!b && String(a).toLowerCase() === String(b).toLowerCase();
 
 const DEFAULT_SCALE = { town: 2.5, interior: 14, dungeon: 6, unknown: 4 };
+/** 3D auto-framing: the explored area is framed whole down to this zoom; past it the view stays on the player. */
+const MIN_FRAME_SCALE = { town: 0.6, interior: 2.5, dungeon: 1.1, unknown: 1.1 };
+const MAX_FRAME_SCALE = { town: 6, interior: 16, dungeon: 11, unknown: 9 };
 /** Explored cells (2 m squares) at one foot height that make it a storey of its own when the plan missed it. */
 export const EXPLORED_STOREY_CELLS = 12;
 
-export function createAutomapController({ build = buildAutomap } = {}) {
+export function createAutomapController({ build = buildAutomap, prefs = null } = {}) {
+  const initialPrefs = normalizeAutomapPrefs(prefs);
   const c = {
     location: null,
     kind: 'unknown',
@@ -31,8 +40,16 @@ export function createAutomapController({ build = buildAutomap } = {}) {
     error: null,
     /** null = follow the player's own floor; otherwise an index into map.floors. */
     floor: null,
+    /** Fine adjustable height slice offset in metres (DFU adjustable slice). */
+    sliceOffset: 0,
     follow: true,
     view: makeView(),
+    /** '2d' (classic top-down plan) or '3d' (rotatable perspective view). */
+    viewMode: initialPrefs.viewMode,
+    orbitYaw: initialPrefs.orbitYaw,
+    orbitPitch: initialPrefs.orbitPitch,
+    /** Independent automap preferences (never mixed into character exploration memory). */
+    prefs: initialPrefs,
     player: null, // {x, z, yaw, feetY}
     version: 0, // bumps on anything that needs a redraw
     /** Classic cutaway: geometry above the viewed floor is cut away. Off shows every level at once. */
@@ -44,6 +61,11 @@ export function createAutomapController({ build = buildAutomap } = {}) {
     explored: new Map(),
     exploredVersion: 0,
     _floorCache: null,
+    /**
+     * Who placed the 3D camera: 'auto' (framed on the explored area; re-framed as more is explored), 'player'
+     * (recentred on the player) or 'manual' (the player zoomed or panned).
+     */
+    framing: 'auto',
 
     /**
      * Location id changed. The scene mesh and the location can arrive in either order, so a mesh is kept and
@@ -98,9 +120,166 @@ export function createAutomapController({ build = buildAutomap } = {}) {
 
     resetView() {
       c.floor = null;
+      c.sliceOffset = 0;
       c.follow = true;
-      c.view = makeView({ ...c.view, scale: DEFAULT_SCALE[c.kind] ?? 4, rotation: c.rotationFor(c.player) });
+      c.framing = 'auto';
+      const defaultScale = c.kind === 'town' ? c.prefs.exteriorDefaultZoom : (DEFAULT_SCALE[c.kind] ?? 4);
+      c.view = makeView({ ...c.view, scale: defaultScale, rotation: c.rotationFor(c.player) });
       if (c.player) c.view = { ...c.view, centerX: c.player.x, centerZ: c.player.z };
+      if (c.prefs.rememberSlice && c.location && c.prefs.savedSlices?.[c.location]) {
+        const saved = c.prefs.savedSlices[c.location];
+        c.sliceOffset = Math.max(MIN_SLICE_OFFSET, Math.min(MAX_SLICE_OFFSET, Number(saved.sliceOffset) || 0));
+        if (saved.floor !== null && Number.isInteger(saved.floor)) c.floor = saved.floor;
+      }
+    },
+
+    /** Apply independent automap preferences without touching exploration memory. */
+    applyPrefs(next) {
+      c.prefs = normalizeAutomapPrefs(next);
+      c.viewMode = c.prefs.viewMode;
+      c.orbitYaw = c.prefs.orbitYaw;
+      c.orbitPitch = c.prefs.orbitPitch;
+      c.version++;
+      return c.prefs;
+    },
+
+    /** Save current floor and slice offset for the active location when rememberSlice is on. */
+    rememberSlice() {
+      if (!c.prefs.rememberSlice || !c.location || c.kind === 'town') return;
+      c.prefs = {
+        ...c.prefs,
+        savedSlices: {
+          ...c.prefs.savedSlices,
+          [c.location]: { floor: c.floor, sliceOffset: c.sliceOffset },
+        },
+      };
+    },
+
+    /** Reset exterior zoom & center back to the preferred exterior default zoom. */
+    resetExteriorView() {
+      c.follow = true;
+      const scale = c.prefs.exteriorDefaultZoom ?? DEFAULT_SCALE.town;
+      c.view = makeView({ ...c.view, scale, rotation: c.rotationFor(c.player) });
+      if (c.player) c.view = { ...c.view, centerX: c.player.x, centerZ: c.player.z };
+      c.version++;
+    },
+
+    setViewMode(mode) {
+      const next = mode === '3d' ? '3d' : '2d';
+      if (next === c.viewMode) return false;
+      c.viewMode = next;
+      c.prefs = { ...c.prefs, viewMode: next };
+      c.version++;
+      return true;
+    },
+
+    orbit(dYaw = 0, dPitch = 0) {
+      const nextYaw = wrapAngle(c.orbitYaw + (Number.isFinite(dYaw) ? dYaw : 0));
+      const nextPitch = Math.max(MIN_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, c.orbitPitch + (Number.isFinite(dPitch) ? dPitch : 0)));
+      if (nextYaw === c.orbitYaw && nextPitch === c.orbitPitch) return false;
+      c.orbitYaw = nextYaw;
+      c.orbitPitch = nextPitch;
+      c.prefs = { ...c.prefs, orbitYaw: nextYaw, orbitPitch: nextPitch };
+      c.version++;
+      return true;
+    },
+
+    resetOrbit() {
+      c.orbitYaw = DEFAULT_ORBIT_YAW;
+      c.orbitPitch = DEFAULT_ORBIT_PITCH;
+      c.prefs = { ...c.prefs, orbitYaw: c.orbitYaw, orbitPitch: c.orbitPitch };
+      c.version++;
+    },
+
+    setSliceOffset(offset) {
+      const v = Math.round(Math.max(MIN_SLICE_OFFSET, Math.min(MAX_SLICE_OFFSET, Number(offset) || 0)) * 2) / 2;
+      if (v === c.sliceOffset) return false;
+      c.sliceOffset = v;
+      c.rememberSlice();
+      c.version++;
+      return true;
+    },
+
+    stepSliceOffset(delta) {
+      return c.setSliceOffset(c.sliceOffset + delta);
+    },
+
+    /** Height of the floor on view: the selected storey, else the player's feet (towns: the player's feet). */
+    viewedFloorY() {
+      const picked = c.floor !== null && c.floor < c.floors.length ? c.floors[c.floor]?.y : null;
+      return picked ?? c.player?.feetY ?? c.floors[c.playerFloor()]?.y ?? 0;
+    },
+
+    /** The architectural 3D scene of this place (automap/view3d.js), or null before the mesh arrives. */
+    scene3d() {
+      c.ensureMap();
+      return c.map ? sceneFor(c.map, c.mesh) : null;
+    },
+    /** Triangles this character has explored (Uint8Array), or null where the whole place is shown. */
+    mask3d() {
+      const scene = c.scene3d();
+      if (!scene || !c.fog) return null;
+      const m = c._mask3d;
+      if (m && m.scene === scene && m.v === c.exploredVersion && m.loc === c.location) return m.mask;
+      const mask = exploredMask(scene, c.cellIndex());
+      c._mask3d = { scene, v: c.exploredVersion, loc: c.location, mask };
+      return mask;
+    },
+    /** Box of what the 3D view shows under the current cutaway (explored ground only, indoors), or null. */
+    bounds3d() {
+      const scene = c.scene3d();
+      if (!scene) return null;
+      return sceneBounds(scene, c.mask3d(), c.slice().top);
+    },
+    /** Outline of what the 3D view shows solid, for framing (points), or null. */
+    outline3d() {
+      const scene = c.scene3d();
+      return scene ? framePoints(scene, c.mask3d(), c.slice().top) : null;
+    },
+    /** Frame everything shown in the 3D view. Returns false when there is nothing to frame. */
+    fit3d({ minScale = 0.25, maxScale = 48 } = {}) {
+      const box = c.outline3d();
+      if (!box) return false;
+      const v = fit3D(c.view3d(), box, { centerY: c.viewedFloorY() + c.sliceOffset, minScale, maxScale });
+      c.follow = false;
+      c.view = { ...c.view, centerX: v.centerX, centerZ: v.centerZ, scale: v.scale };
+      c.version++;
+      return true;
+    },
+    /**
+     * Automatic 3D framing (panel opened, 3D switched on, more ground explored): the whole explored area when it
+     * fits at a readable zoom, otherwise a comfortable view around the player. Leaves a camera the player placed.
+     */
+    frame3d({ force = false } = {}) {
+      if (c.viewMode !== '3d' || (!force && c.framing !== 'auto')) return false;
+      const lo = MIN_FRAME_SCALE[c.kind] ?? 2, hi = MAX_FRAME_SCALE[c.kind] ?? 9;
+      const box = c.outline3d();
+      const fitted = box ? fit3D(c.view3d(), box, { centerY: c.viewedFloorY() + c.sliceOffset, maxScale: hi }) : null;
+      if (fitted && fitted.scale >= lo) {
+        c.follow = false;
+        c.view = { ...c.view, centerX: fitted.centerX, centerZ: fitted.centerZ, scale: fitted.scale };
+      } else {
+        c.follow = true;
+        c.view = { ...c.view, scale: Math.max(lo * 2, Math.min(hi, DEFAULT_SCALE[c.kind] ?? 4)) };
+        if (c.player) c.view = { ...c.view, centerX: c.player.x, centerZ: c.player.z };
+      }
+      c.framing = 'auto';
+      c.version++;
+      return true;
+    },
+
+    /** Current 3D perspective camera orbiting the viewed centre & floor height. */
+    view3d() {
+      return make3DView({
+        centerX: c.view.centerX,
+        centerY: c.viewedFloorY() + c.sliceOffset,
+        centerZ: c.view.centerZ,
+        orbitYaw: c.orbitYaw,
+        orbitPitch: c.orbitPitch,
+        scale: c.view.scale,
+        width: c.view.width,
+        height: c.view.height,
+      });
     },
 
     /** Live camera from the `frame` event: {x, y (eye), z, yaw}. Returns true when the marker moved visibly. */
@@ -160,6 +339,7 @@ export function createAutomapController({ build = buildAutomap } = {}) {
     selectFloor(index) {
       const n = c.floors.length;
       c.floor = index === null || index === undefined || !n ? null : Math.max(0, Math.min(n - 1, index));
+      c.rememberSlice();
       c.version++;
     },
     stepFloor(delta) {
@@ -179,11 +359,12 @@ export function createAutomapController({ build = buildAutomap } = {}) {
      * storey of a multi-storey plan is explored (listing explored storeys only; unexplored ones stay hidden).
      */
     floorSelector() { return c.floors.length > 1 || (c.fog && c.floors.length === 1 && (c.map?.floors?.length ?? 0) > 1); },
-    /** Height slab drawn: the selected storey, else the player's feet (DFU slices at the player's own height). */
+    /** Height slab drawn: the selected storey, else the player's feet (DFU slices at the player's own height) + adjustable offset. */
     slice() {
       if (!c.map?.sliced || !c.cutaway) return sliceFor(null, NaN);
-      const f = c.floor !== null ? c.floors[c.floor]?.y : c.player?.feetY ?? c.floors[c.playerFloor()]?.y ?? 0;
-      return sliceFor(c.map, f);
+      const validFloor = c.floor !== null && c.floor < c.floors.length ? c.floors[c.floor]?.y : null;
+      const base = validFloor ?? c.player?.feetY ?? c.floors[c.playerFloor()]?.y ?? 0;
+      return sliceFor(c.map, base + c.sliceOffset);
     },
     pieces() { return c.map ? visiblePieces(c.map, c.slice()) : []; },
 
@@ -191,22 +372,36 @@ export function createAutomapController({ build = buildAutomap } = {}) {
     zoom(factor, sx, sy) {
       const before = c.view.scale;
       // Zoom about the player while following so the marker stays put.
-      c.view = c.follow ? { ...c.view, scale: clampScale(c.view.scale * factor) } : zoomAt(c.view, factor, sx, sy);
-      if (c.view.scale !== before) c.version++;
+      c.view = (c.follow || c.viewMode === '3d') ? { ...c.view, scale: clampScale(c.view.scale * factor) } : zoomAt(c.view, factor, sx, sy);
+      if (c.view.scale !== before) { c.framing = 'manual'; c.version++; }
     },
     pan(dx, dy) {
       c.follow = false;
-      c.view = panBy(c.view, dx, dy);
+      c.framing = 'manual';
+      if (c.viewMode === '3d') {
+        const next3d = pan3D(c.view3d(), dx, dy);
+        c.view = { ...c.view, centerX: next3d.centerX, centerZ: next3d.centerZ };
+      } else {
+        c.view = panBy(c.view, dx, dy);
+      }
       c.version++;
     },
-    recenter() {
+    recenter({ resetOrbit = false } = {}) {
       c.follow = true;
+      c.framing = 'player';
       c.floor = null;
+      c.sliceOffset = 0;
+      if (resetOrbit) {
+        c.orbitYaw = DEFAULT_ORBIT_YAW;
+        c.orbitPitch = DEFAULT_ORBIT_PITCH;
+      }
       if (c.player) c.view = { ...c.view, centerX: c.player.x, centerZ: c.player.z };
       c.version++;
     },
     fitAll() {
       if (!c.map) return;
+      c.framing = 'manual';
+      if (c.viewMode === '3d' && c.fit3d()) return;
       c.follow = false;
       const b = c.fog ? cellsBounds(c.cells()) : c.map.bounds;
       if (!b) return;

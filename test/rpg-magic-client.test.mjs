@@ -101,6 +101,7 @@ test('spell rows split known and learnable, mark the readied spell and sort cast
   const lines = effectLines(cat.find((s) => s.id === 'ward:slow-rot').effects[0]);
   assert.match(lines[0], /^Magnitude 1–3 \+ 1 per level$/);
   assert.match(lines[1], /^Duration 3 \+ 1 per level rounds$/);
+  assert.match(effectLines({ key: 'MorphSelf' })[0], /human and beast form/);
 });
 
 test('event text: no duplicates of server text; targets hear about spells and expiries on them', () => {
@@ -112,7 +113,9 @@ test('event text: no duplicates of server text; targets hear about spells and ex
   assert.equal(eventText({ kind: 'magicExpired', targetId: 'player:1', spellName: 'Shield' }, 1), 'Shield has worn off.');
 });
 
-const ARENA = 'gamedata/DaggerfallGameFiles/arena2';
+const ARENA = process.env.ARENA2_DIR && existsSync(`${process.env.ARENA2_DIR}/ART_PAL.COL`)
+  ? process.env.ARENA2_DIR
+  : 'gamedata/DaggerfallGameFiles/arena2';
 test('local casting animations and icons decode (local only)', { skip: !existsSync(`${ARENA}/ART_PAL.COL`) && 'no local game data' }, () => {
   for (const name of Object.values(CAST_FILES)) {
     const recs = readImageRecords(readFileSync(`${ARENA}/${name}`), name);

@@ -1,5 +1,6 @@
 // Guilds panel (panel `guilds`): Classic Guilds overview, Directory (6 families, 8 Temples, 10 Knightly Orders),
-// and Player-Founded Multiplayer Orders (roster, ranks, MOTD, shared treasury, guild chat).
+// and Player-Founded Multiplayer Orders (roster, custom rank permission matrix, purchasable Order Hall with
+// persistent decor & member access, Order Item Vault + shared gold treasury + audit ledger, succession & chat).
 // Server rules: server/rpg/guildhall.js (and server/rpg/guilds.js).
 
 const el = (tag, attrs = {}, ...kids) => {
@@ -16,13 +17,94 @@ const el = (tag, attrs = {}, ...kids) => {
   return n;
 };
 
+const ORDER_PERM_LABELS = Object.freeze({
+  invite: 'Invite',
+  kick: 'Kick',
+  promote: 'Promote',
+  editMotd: 'Edit MOTD',
+  withdrawTreasury: 'Withdraw Gold',
+  depositVault: 'Vault Deposit',
+  withdrawVault: 'Vault Withdraw',
+  decorateHall: 'Decorate Hall',
+  hallAccess: 'Hall Access',
+  siegeOfficer: 'Siege Officer',
+});
+
+const EXTRA_ORDER_CSS = `
+.gld-subtabs {
+  display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 6px;
+  border-bottom: 2px solid #121316; box-shadow: 0 1px 0 #484c54;
+}
+.gld-subtab {
+  padding: 5px 11px; font: 600 0.76rem/1.15 var(--font-ui, ui-monospace, monospace);
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-2, #b4bac4);
+  background: linear-gradient(180deg, #3c4047 0 50%, #2b2e34 50% 100%);
+  border: 2px solid; border-color: #7c818a #131518 #131518 #7c818a; cursor: pointer;
+}
+.gld-subtab.is-active {
+  color: #eef7f7; background: linear-gradient(180deg, #346f72 0 50%, #214a4c 50% 100%);
+  border-color: #7ab8ba #112a2b #112a2b #7ab8ba;
+}
+.gld-matrix-wrap { overflow-x: auto; }
+.gld-matrix {
+  width: 100%; border-collapse: collapse; font-size: 0.8rem;
+  background: #16181c; border: 2px solid #40444c;
+}
+.gld-matrix th, .gld-matrix td {
+  padding: 4px 8px; border: 1px solid #34383f; text-align: center;
+}
+.gld-matrix th:first-child, .gld-matrix td:first-child { text-align: left; }
+.gld-matrix thead th {
+  background: #232529; color: var(--accent-hi, #a4dadb);
+  text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.06em;
+}
+.gld-perm-toggle {
+  min-width: 52px; padding: 2px 7px; font: 600 0.72rem/1.1 var(--font-ui, monospace);
+  text-transform: uppercase; cursor: pointer; border: 2px solid; border-radius: 0;
+}
+.gld-perm-toggle.is-on {
+  color: #dff7e3; background: #1e4633; border-color: #68b074 #102418 #102418 #68b074;
+}
+.gld-perm-toggle.is-off {
+  color: #9ba1ab; background: #22252a; border-color: #5a5f68 #121316 #121316 #5a5f68;
+}
+.gld-perm-toggle:disabled { opacity: 0.75; cursor: default; }
+.gld-two-col {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 10px; align-items: start;
+}
+.gld-two-col > * { align-content: start; }
+.gld-hall-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 8px;
+}
+.gld-hall-card {
+  display: grid; gap: 6px; padding: 9px 10px; background: #1a1c20;
+  border: 2px solid; border-color: #5a5f68 #131518 #131518 #5a5f68;
+}
+.gld-audit-row {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; justify-content: space-between;
+  padding: 4px 7px; font-size: 0.8rem; background: #16181c; border: 1px solid #34383f;
+}
+.gld-audit-tag {
+  padding: 1px 6px; font-size: 0.68rem; text-transform: uppercase;
+  background: #173436; color: var(--accent-hi, #a4dadb); border: 1px solid #5fa3a5;
+}
+`;
+
 function loadStyles() {
-  if (typeof document === 'undefined' || document.querySelector('link[data-feature="guilds"]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = new URL('./guilds.css', import.meta.url).href;
-  link.dataset.feature = 'guilds';
-  document.head.append(link);
+  if (typeof document === 'undefined') return;
+  if (!document.querySelector('link[data-feature="guilds"]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = new URL('./guilds.css', import.meta.url).href;
+    link.dataset.feature = 'guilds';
+    document.head.append(link);
+  }
+  if (!document.querySelector('style[data-feature="guilds-orders"]')) {
+    const st = document.createElement('style');
+    st.dataset.feature = 'guilds-orders';
+    st.textContent = EXTRA_ORDER_CSS;
+    document.head.append(st);
+  }
 }
 
 const MAX_CHAT_HISTORY = 40;
@@ -32,11 +114,14 @@ export function install(api) {
 
   const ui = {
     tab: 'mine',           // 'mine' | 'directory' | 'order'
+    orderSubtab: 'roster', // 'roster' | 'permissions' | 'hall' | 'vault'
     dirFilter: 'all',      // 'all' | 'families' | 'temples' | 'orders'
     overview: null,
     directory: null,
+    hallQuote: null,
     status: '',
     synced: false,
+    lastSelfId: api.selfId ?? api.state?.selfId ?? null,
     chatLogs: new Map(),   // channelKey -> [{ fromId, name, rankTitle, text, channelName }]
     chatDrafts: new Map(), // channelKey -> string
     confirmResign: null,   // group key awaiting confirmation
@@ -45,12 +130,26 @@ export function install(api) {
     motdDraft: null,
     depositDraft: '',
     withdrawDraft: '',
+    successorDraft: '',
+    hallFurnishCatalogId: 'oak-table',
+    hallFurnishX: 3.5,
+    hallFurnishZ: 2.5,
   };
   let container = null;
 
   const rerender = () => {
     if (container?.isConnected) render(container);
     else if (api.panel === 'guilds') api.refreshPanel?.('guilds');
+  };
+
+  const resetPrivateCache = () => {
+    ui.synced = false;
+    ui.overview = null;
+    ui.directory = null;
+    ui.hallQuote = null;
+    ui.confirmDisband = false;
+    ui.confirmResign = null;
+    ui.chatLogs.clear();
   };
 
   const act = (verb, args) => {
@@ -94,18 +193,28 @@ export function install(api) {
       if (ev.overview) {
         ui.overview = ev.overview;
         ui.confirmResign = null;
-        if (!ev.overview.order) ui.confirmDisband = false;
+        if (!ev.overview.order) {
+          ui.confirmDisband = false;
+          ui.hallQuote = null;
+        }
       }
       if (ev.directory) ui.directory = ev.directory;
+      if (ev.quote) ui.hallQuote = ev.quote;
       if (ev.text) {
         ev.silent = true;
-        api.message(ev.text);
+        api.message(ev.text, ev.error ? { kind: 'error' } : undefined);
         say(ev.text);
       }
       if (ev.orderInvite && api.panel !== 'guilds') {
         api.message(`Order invite from ${ev.orderInvite.fromName}. Open Guilds to respond.`);
       }
       rerender();
+    } else if (ev.kind === 'order.hallFurnishings' && ui.overview?.order?.hall) {
+      if (ui.overview.order.id === ev.orderId) {
+        ui.overview.order.hall.furnishings = ev.furnishings;
+        ui.overview.order.hall.furnishingRev = ev.furnishingRev;
+        rerender();
+      }
     } else if (ev.kind === 'guildChat') {
       const key = chatKeyForEvent(ev);
       const list = ui.chatLogs.get(key) ?? [];
@@ -118,17 +227,20 @@ export function install(api) {
   });
 
   api.on('state', () => {
+    const sid = api.selfId ?? api.state?.selfId ?? null;
+    if (ui.lastSelfId != null && sid != null && ui.lastSelfId !== sid) {
+      resetPrivateCache();
+    }
+    ui.lastSelfId = sid;
     if (!ui.synced && api.state) {
       ui.synced = true;
       act('guild.overview');
+    } else if (container?.isConnected) {
+      rerender();
     }
   });
   api.on('screen', (s) => {
-    if (s !== 'game') {
-      ui.synced = false;
-      ui.overview = null;
-      ui.directory = null;
-    }
+    if (s !== 'game') resetPrivateCache();
   });
   api.on('panel', (p) => {
     if (p?.id === 'guilds' && p.open) {
@@ -375,7 +487,7 @@ export function install(api) {
     };
     return el('section', { class: 'gld-card' },
       el('h3', { class: 'gld-h', text: 'Found a Player Order' }),
-      el('p', { class: 'gld-note', text: ov.foundingFee > 0 ? `Charter fee: ${ov.foundingFee} gold (you carry ${ov.gold} gold).` : 'Found a persistent multiplayer guild with shared roster, ranks, charter, treasury, and private order chat.' }),
+      el('p', { class: 'gld-note', text: ov.foundingFee > 0 ? `Charter fee: ${ov.foundingFee} gold (you carry ${ov.gold} gold).` : 'Found a persistent multiplayer order with custom rank permissions, an Order Hall, shared item vault, treasury, and private order chat.' }),
       el('form', { class: 'gld-form', onsubmit: submit },
         el('div', { class: 'gld-form-row' },
           el('label', { class: 'gld-field' },
@@ -414,6 +526,224 @@ export function install(api) {
           el('button', { type: 'submit', class: 'btn btn-small btn-primary' }, 'Found Order'))));
   }
 
+  function renderOrderPermissionsTab(ord, isLeader) {
+    const keys = ord.permissionKeys ?? Object.keys(ORDER_PERM_LABELS);
+    const matrix = ord.permissions ?? { Leader: {}, Officer: {}, Member: {} };
+    const ranks = ['Leader', 'Officer', 'Member'];
+
+    const table = el('div', { class: 'gld-matrix-wrap' },
+      el('table', { class: 'gld-matrix', 'aria-label': 'Order rank permissions matrix' },
+        el('thead', {},
+          el('tr', {},
+            el('th', { text: 'Permission' }),
+            ...ranks.map((r) => el('th', { text: r })))),
+        el('tbody', {}, keys.map((perm) => el('tr', {},
+          el('td', { text: ORDER_PERM_LABELS[perm] ?? perm }),
+          ...ranks.map((r) => {
+            const on = r === 'Leader' ? true : Boolean(matrix[r]?.[perm]);
+            const editable = isLeader && r !== 'Leader';
+            return el('td', {},
+              el('button', {
+                type: 'button',
+                class: `gld-perm-toggle${on ? ' is-on' : ' is-off'}`,
+                disabled: !editable,
+                title: editable ? `Toggle ${ORDER_PERM_LABELS[perm] ?? perm} for ${r}` : `${r} ${on ? 'allowed' : 'denied'}`,
+                onclick: () => act('order.setPermissions', { rank: r, permissions: { [perm]: !on } }),
+              }, on ? 'Allow' : 'Deny'));
+          }))))));
+
+    return el('section', { class: 'gld-card' },
+      el('div', { class: 'gld-card-head' },
+        el('h3', { class: 'gld-h', text: 'Rank Permission Matrix' }),
+        el('span', { class: 'gld-badge gld-badge-blue', text: isLeader ? 'Leader Editing Enabled' : 'Read-Only View' })),
+      el('p', { class: 'gld-note', text: 'Configure which powers Officers and Members hold across recruiting, treasury, item vault, Order Hall decoration, and siege registration.' }),
+      table);
+  }
+
+  function renderOrderHallTab(ord, isLeader, perms) {
+    const hall = ord.hall;
+    if (!hall) {
+      const catalog = ord.hallCatalog ?? [];
+      return el('section', { class: 'gld-card' },
+        el('div', { class: 'gld-card-head' },
+          el('h3', { class: 'gld-h', text: 'Acquire an Order Hall' }),
+          el('span', { class: 'gld-badge gld-badge-mint', text: `Treasury: ${ord.treasury}g` })),
+        el('p', { class: 'gld-note', text: 'Each order may purchase one regional Order Hall funded directly from the order treasury.' }),
+        ui.hallQuote
+          ? el('div', { class: 'gld-motd' },
+            el('strong', { text: `Purchase Quote: ${ui.hallQuote.hall.name} (${ui.hallQuote.hall.region})` }),
+            el('p', { class: 'gld-note', text: `Charge: ${ui.hallQuote.price}g from treasury (${ui.hallQuote.treasury}g available).` }),
+            el('div', { class: 'gld-actions' },
+              el('button', {
+                type: 'button', class: 'btn btn-small btn-primary',
+                disabled: !isLeader || !ui.hallQuote.canAfford,
+                onclick: () => { act('order.hallBuy', { hallId: ui.hallQuote.hall.id, confirm: true }); ui.hallQuote = null; },
+              }, `Confirm Purchase (-${ui.hallQuote.price}g)`),
+              el('button', { type: 'button', class: 'btn btn-small', onclick: () => { ui.hallQuote = null; rerender(); } }, 'Cancel')))
+          : null,
+        el('div', { class: 'gld-hall-grid' }, catalog.map((h) => el('article', { class: 'gld-hall-card' },
+          el('div', { class: 'gld-dir-head' },
+            el('strong', { text: h.name }),
+            el('span', { class: 'gld-badge', text: h.region })),
+          el('p', { class: 'gld-meta', text: `Interior: ${h.interior} · Radius ${h.radius}m` }),
+          el('div', { class: 'gld-actions' },
+            el('span', { class: 'gld-badge gld-badge-mint', text: `${h.price}g` }),
+            isLeader
+              ? el('button', { type: 'button', class: 'btn btn-small btn-primary', onclick: () => act('order.hallQuote', { hallId: h.id }) }, 'Request Quote')
+              : el('span', { class: 'gld-meta', text: 'Leader only' }))))));
+    }
+
+    const canDecorate = Boolean(perms.decorateHall);
+    const catalog = ord.furnishingCatalog ?? [];
+    const chosen = catalog.find((c) => c.id === ui.hallFurnishCatalogId) ?? catalog[0];
+
+    return el('div', { class: 'gld-stack' },
+      el('section', { class: 'gld-card' },
+        el('div', { class: 'gld-card-head' },
+          el('div', { class: 'gld-card-title' },
+            el('h3', { class: 'gld-h', text: hall.name }),
+            el('span', { class: 'gld-badge gld-badge-blue', text: hall.region }),
+            el('span', { class: 'gld-badge', text: `Decor ${hall.furnishings.length}/${hall.maxFurnishings}` }),
+            el('span', { class: 'gld-badge gld-badge-mint', text: `Occupants: ${hall.occupantCount ?? 0}` })),
+          el('div', { class: 'gld-actions' },
+            hall.insideHall
+              ? el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.hallLeave', {}) }, 'Leave Hall')
+              : el('button', { type: 'button', class: 'btn btn-small btn-primary', disabled: !perms.hallAccess, onclick: () => act('order.hallEnter', {}) }, 'Enter Order Hall'))),
+        el('p', { class: 'gld-meta', text: `Location: ${hall.townName} · ${hall.interior} · Visitor mode: ${hall.visitorMode}` }),
+        (isLeader || canDecorate)
+          ? el('div', { class: 'gld-actions' },
+            el('span', { class: 'gld-label', text: 'Visitors:' }),
+            ['members', 'invited', 'open'].map((m) => el('button', {
+              type: 'button',
+              class: `btn btn-small${hall.visitorMode === m ? ' gld-tab is-active' : ''}`,
+              onclick: () => act('order.hallAccess', { visitorMode: m }),
+            }, m)))
+          : null),
+      el('section', { class: 'gld-card' },
+        el('h3', { class: 'gld-h', text: `Order Hall Furnishings (Rev ${hall.furnishingRev})` }),
+        canDecorate && chosen
+          ? el('div', { class: 'gld-inline-form' },
+            el('select', {
+              value: ui.hallFurnishCatalogId,
+              onchange: (e) => { ui.hallFurnishCatalogId = e.target.value; rerender(); },
+            }, catalog.map((c) => el('option', { value: c.id, selected: c.id === ui.hallFurnishCatalogId }, `${c.name} (${c.price}g)`))),
+            el('input', {
+              type: 'number', step: '0.5', value: String(ui.hallFurnishX), placeholder: 'X',
+              oninput: (e) => { ui.hallFurnishX = Number(e.target.value); }, onkeydown: stopKey,
+            }),
+            el('input', {
+              type: 'number', step: '0.5', value: String(ui.hallFurnishZ), placeholder: 'Z',
+              oninput: (e) => { ui.hallFurnishZ = Number(e.target.value); }, onkeydown: stopKey,
+            }),
+            el('button', {
+              type: 'button', class: 'btn btn-small btn-primary',
+              onclick: () => act('order.hallFurnishPlace', { catalogId: chosen.id, x: ui.hallFurnishX, z: ui.hallFurnishZ, floor: 0, payFrom: perms.withdrawTreasury ? 'treasury' : 'personal' }),
+            }, `Place (${chosen.price}g)`))
+          : el('p', { class: 'gld-note', text: 'Only members with Decorate Hall permission may place or move hall decor.' }),
+        hall.furnishings.length
+          ? el('ul', { class: 'gld-list' }, hall.furnishings.map((f) => el('li', { class: 'gld-row' },
+            el('span', { class: 'gld-name', text: f.name }),
+            el('span', { class: 'gld-meta', text: `Floor ${f.floor} · (${f.x}, ${f.z})` }),
+            canDecorate
+              ? el('button', { type: 'button', class: 'btn btn-small gld-btn-danger', onclick: () => act('order.hallFurnishRemove', { furnishingId: f.id }) }, 'Remove')
+              : null)))
+          : el('p', { class: 'gld-note', text: 'No hall furnishings placed yet.' })));
+  }
+
+  function renderOrderVaultTab(ov, ord, perms) {
+    const canWithdrawGold = Boolean(perms.withdrawTreasury);
+    const canDepositVault = Boolean(perms.depositVault);
+    const canWithdrawVault = Boolean(perms.withdrawVault);
+    const vaultItems = ord.vault ?? [];
+    const packItems = api.state?.character?.inventory ?? [];
+    const audit = ord.vaultLedger ?? [];
+
+    const treasuryCard = el('section', { class: 'gld-card' },
+      el('h3', { class: 'gld-h', text: `Shared Treasury (${ord.treasury} gold)` }),
+      el('p', { class: 'gld-note', text: `Your purse: ${ov.gold} gold.${canWithdrawGold ? ' You may deposit and withdraw gold.' : ' Any member may deposit; withdrawal requires Withdraw Gold permission.'}` }),
+      el('div', { class: 'gld-treasury-controls' },
+        el('form', {
+          class: 'gld-inline-form',
+          onsubmit: (e) => {
+            e.preventDefault();
+            const n = Math.trunc(Number(ui.depositDraft));
+            if (n > 0) { act('order.deposit', { amount: n }); ui.depositDraft = ''; }
+          },
+        },
+        el('input', {
+          type: 'number', min: '1', max: String(Math.max(1, ov.gold)), step: '1',
+          value: ui.depositDraft, placeholder: 'Deposit gold',
+          oninput: (e) => { ui.depositDraft = e.target.value; },
+          onkeydown: stopKey,
+        }),
+        el('button', { type: 'submit', class: 'btn btn-small btn-primary' }, 'Deposit')),
+        canWithdrawGold
+          ? el('form', {
+            class: 'gld-inline-form',
+            onsubmit: (e) => {
+              e.preventDefault();
+              const n = Math.trunc(Number(ui.withdrawDraft));
+              if (n > 0) { act('order.withdraw', { amount: n }); ui.withdrawDraft = ''; }
+            },
+          },
+          el('input', {
+            type: 'number', min: '1', max: String(Math.max(1, ord.treasury)), step: '1',
+            value: ui.withdrawDraft, placeholder: 'Withdraw gold',
+            oninput: (e) => { ui.withdrawDraft = e.target.value; },
+            onkeydown: stopKey,
+          }),
+          el('button', { type: 'submit', class: 'btn btn-small' }, 'Withdraw'))
+          : null));
+
+    const vaultCard = el('section', { class: 'gld-card' },
+      el('div', { class: 'gld-card-head' },
+        el('h3', { class: 'gld-h', text: `Order Item Vault (${vaultItems.length}/${ord.vaultCapacity ?? 60})` }),
+        el('span', { class: 'gld-badge gld-badge-blue', text: `Rev ${ord.vaultRevision ?? 1}` })),
+      el('div', { class: 'gld-two-col' },
+        el('div', { class: 'gld-stack' },
+          el('span', { class: 'gld-label', text: 'Stored Items' }),
+          vaultItems.length
+            ? el('ul', { class: 'gld-list' }, vaultItems.map((it) => el('li', { class: 'gld-row' },
+              el('span', { class: 'gld-name', text: `${it.quantity > 1 ? `${it.quantity} × ` : ''}${it.name}` }),
+              el('span', { class: 'gld-meta', text: `by ${it.depositedByName ?? 'Member'}` }),
+              canWithdrawVault
+                ? el('button', { type: 'button', class: 'btn btn-small btn-primary', onclick: () => act('order.vaultWithdraw', { itemId: it.id, quantity: it.quantity }) }, 'Withdraw')
+                : null)))
+            : el('p', { class: 'gld-note', text: 'The order vault is empty.' })),
+        el('div', { class: 'gld-stack' },
+          el('span', { class: 'gld-label', text: 'Deposit From Pack' }),
+          packItems.length
+            ? el('ul', { class: 'gld-list' }, packItems.map((it) => {
+              const blocked = Boolean(it.equipped || it.quest || it.bound || it.stolen || it.conjuredUntil || it.group === 'transport');
+              return el('li', { class: 'gld-row' },
+                el('span', { class: 'gld-name', text: `${it.quantity > 1 ? `${it.quantity} × ` : ''}${it.name}` }),
+                el('button', {
+                  type: 'button', class: 'btn btn-small',
+                  disabled: blocked || !canDepositVault,
+                  onclick: () => act('order.vaultDeposit', { itemId: it.id, quantity: it.quantity }),
+                }, blocked ? 'Ineligible' : 'Deposit'));
+            }))
+            : el('p', { class: 'gld-note', text: 'No pack items available.' }))));
+
+    const auditCard = el('section', { class: 'gld-card' },
+      el('h3', { class: 'gld-h', text: `Vault & Treasury Audit Ledger (${audit.length})` }),
+      audit.length
+        ? el('ul', { class: 'gld-ledger' }, audit.slice(0, 15).map((e) => el('li', { class: 'gld-audit-row' },
+          el('div', { class: 'gld-actions' },
+            el('span', { class: 'gld-audit-tag', text: e.action.replace('_', ' ') }),
+            el('span', { text: `${e.actorName}: ${e.itemName ? `${e.quantity > 1 ? `${e.quantity} × ` : ''}${e.itemName}` : e.gold ? `${e.gold}g` : (e.detail ?? '')}` })),
+          el('span', { class: 'gld-meta', text: e.balance != null ? `Bal ${e.balance}g` : (e.at?.slice(11, 19) ?? '') }))))
+        : (ord.ledger?.length
+          ? el('ul', { class: 'gld-ledger' }, ord.ledger.slice(0, 6).map((l) =>
+            el('li', { class: 'gld-ledger-row' },
+              el('span', { class: l.kind === 'deposit' ? 'gld-pos' : 'gld-neg', text: `${l.kind === 'deposit' ? '+' : '-'}${l.amount}g` }),
+              el('span', { text: `${l.actorName} (${l.kind})` }),
+              el('span', { class: 'gld-meta', text: `Bal ${l.balance}g` }))))
+          : el('p', { class: 'gld-note', text: 'No vault or treasury transactions recorded yet.' })));
+
+    return el('div', { class: 'gld-stack' }, treasuryCard, vaultCard, auditCard);
+  }
+
   function renderOrder(ov) {
     const blocks = [renderOrderInvites(ov)];
     const ord = ov.order;
@@ -423,8 +753,18 @@ export function install(api) {
     }
 
     const isLeader = ord.myRank === 'Leader';
-    const isOfficer = ord.myRank === 'Officer';
-    const canManage = isLeader || isOfficer;
+    const perms = ord.myPermissions ?? {
+      invite: isLeader || ord.myRank === 'Officer',
+      kick: isLeader || ord.myRank === 'Officer',
+      promote: isLeader,
+      editMotd: isLeader || ord.myRank === 'Officer',
+      withdrawTreasury: isLeader || ord.myRank === 'Officer',
+      depositVault: true,
+      withdrawVault: isLeader || ord.myRank === 'Officer',
+      decorateHall: isLeader || ord.myRank === 'Officer',
+      hallAccess: true,
+      siegeOfficer: isLeader || ord.myRank === 'Officer',
+    };
 
     // Banner + MOTD
     const motdValue = ui.motdDraft !== null ? ui.motdDraft : ord.motd;
@@ -435,11 +775,13 @@ export function install(api) {
           el('h3', { class: 'gld-h', text: ord.name }),
           el('span', { class: 'gld-badge gld-badge-blue', text: ord.myRank }),
           el('span', { class: 'gld-badge', text: `${ord.members.length}/${ord.maxMembers} Members` })),
-        el('span', { class: 'gld-badge gld-badge-mint', text: `Treasury: ${ord.treasury}g` })),
+        el('div', { class: 'gld-actions' },
+          ord.hall ? el('span', { class: 'gld-badge gld-badge-blue', text: ord.hall.name }) : null,
+          el('span', { class: 'gld-badge gld-badge-mint', text: `Treasury: ${ord.treasury}g` }))),
       el('div', { class: 'gld-motd' },
         el('span', { class: 'gld-label', text: 'Charter / Message of the Day' }),
         el('p', { class: 'gld-motd-text', text: ord.motd || 'No message of the day set.' }),
-        canManage
+        perms.editMotd
           ? el('form', {
             class: 'gld-inline-form',
             onsubmit: (e) => {
@@ -459,105 +801,97 @@ export function install(api) {
           el('button', { type: 'submit', class: 'btn btn-small' }, 'Save MOTD'))
           : null)));
 
-    // Shared Treasury
-    blocks.push(el('section', { class: 'gld-card' },
-      el('h3', { class: 'gld-h', text: `Shared Treasury (${ord.treasury} gold)` }),
-      el('p', { class: 'gld-note', text: `Your purse: ${ov.gold} gold.${canManage ? ' Leaders & Officers may withdraw.' : ' Any member may deposit; only Leaders & Officers may withdraw.'}` }),
-      el('div', { class: 'gld-treasury-controls' },
-        el('form', {
-          class: 'gld-inline-form',
-          onsubmit: (e) => {
-            e.preventDefault();
-            const n = Math.trunc(Number(ui.depositDraft));
-            if (n > 0) { act('order.deposit', { amount: n }); ui.depositDraft = ''; }
-          },
-        },
-        el('input', {
-          type: 'number', min: '1', max: String(Math.max(1, ov.gold)), step: '1',
-          value: ui.depositDraft, placeholder: 'Deposit gold',
-          oninput: (e) => { ui.depositDraft = e.target.value; },
-          onkeydown: stopKey,
-        }),
-        el('button', { type: 'submit', class: 'btn btn-small btn-primary' }, 'Deposit')),
-        canManage
-          ? el('form', {
-            class: 'gld-inline-form',
-            onsubmit: (e) => {
-              e.preventDefault();
-              const n = Math.trunc(Number(ui.withdrawDraft));
-              if (n > 0) { act('order.withdraw', { amount: n }); ui.withdrawDraft = ''; }
-            },
-          },
-          el('input', {
-            type: 'number', min: '1', max: String(Math.max(1, ord.treasury)), step: '1',
-            value: ui.withdrawDraft, placeholder: 'Withdraw gold',
-            oninput: (e) => { ui.withdrawDraft = e.target.value; },
-            onkeydown: stopKey,
-          }),
-          el('button', { type: 'submit', class: 'btn btn-small' }, 'Withdraw'))
-          : null),
-      ord.ledger?.length
-        ? el('ul', { class: 'gld-ledger' }, ord.ledger.slice(0, 6).map((l) =>
-          el('li', { class: 'gld-ledger-row' },
-            el('span', { class: l.kind === 'deposit' ? 'gld-pos' : 'gld-neg', text: `${l.kind === 'deposit' ? '+' : '-'}${l.amount}g` }),
-            el('span', { text: `${l.actorName} (${l.kind})` }),
-            el('span', { class: 'gld-meta', text: `Bal ${l.balance}g` }))))
-        : null));
+    // Sub-tabs for Order sections
+    const subtabs = [
+      { id: 'roster', label: 'Roster & Chat' },
+      { id: 'permissions', label: 'Permissions' },
+      { id: 'hall', label: ord.hall ? 'Order Hall' : 'Order Hall (Unowned)' },
+      { id: 'vault', label: `Vault & Treasury (${ord.vault?.length ?? 0})` },
+    ];
+    blocks.push(el('div', { class: 'gld-subtabs', role: 'tablist' }, subtabs.map((st) => el('button', {
+      type: 'button',
+      role: 'tab',
+      class: `gld-subtab${ui.orderSubtab === st.id ? ' is-active' : ''}`,
+      onclick: () => { ui.orderSubtab = st.id; rerender(); },
+    }, st.label))));
 
-    // Roster
-    blocks.push(el('section', { class: 'gld-card' },
-      el('h3', { class: 'gld-h', text: `Roster (${ord.members.filter((m) => m.online).length} online / ${ord.members.length} total)` }),
-      el('ul', { class: 'gld-list' }, ord.members.map((m) =>
-        el('li', { class: `gld-row${m.online ? '' : ' is-offline'}${m.self ? ' is-self' : ''}` },
-          el('span', { class: `gld-dot${m.online ? ' is-online' : ''}` }),
-          el('span', { class: 'gld-name', text: `${m.name}${m.self ? ' (you)' : ''}` }),
-          el('span', { class: `gld-badge${m.rank === 'Leader' ? ' gld-badge-blue' : ''}`, text: m.rank }),
-          el('span', { class: 'gld-meta', text: m.online ? (m.region ?? 'Online') : 'Offline' }),
-          !m.self && (isLeader || (isOfficer && m.rank === 'Member'))
-            ? el('span', { class: 'gld-actions' },
-              isLeader && m.rank === 'Member'
-                ? el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.promote', { targetId: m.id }) }, 'Promote')
-                : null,
-              isLeader && m.rank === 'Officer'
-                ? el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.promote', { targetId: m.id, rank: 'Leader' }) }, 'Make Leader')
-                : null,
-              isLeader && m.rank === 'Officer'
-                ? el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.demote', { targetId: m.id }) }, 'Demote')
-                : null,
-              el('button', { type: 'button', class: 'btn btn-small gld-btn-danger', onclick: () => act('order.kick', { targetId: m.id }) }, 'Kick'))
-            : null)))));
-
-    // Invite online players
-    if (canManage) {
-      const candidates = (ov.onlinePlayers ?? []).filter((q) => !q.inOrder);
+    if (ui.orderSubtab === 'permissions') {
+      blocks.push(renderOrderPermissionsTab(ord, isLeader));
+    } else if (ui.orderSubtab === 'hall') {
+      blocks.push(renderOrderHallTab(ord, isLeader, perms));
+    } else if (ui.orderSubtab === 'vault') {
+      blocks.push(renderOrderVaultTab(ov, ord, perms));
+    } else {
+      // Roster
       blocks.push(el('section', { class: 'gld-card' },
-        el('h3', { class: 'gld-h', text: 'Recruit Online Players' }),
-        candidates.length
-          ? el('ul', { class: 'gld-list' }, candidates.map((q) =>
-            el('li', { class: 'gld-row' },
-              el('span', { class: 'gld-dot is-online' }),
-              el('span', { class: 'gld-name', text: q.name }),
-              el('span', { class: 'gld-meta', text: q.region }),
-              el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.invite', { targetId: q.id }) }, 'Invite'))))
-          : el('p', { class: 'gld-note', text: 'No unaffiliated players are online right now.' })));
+        el('h3', { class: 'gld-h', text: `Roster (${ord.members.filter((m) => m.online).length} online / ${ord.members.length} total)` }),
+        el('ul', { class: 'gld-list' }, ord.members.map((m) =>
+          el('li', { class: `gld-row${m.online ? '' : ' is-offline'}${m.self ? ' is-self' : ''}` },
+            el('span', { class: `gld-dot${m.online ? ' is-online' : ''}` }),
+            el('span', { class: 'gld-name', text: `${m.name}${m.self ? ' (you)' : ''}` }),
+            el('span', { class: `gld-badge${m.rank === 'Leader' ? ' gld-badge-blue' : ''}`, text: m.rank }),
+            el('span', { class: 'gld-meta', text: m.online ? (m.region ?? 'Online') : 'Offline' }),
+            !m.self && (isLeader || (perms.kick && m.rank === 'Member') || (perms.promote && m.rank === 'Member'))
+              ? el('span', { class: 'gld-actions' },
+                (isLeader || perms.promote) && m.rank === 'Member'
+                  ? el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.promote', { targetId: m.id }) }, 'Promote')
+                  : null,
+                isLeader && m.rank === 'Officer'
+                  ? el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.promote', { targetId: m.id, rank: 'Leader' }) }, 'Make Leader')
+                  : null,
+                isLeader && m.rank === 'Officer'
+                  ? el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.demote', { targetId: m.id }) }, 'Demote')
+                  : null,
+                (isLeader || (perms.kick && m.rank === 'Member'))
+                  ? el('button', { type: 'button', class: 'btn btn-small gld-btn-danger', onclick: () => act('order.kick', { targetId: m.id }) }, 'Kick')
+                  : null)
+              : null)))));
+
+      // Invite online players
+      if (perms.invite) {
+        const candidates = (ov.onlinePlayers ?? []).filter((q) => !q.inOrder);
+        blocks.push(el('section', { class: 'gld-card' },
+          el('h3', { class: 'gld-h', text: 'Recruit Online Players' }),
+          candidates.length
+            ? el('ul', { class: 'gld-list' }, candidates.map((q) =>
+              el('li', { class: 'gld-row' },
+                el('span', { class: 'gld-dot is-online' }),
+                el('span', { class: 'gld-name', text: q.name }),
+                el('span', { class: 'gld-meta', text: q.region }),
+                el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.invite', { targetId: q.id }) }, 'Invite'))))
+            : el('p', { class: 'gld-note', text: 'No unaffiliated players are online right now.' })));
+      }
+
+      // Order Chat
+      blocks.push(el('section', { class: 'gld-card' },
+        el('h3', { class: 'gld-h', text: `[${ord.tag}] Order Chat` }),
+        renderChatBox('order', `Message [${ord.tag}] ${ord.name}…`, (text) => act('guild.chat', { scope: 'order', text }))));
+
+      // Leave (with explicit successor selector when Leader) / Disband
+      const otherMembers = ord.members.filter((m) => !m.self);
+      blocks.push(el('div', { class: 'gld-footer-actions' },
+        isLeader && otherMembers.length
+          ? el('select', {
+            value: ui.successorDraft,
+            'aria-label': 'Choose successor before leaving',
+            onchange: (e) => { ui.successorDraft = e.target.value; },
+          },
+          el('option', { value: '' }, 'Auto successor…'),
+          otherMembers.map((m) => el('option', { value: String(m.id) }, `${m.name} (${m.rank})`)))
+          : null,
+        el('button', {
+          type: 'button', class: 'btn btn-small',
+          onclick: () => act('order.leave', ui.successorDraft ? { successorId: Number(ui.successorDraft) } : {}),
+        }, 'Leave Order'),
+        isLeader
+          ? (ui.confirmDisband
+            ? [
+              el('button', { type: 'button', class: 'btn btn-small gld-btn-danger', onclick: () => act('order.disband') }, 'Confirm Disband'),
+              el('button', { type: 'button', class: 'btn btn-small', onclick: () => { ui.confirmDisband = false; rerender(); } }, 'Cancel'),
+            ]
+            : el('button', { type: 'button', class: 'btn btn-small gld-btn-danger', onclick: () => { ui.confirmDisband = true; rerender(); } }, 'Disband Order'))
+          : null));
     }
-
-    // Order Chat
-    blocks.push(el('section', { class: 'gld-card' },
-      el('h3', { class: 'gld-h', text: `[${ord.tag}] Order Chat` }),
-      renderChatBox('order', `Message [${ord.tag}] ${ord.name}…`, (text) => act('guild.chat', { scope: 'order', text }))));
-
-    // Leave / Disband
-    blocks.push(el('div', { class: 'gld-footer-actions' },
-      el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('order.leave') }, 'Leave Order'),
-      isLeader
-        ? (ui.confirmDisband
-          ? [
-            el('button', { type: 'button', class: 'btn btn-small gld-btn-danger', onclick: () => act('order.disband') }, 'Confirm Disband'),
-            el('button', { type: 'button', class: 'btn btn-small', onclick: () => { ui.confirmDisband = false; rerender(); } }, 'Cancel'),
-          ]
-          : el('button', { type: 'button', class: 'btn btn-small gld-btn-danger', onclick: () => { ui.confirmDisband = true; rerender(); } }, 'Disband Order'))
-        : null));
 
     return el('div', { class: 'gld-stack' }, blocks.filter(Boolean));
   }
@@ -583,7 +917,7 @@ export function install(api) {
   }
 
   api.registerPanel('guilds', 'Guilds', render);
-  return { ui, render };
+  return { ui, render, resetPrivateCache };
 }
 
 export default install;

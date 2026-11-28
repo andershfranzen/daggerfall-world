@@ -135,9 +135,13 @@ test('actions.js compiles all expanded QBN triggers and actions and preserves un
     assert.equal(c.always, always, line);
     assert.deepEqual(c.args, args, line);
   }
-  // Unverified 0x3c and unimplemented named-spell cast stay unsupported.
-  assert.equal(compileAction('unknown opcode 0x3c').status, 'unsupported');
-  assert.equal(compileAction('unknown opcode 0x3c').name, 'unknownOpcode');
+  // Classic 0x3c (B0B71Y03 Auriel's Bow) is decoded as `_0x3c_ 19` and ignored cleanly per Daggerfall Unity;
+  // truly unknown opcodes and unimplemented named-spell casts stay unsupported.
+  assert.equal(compileAction('_0x3c_ 19').name, 'opcode3c');
+  assert.equal(compileAction('_0x3c_ 19').status, 'ignored');
+  assert.deepEqual(compileAction('_0x3c_ 19').args, { value: 19 });
+  assert.equal(compileAction('unknown opcode 0xff').status, 'unsupported');
+  assert.equal(compileAction('unknown opcode 0xff').name, 'unknownOpcode');
   assert.equal(compileAction('cast spell Shield on _giver_').status, 'unsupported');
   assert.equal(compileAction('cast spell Shield on _giver_').name, 'castOther');
   assert.ok(ACTION_TABLE.some((r) => r.name === 'whenSkill' && r.status === 'exact'));

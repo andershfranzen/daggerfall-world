@@ -17,7 +17,7 @@ const fields = {
 };
 
 export function makerTemplates() {
-  return [...templates.values()].filter((t) => t.support !== 'unsupported').map((t) => ({
+  return [...templates.values()].filter((t) => t.support !== 'unsupported' && t.spellMaker !== false).map((t) => ({
     key: t.key, name: t.name, school: t.school, targets: t.targets, elements: t.elements,
     groups: Object.entries(fields).filter(([group]) => t[group]).map(([group, settings]) => ({
       group, fields: settings, costs: t[`${group}Costs`],
@@ -35,7 +35,7 @@ export function buildCustomSpell(draft, id = `custom:${randomUUID()}`) {
   const used = new Set();
   const effects = draft.effects.map((entry) => {
     const template = templates.get(entry?.key);
-    if (!template || template.support === 'unsupported') throw new Error('That effect is unavailable in the Spell Maker.');
+    if (!template || template.support === 'unsupported' || template.spellMaker === false) throw new Error('That effect is unavailable in the Spell Maker.');
     if (used.has(template.key)) throw new Error('Each effect can appear only once.');
     used.add(template.key);
     if ((template.targets === 'self' && targetType !== 'caster') ||

@@ -111,10 +111,12 @@ function setBusy(on) {
 
 function renderSignedIn(muted) {
   const name = el('strong', { class: 'acct-name', text: user.username });
+  const settings = el('a', { class: 'acct-btn acct-btn-quiet acct-settings-link', href: '/signup/', text: 'Account settings' });
   const out = el('button', { type: 'button', class: 'acct-btn acct-btn-quiet', text: 'Log out', onclick: onLogout });
+  const actions = el('div', { class: 'acct-actions' }, settings, out);
   const status = el('p', { class: 'acct-status', role: 'status', 'aria-live': 'polite' });
   const children = [
-    el('div', { class: 'acct-row' }, el('span', { class: 'acct-who' }, 'Signed in as ', name), out),
+    el('div', { class: 'acct-row' }, el('span', { class: 'acct-who' }, 'Signed in as ', name), actions),
   ];
   if (muted) {
     const until = muted.until ? ` until ${new Date(muted.until).toLocaleString()}` : '';
@@ -207,6 +209,9 @@ function renderForm() {
 
   const status = el('p', { class: 'acct-status', role: 'alert', 'aria-live': 'assertive' });
   const submit = el('button', { type: 'submit', class: 'acct-btn acct-btn-primary', text: reg ? 'Create account' : 'Sign in' });
+  const forgot = !reg
+    ? el('a', { class: 'acct-link', href: '/signup/?mode=recover', text: 'Forgot password?' })
+    : null;
 
   const form = el(
     'form',
@@ -214,7 +219,9 @@ function renderForm() {
     el('div', { class: 'acct-field' }, el('label', { for: 'acct-username', text: 'Account name' }), username, usernameHint, usernameNote),
     el('div', { class: 'acct-field' }, el('label', { for: 'acct-password', text: 'Password' }), password, passwordHint, passwordNote),
     reg ? el('div', { class: 'acct-field' }, el('label', { for: 'acct-confirm', text: 'Repeat password' }), confirm, confirmNote) : null,
-    el('div', { class: 'acct-check' }, show, el('label', { for: 'acct-show', text: 'Show password' })),
+    el('div', { class: 'acct-aux' },
+      el('div', { class: 'acct-check' }, show, el('label', { for: 'acct-show', text: 'Show password' })),
+      forgot),
     submit,
     status
   );

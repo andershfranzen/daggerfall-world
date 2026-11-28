@@ -937,6 +937,13 @@ export function install(ctx, options = {}) {
   /** `cause` (spell, trap, ...) sends the injured player a private `hurt`; monster blows report through monsterAttack. */
   function hurtPlayer(p, amount, source, onApplied, cause = null) {
     if (!(amount > 0) || isDefeated(p)) return;
+    let pvpIntercept = null;
+    if (typeof S.pvp?.onPlayerDamage === 'function') {
+      pvpIntercept = S.pvp.onPlayerDamage(p, amount, source, cause ?? 'melee');
+      if (pvpIntercept?.blocked) return 0;
+      if (Number.isFinite(pvpIntercept?.amount)) amount = pvpIntercept.amount;
+      if (amount <= 0) return 0;
+    }
     // Magical shields (magic feature) soak damage first.
     if (typeof S.absorbDamage === 'function') {
       try {
@@ -946,22 +953,33 @@ export function install(ctx, options = {}) {
       if (amount <= 0) return 'absorbed';
     }
     const healthBefore = characterOf(p)?.health ?? 0;
-    let dead;
-    if (typeof S.damagePlayer === 'function') {
-      dead = !!S.damagePlayer(p, amount, source)?.dead;
-    } else {
-      const c = characterOf(p);
-      if (!c) return;
-      ctx.dirty(p);
-      c.health = Math.max(0, c.health - Math.trunc(amount));
-      dead = c.health === 0;
+    const floorHp = Number.isFinite(pvpIntercept?.floorHp) && pvpIntercept.floorHp >= 1 ? Math.trunc(pvpIntercept.floorHp) : 0;
+    const nonLethalFinish = floorHp > 0 && healthBefore - Math.trunc(amount) <= floorHp;
+    const effectiveAmount = nonLethalFinish ? Math.max(0, healthBefore - floorHp) : Math.trunc(amount);
+    let dead = false;
+    if (effectiveAmount > 0) {
+      if (typeof S.damagePlayer === 'function') {
+        dead = !!S.damagePlayer(p, effectiveAmount, source)?.dead;
+      } else {
+        const c = characterOf(p);
+        if (!c) return;
+        ctx.dirty(p);
+        c.health = Math.max(floorHp, c.health - effectiveAmount);
+        dead = c.health === 0;
+      }
     }
     ctx.dirty(p);
     const damage = Math.max(0, healthBefore - (characterOf(p)?.health ?? 0));
     if (damage > 0) onApplied?.(damage);
     if (damage > 0 && cause) ctx.notify(p, { kind: 'hurt', damage, cause });
-    ctx.emit('damage', { target: p, player: p, source, amount });
-    if (dead) defeat(p, source);
+    ctx.emit('damage', { target: p, player: p, source, amount: effectiveAmount });
+    if (nonLethalFinish) {
+      pvpIntercept?.onNonLethal?.();
+      return damage;
+    }
+    if (dead) {
+      if (!S.pvp?.onPlayerDefeat?.(p, source, cause)) defeat(p, source);
+    }
     return damage;
   }
 
@@ -1010,12 +1028,24 @@ export function install(ctx, options = {}) {
   const livingMonster = (e) => !!e?._m && !e.dead && e.hp > 0 && ctx.entities.get(e.id) === e;
 
   function monsterOpponents(e, target) {
-    return livingMonster(e) && livingMonster(target) && e.location === target.location && allowsMonsterCombat(e) && allowsMonsterCombat(target)
-      && (allied(e) && worldHostile(target) || worldHostile(e) && allied(target));
+    if (!(livingMonster(e) && livingMonster(target) && e.location === target.location && allowsMonsterCombat(e) && allowsMonsterCombat(target))) return false;
+    if (allied(e) && worldHostile(target) || worldHostile(e) && allied(target)) return true;
+    if (e._ally != null && target._ally != null && e._ally !== target._ally && S.pvp?.canPlayerHarmPlayer) {
+      const ownerA = allyOwner(e);
+      const ownerB = allyOwner(target);
+      return !!(ownerA && ownerB && S.pvp.canPlayerHarmPlayer(ownerA, ownerB, { kind: 'pet', summon: e })?.allowed);
+    }
+    return false;
   }
 
   function attackTarget(e, target) {
     if (target?._m) return monsterOpponents(e, target);
+    if (e._playerAlly && e._ally != null && S.pvp?.canPlayerHarmPlayer) {
+      const owner = allyOwner(e);
+      return !!owner && !!target && !target.arriving && ctx.players.get(target.id) === target
+        && locationOf(target) === e.location && characterOf(target) && !isDefeated(target)
+        && !!S.pvp.canPlayerHarmPlayer(owner, target, { kind: 'pet', summon: e })?.allowed;
+    }
     return !e._playerAlly && e.hostile !== false && validTarget(e, target);
   }
 
@@ -1056,7 +1086,9 @@ export function install(ctx, options = {}) {
   }
 
   function canSense(e, p) {
-    return (p?._m ? monsterOpponents(e, p) : validTarget(e, p)) && dist(p, e._home) <= cfg.leash + cfg.aggroRange
+    const eligible = p?._m ? monsterOpponents(e, p)
+      : (e._playerAlly && e._ally != null ? attackTarget(e, p) : validTarget(e, p));
+    return eligible && dist(p, e._home) <= cfg.leash + cfg.aggroRange
       && (floats(e) || sameFloor(e, p, e.location))
       && (e.behaviour !== 'aquatic' || !Number.isFinite(e._waterY)
         || underwaterAt(e, snapshotPosition(p, footOf(p, e.location))))
@@ -1194,6 +1226,7 @@ export function install(ctx, options = {}) {
       id: ++arrowSeq, shooter, target, attack, location, at: start, dx: dx / length, dy: dy / length, dz: dz / length,
       left: attack ? BOW_RANGE + cfg.reachSlack : BOW_MAX_RANGE,
       viewers: visibleTo == null ? null : new Set(visibleTo),
+      pvpContext: attack ? (S.pvp?.captureProjectileContext?.(shooter) ?? null) : null,
     };
     arrows.add(arrow);
     ctx.onRollback?.(() => arrows.delete(arrow));
@@ -1222,12 +1255,21 @@ export function install(ctx, options = {}) {
       const geometryClear = (to) => !S.canSee || S.canSee(a.location, from.x, from.z, to.x, to.z, { y1: from.y, y2: to.y, eye: 0, eye2: 0 });
       let closest = step + ARROW_RADIUS;
       let hit = null;
-      const candidates = a.attack ? ctx.entities.values() : [a.target];
+      const candidates = a.attack ? [...ctx.entities.values()] : [a.target];
+      if (a.attack && S.pvp?.canPlayerHarmPlayer) {
+        for (const q of ctx.players.values()) {
+          if (q !== e && !q.arriving && !isDefeated(q) && locationOf(q) === a.location && ctx.sameScene?.(e, q) !== false
+            && S.pvp.canPlayerHarmPlayer(e, q, { kind: 'arrow', projectileContext: a.pvpContext })?.allowed) {
+            candidates.push(q);
+          }
+        }
+      }
       for (const target of candidates) {
-        if (a.attack) {
+        const isPlayerTarget = a.attack && ctx.players.get(target?.id) === target;
+        if (a.attack && !isPlayerTarget) {
           if (target.location !== a.location || target.dead || !canHarmMonster(e, target)) continue;
           if (!target._m && (target !== a.target || target.kind !== 'npc')) continue;
-        } else if (!attackTarget(e, target)) continue;
+        } else if (!a.attack && !attackTarget(e, target)) continue;
         const center = arrowPoint(a.location, target);
         const x = center.x - from.x;
         const y = center.y - from.y;
@@ -1242,8 +1284,9 @@ export function install(ctx, options = {}) {
       if (hit) {
         arrows.delete(a);
         const contact = pointAt(Math.max(0, Math.min(step, closest)));
-        arrowEvent(a, { kind: 'arrowImpact', ...contact, reason: 'target', targetId: hit.id }, a.attack ? hit : e);
-        if (a.attack) resolvePlayerHit(e, hit, a.attack);
+        const hitPlayer = ctx.players.get(hit.id) === hit;
+        arrowEvent(a, { kind: 'arrowImpact', ...contact, reason: 'target', targetId: (a.attack && hitPlayer) ? `player:${hit.id}` : hit.id }, a.attack && !hitPlayer ? hit : e);
+        if (a.attack) resolvePlayerHit(e, hit, { ...a.attack, pvpContext: a.pvpContext });
         else strikeTarget(e, hit, true);
         continue;
       }
@@ -1438,7 +1481,8 @@ export function install(ctx, options = {}) {
     if (!detected && (allied(e) || e.hostile !== false) && now >= e._nextSense) {
       e._nextSense = now + 62.5;
       let nearest = Infinity;
-      const groups = [seeksOpponents ? opponents : [], e._playerAlly ? [] : occupants];
+      const allowAllyPvp = e._playerAlly && e._ally != null && !!S.pvp?.canPlayerHarmPlayer;
+      const groups = [seeksOpponents ? opponents : [], (e._playerAlly && !allowAllyPvp) ? [] : occupants];
       for (const group of groups) {
         for (const actor of group) {
           const distance = dist(e, actor);
@@ -1451,7 +1495,7 @@ export function install(ctx, options = {}) {
       }
     }
     let target = detected?.p;
-    if (target && !target._m) {
+    if (target && !target._m && !e._playerAlly) {
       firstEncounter(e, target);
       if (e.hostile === false) target = null;
       else if (detected.sight) alertUntil.set(target.id, now + PURSUIT_SECONDS * 1000);
@@ -1669,6 +1713,15 @@ export function install(ctx, options = {}) {
     return off <= (arcDeg * Math.PI) / 180;
   }
 
+  function resolvePlayerTarget(id) {
+    if (typeof id === 'number' && Number.isSafeInteger(id)) return ctx.players.get(id) ?? null;
+    if (typeof id === 'string') {
+      const m = /^(?:player:)?(\d+)$/.exec(id);
+      if (m) return ctx.players.get(Number(m[1])) ?? null;
+    }
+    return null;
+  }
+
   function targetFor(p, args, weapon) {
     const loc = locationOf(p);
     const range = (weapon?.bow ? BOW_RANGE : MELEE_REACH) + cfg.reachSlack;
@@ -1678,7 +1731,13 @@ export function install(ctx, options = {}) {
       const found = typeof id === 'string' ? ctx.entities.get(id) : null;
       const e = found && canHarmMonster(p, found) ? found : null;
       if (!e) {
-        if (ctx.players.has(Number(id))) throw new Error('You cannot attack other travellers.');
+        const q = resolvePlayerTarget(id);
+        if (q) {
+          const elig = S.pvp?.canPlayerHarmPlayer?.(p, q, { kind: weapon?.bow ? 'arrow' : 'melee', weapon });
+          if (!elig?.allowed) throw new Error(elig?.reason || 'You cannot attack other travellers.');
+          if (dist(p, q) > range || !facingWithin(p, q, arc) || (!weapon?.bow && !sameFloor(p, q, loc)) || !sees(loc, p, q)) return null;
+          return q;
+        }
         throw new Error('There is nothing there to attack.');
       }
       if (e.kind === 'npc' && !S.law?.strikeTownsperson) throw new Error('You cannot attack townsfolk.');
@@ -1695,6 +1754,17 @@ export function install(ctx, options = {}) {
       if (d <= bestD && facingWithin(p, e, arc) && (weapon?.bow || sameFloor(p, e, loc)) && sees(loc, p, e)) {
         best = e;
         bestD = d;
+      }
+    }
+    if (S.pvp?.canPlayerHarmPlayer) {
+      for (const q of ctx.players.values()) {
+        if (q === p || q.arriving || isDefeated(q) || locationOf(q) !== loc || ctx.sameScene?.(p, q) === false) continue;
+        if (!S.pvp.canPlayerHarmPlayer(p, q, { kind: weapon?.bow ? 'arrow' : 'melee', weapon })?.allowed) continue;
+        const d = dist(p, q);
+        if (d <= bestD && facingWithin(p, q, arc) && (weapon?.bow || sameFloor(p, q, loc)) && sees(loc, p, q)) {
+          best = q;
+          bestD = d;
+        }
       }
     }
     return best;
@@ -1768,9 +1838,71 @@ export function install(ctx, options = {}) {
     resolvePlayerHit(p, target, { weapon, item: weaponItem, direction });
   });
 
-  function resolvePlayerHit(p, target, { weapon, item, direction, arrow = null }) {
+  function resolvePlayerHit(p, target, { weapon, item, direction, arrow = null, pvpContext = null }) {
     if (target.kind === 'npc') {
       S.law?.strikeTownsperson?.(p, target, { weapon: item?.template ?? 'unarmed' });
+      return;
+    }
+    // Player-vs-Player resolution using server-owned classic attack math + unified PvP policy.
+    if (ctx.players.get(target?.id) === target && target.rpg) {
+      const kind = weapon?.bow ? 'arrow' : 'melee';
+      const elig = S.pvp?.canPlayerHarmPlayer?.(p, target, { kind, projectileContext: pvpContext });
+      if (!elig?.allowed) {
+        ctx.nearby(locationOf(p), { kind: 'miss', playerId: p.id, entityId: `player:${target.id}`, pvp: true });
+        return;
+      }
+      const c = characterOf(p);
+      if (!c || !characterOf(target)) return;
+      const facingAway = Math.abs(wrapAngle(yawTo(target, p) - (target.yaw ?? 0))) > Math.PI / 2;
+      const modifiers = S.characterAttackModifiers?.(p, {
+        skill: weapon?.skill ?? 'Hand-to-Hand', group: 'humanoid', armed: !!weapon,
+      });
+      const r = playerAttack({
+        player: { view: playerView(p), skill: (n) => S.skillValue?.(p, n) ?? skillOf(c, n) },
+        weapon,
+        swing: weapon?.bow ? null : SWINGS[direction],
+        monster: { id: -1, minMetal: -1 },
+        monsterView: playerView(target),
+        facingAway,
+        modifiers,
+        random,
+      });
+      let enchantmentDamage = 0;
+      if (weapon && r.hit) {
+        try { enchantmentDamage = Number(S.enchantmentDamageBonus?.(p, target)) || 0; } catch {}
+      }
+      const rawDamage = r.damage + enchantmentDamage;
+      if (!r.hit || rawDamage <= 0) {
+        ctx.nearby(locationOf(p), { kind: 'miss', playerId: p.id, entityId: `player:${target.id}`, pvp: true });
+        return;
+      }
+      if (typeof S.advanceSkill === 'function') {
+        S.advanceSkill(p, r.skill, 1);
+        S.advanceSkill(p, 'Critical Strike', 1);
+        if (r.backstabbing) S.advanceSkill(p, 'Backstabbing', 1);
+        try { S.advanceSkill(target, 'Dodging', 1); } catch {}
+      }
+      if (elig.mode === 'district') {
+        if (weapon) { try { S.damageItem?.(p, item?.id ?? 'weapon', 1); } catch {} }
+        try { S.damageArmor?.(target, 1, BODY_PART_NAMES[Math.floor(random() * BODY_PART_NAMES.length)]); } catch {}
+      }
+      const sourceLabel = weapon?.bow ? 'arrow' : weapon ? 'weapon' : 'hand';
+      const applied = hurtPlayer(target, rawDamage, p, undefined, sourceLabel);
+      const dealt = applied === 'absorbed' ? 0 : (Number(applied) || 0);
+      ctx.nearby(locationOf(p), {
+        kind: 'hit',
+        playerId: p.id,
+        targetPlayerId: target.id,
+        entityId: `player:${target.id}`,
+        damage: dealt,
+        hp: characterOf(target)?.health ?? 0,
+        maxHp: characterOf(target)?.maxHealth ?? 0,
+        source: sourceLabel,
+        pvp: true,
+        ...(applied === 'absorbed' ? { absorbed: true } : {}),
+        ...(r.backstab ? { backstab: true } : {}),
+      });
+      if (r.backstab) ctx.notify(p, { kind: 'combat', text: 'Successful backstab!' });
       return;
     }
     const c = characterOf(p);
@@ -1897,9 +2029,12 @@ export function install(ctx, options = {}) {
     requireFighter(p);
     const t = ctx.players.get(Number(args.targetId));
     if (!t || t === p || locationOf(t) !== locationOf(p) || ctx.sameScene?.(t, p) === false || !t.rpg?.defeated) throw new Error('There is no one here to help up.');
+    const help = S.pvp?.canPlayerHelpPlayer?.(p, t, { kind: 'revive' });
+    if (help && !help.allowed) throw new Error(help.reason || 'You cannot assist that player.');
     if (dist(p, t) > cfg.reviveReach + cfg.reachSlack) throw new Error('That is too far away.');
     ctx.dirty(t);
     resurrect(t, { inPlace: true, fraction: cfg.assistFraction });
+    S.pvp?.onPlayerHelp?.(p, t);
     ctx.notify(t, { kind: 'combat', text: `${p.name} helps you to your feet.` });
   });
 
@@ -1952,7 +2087,9 @@ export function install(ctx, options = {}) {
     const c = characterOf(p);
     if (!c || !(amount > 0)) return 0;
     const before = c.health;
-    hurtPlayer(p, Math.trunc(amount), source?.kind === 'monster' ? source : null, undefined, cause ?? (source?.kind === 'trap' ? 'trap' : 'other'));
+    const isPlayerOrReflected = source && (ctx.players.get(source.id) === source || source.kind === 'reflected');
+    const src = source?.kind === 'monster' || isPlayerOrReflected ? source : null;
+    hurtPlayer(p, Math.trunc(amount), src, undefined, cause ?? (source?.kind === 'trap' ? 'trap' : 'other'));
     return Math.max(0, before - (characterOf(p)?.health ?? before));
   };
   S.monstersIn = (location) => [...ctx.entities.values()].filter((e) => e.kind === 'monster' && e._m && !e.dead && e.location === location);
@@ -1972,14 +2109,26 @@ export function install(ctx, options = {}) {
         best = distance;
       }
     }
-    if (!nearest) return null;
-    const id = monsterId ?? nearest.monsterId;
+    let pvpFoe = null;
+    if (!nearest && S.pvp?.canPlayerHarmPlayer) {
+      for (const q of ctx.players.values()) {
+        if (q === p || q.arriving || isDefeated(q) || locationOf(q) !== location) continue;
+        if (!S.pvp.canPlayerHarmPlayer(p, q, { kind: 'pet' })?.allowed) continue;
+        const distance = dist(q, p);
+        if (distance < best) {
+          pvpFoe = q;
+          best = distance;
+        }
+      }
+    }
+    if (!nearest && !pvpFoe) return null;
+    const id = monsterId ?? nearest?.monsterId ?? 15;
     const yaw = p.yaw ?? 0;
     const at = placeable(location, p.x + Math.sin(yaw) * 2, p.z - Math.cos(yaw) * 2, y);
     if (!at || !geometryReady(location)) throw new Error('Nothing answers the call here.');
     const ally = S.createEnemy(location, id, at.x, at.z, {
       yaw, y, origin, team: TEAM_PLAYER_ALLY, allyOwner: p.id, level: levelOf(characterOf(p)),
-      waterY: isAquatic(ENEMY_BY_ID.get(id)) ? waterSurface(nearest, at.x, at.z) : undefined,
+      waterY: nearest && isAquatic(ENEMY_BY_ID.get(id)) ? waterSurface(nearest, at.x, at.z) : undefined,
     });
     if (!ally) throw new Error('Nothing answers the call here.');
     ctx.onRollback?.(() => scenes.get(location)?.monsters.delete(ally.id));

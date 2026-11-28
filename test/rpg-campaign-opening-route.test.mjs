@@ -2,13 +2,15 @@
 // real collision and the real doors, then leave. FIXTURE: the route is planned on the server's collision world and the
 // body is placed at each door's planned standing spot (not walked in real time); doors open through `dungeon.use`.
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { CharacterDraft } from '../client/gameplay/character/draft.js';
 import { OPENING_DUNGEON } from '../server/rpg/campaign/sites.js';
 import { createFixtureWorld, discoverFeatures, localArena2, STRICT, tempDir } from './support/rpg-session.mjs';
 import { DungeonExplorer, usableDoors } from './support/dungeon-route.mjs';
 
-const dataPath = localArena2();
+const dataPath = (process.env.ARENA2_DIR && existsSync(join(process.env.ARENA2_DIR, 'S0000999.QBN')) ? process.env.ARENA2_DIR : null) ?? localArena2();
 const gate = { skip: !dataPath && !STRICT ? 'operator ARENA2 unavailable' : false };
 
 test('a new character reaches Privateer’s Hold’s exit from the start marker (fixture route)', gate, async (t) => {

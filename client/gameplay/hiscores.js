@@ -10,6 +10,9 @@ import {
   RACES,
   MAX_SKILL,
 } from './character/rules.js';
+import { hiscoresWebUrl, hiscoresBoardWebUrl, hiscoresPlayerWebUrl } from '../lib/web-integration.js';
+
+export { hiscoresWebUrl, hiscoresBoardWebUrl, hiscoresPlayerWebUrl };
 
 export const CARTOGRAPHY_TOTAL = 15251;
 export const DEFAULT_PAGE_SIZE = 20;
@@ -286,6 +289,29 @@ export function install(api, opts = {}) {
     ui.status = String(text ?? '');
     const live = container?.querySelector?.('.hs-live');
     if (live) live.textContent = ui.status;
+  };
+
+  const webOrigin = () => {
+    const o = globalThis.location?.origin;
+    return typeof o === 'string' && o !== 'null' && !o.startsWith('file:') ? o : '';
+  };
+
+  const copyWebLink = (url) => {
+    const clip = globalThis.navigator?.clipboard;
+    if (clip && typeof clip.writeText === 'function') {
+      Promise.resolve(clip.writeText(url)).then(
+        () => {
+          say('Web link copied to clipboard.');
+          api.message?.('Chronicles web link copied.');
+        },
+        () => {
+          say(`Web link: ${url}`);
+        },
+      );
+      return true;
+    }
+    say(`Web link: ${url}`);
+    return false;
   };
 
   const isStale = (tabId) => !ui.loadedAt[tabId] || (now() - ui.loadedAt[tabId] > STALE_MS);
@@ -712,6 +738,19 @@ export function install(api, opts = {}) {
         class: 'btn btn-small hs-refresh',
         onclick: () => fetchBoard(),
       }, 'Refresh')),
+      el('div', { class: 'hs-web-actions' },
+        el('button', {
+          type: 'button',
+          class: 'btn btn-small hs-copy-link',
+          onclick: () => copyWebLink(hiscoresBoardWebUrl(ui.board, webOrigin())),
+        }, 'Copy web link'),
+        el('a', {
+          class: 'btn btn-small hs-web-link',
+          href: hiscoresBoardWebUrl(ui.board),
+          target: '_blank',
+          rel: 'noopener',
+        }, 'Open on web'),
+      ),
     );
 
     const data = ui.boardData;
@@ -835,13 +874,26 @@ export function install(api, opts = {}) {
           text: `${p.className ?? p.class ?? 'Adventurer'} · ${p.race ?? 'Unknown'} · Lv. ${formatNumber(level)} · Total Skill ${formatNumber(totalSkill)}`,
         }),
       ),
-      !viewingSelf
-        ? el('button', {
+      el('div', { class: 'hs-profile-actions' },
+        !viewingSelf
+          ? el('button', {
+            type: 'button',
+            class: 'btn btn-small btn-primary hs-compare-me-btn',
+            onclick: () => openCompareWith(p.name),
+          }, 'Compare with Me')
+          : null,
+        el('button', {
           type: 'button',
-          class: 'btn btn-small btn-primary hs-compare-me-btn',
-          onclick: () => openCompareWith(p.name),
-        }, 'Compare with Me')
-        : null,
+          class: 'btn btn-small hs-copy-link',
+          onclick: () => copyWebLink(hiscoresPlayerWebUrl(p.name, webOrigin())),
+        }, 'Copy web link'),
+        el('a', {
+          class: 'btn btn-small hs-web-link',
+          href: hiscoresPlayerWebUrl(p.name),
+          target: '_blank',
+          rel: 'noopener',
+        }, 'Open on web'),
+      ),
     );
 
     const core = p.core ?? {};

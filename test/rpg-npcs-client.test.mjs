@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   acceptsEvent, buyRows, clampQuantity, commandArgs, factionRelations, guildText, sellRows, standingText,
 } from '../client/gameplay/npcs/model.js';
+import { replyChoices } from '../client/gameplay/npcs/conversation.js';
 import { parseFactionText } from '../client/gameplay/npcs/factionFile.js';
 import { faceRecord, NpcAssets, parseFlatFaces } from '../client/gameplay/npcs/portrait.js';
 import { toRgba } from '../client/hud/classic-art.js';
@@ -106,4 +107,20 @@ test('installed talk portraits resolve fixed records with the original art palet
     assert.ok(i >= 0);
     assert.deepEqual([...rgba.subarray(4 * i, 4 * i + 4)], [...palette.subarray(3 * img.indices[i], 3 * img.indices[i] + 3), 255]);
   }
+});
+
+test('locked rank-gated services stay in conversation instead of opening a service panel', () => {
+  const lockedView = {
+    npc: { id: 'npc:fg:1', name: 'Guild Smith' },
+    topics: [],
+    services: [
+      { id: 'repair', label: 'Repairs', locked: true, reason: 'Only Fighters Guild members may use repairs here.' },
+      { id: 'bank', label: 'Banking' },
+    ],
+  };
+  const choices = replyChoices(lockedView);
+  const rep = choices.find((c) => c.id === 'svc-repair');
+  const bank = choices.find((c) => c.id === 'svc-bank');
+  assert.equal(rep.panel, null, 'locked repair should not open townServices over the refusal');
+  assert.equal(bank.panel, 'townServices', 'unlocked bank still opens townServices');
 });

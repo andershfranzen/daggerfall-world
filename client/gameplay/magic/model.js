@@ -47,6 +47,7 @@ const perLevel = (n) => (n > 1 ? `per ${n} levels` : 'per level');
 /** One readable line per effect setting. */
 export function effectLines(e) {
   const out = [];
+  if (e.key === 'MorphSelf') out.push('Shifts between human and beast form (lycanthropes only; once per day)');
   if (e.magnitude) {
     const m = e.magnitude;
     const plus = m.plusMax > 0 ? ` + ${m.plusMin === m.plusMax ? m.plusMin : `${m.plusMin}–${m.plusMax}`} ${perLevel(m.perLevel)}` : '';

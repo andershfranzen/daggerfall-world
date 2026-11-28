@@ -400,3 +400,24 @@ test('town kills earn a little court standing; leaving drops the session', () =>
   ctx.join(p);
   assert.throws(() => ctx.act(p, 'npc.topic', { targetId: v.npc.id, session: v.session, topic: 'news' }), /ended/);
 });
+
+test('dialogue view gold and services honor letters of credit via spendableGold/spendGold', () => {
+  const { ctx, p, byRole, talk } = setup();
+  let credit = 300;
+  ctx.services.spendableGold = (pl) => pl.rpg.gold + credit;
+  ctx.services.spendGold = (pl, amount) => {
+    const fromPurse = Math.min(pl.rpg.gold, amount);
+    pl.rpg.gold -= fromPurse;
+    credit -= (amount - fromPurse);
+  };
+  p.rpg.gold = 20;
+  const pr = byRole('priest');
+  const v = talk(p, pr);
+  assert.equal(v.gold, 320, 'view.gold includes letters of credit');
+  ctx.act(p, 'npc.service', { targetId: pr.id, session: v.session, service: 'heal' });
+  assert.equal(p.rpg.character.health, 40);
+  assert.equal(p.rpg.gold, 0);
+  assert.equal(credit, 280);
+  ctx.act(p, 'npc.service', { targetId: pr.id, session: v.session, service: 'donate' });
+  assert.equal(credit, 180);
+});

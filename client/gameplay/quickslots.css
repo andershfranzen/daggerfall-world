@@ -1,0 +1,308 @@
+/* Quickslots bar, HUD conveniences (arrows, quest deadline, rest warnings, wagon prompt),
+ * Privateer's Hold tutorial guide, searchable contextual Help, road-following HUD & phone touch overlay.
+ */
+
+/* ---- Quickslots bar ---- */
+.qs-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 4.55rem;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: rgba(10, 14, 20, 0.86);
+  border: 1px solid rgba(145, 168, 198, 0.32);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+.qs-bar[hidden] { display: none; }
+body[data-menu] .qs-bar,
+body[data-menu] .hud-conv,
+body[data-menu] .hud-tutorial,
+body[data-menu] .road-hud { visibility: hidden; }
+
+.qs-cell {
+  position: relative;
+  display: flex;
+}
+.qs-slot {
+  display: grid;
+  align-content: space-between;
+  justify-items: start;
+  width: 5.4rem;
+  min-height: 2.5rem;
+  padding: 0.22rem 0.35rem;
+  background: linear-gradient(180deg, #252e3a 0%, #171e27 100%);
+  border: 1px solid rgba(145, 168, 198, 0.28);
+  border-radius: 3px;
+  color: #e4eaf2;
+  font: 600 0.7rem/1.15 var(--font-ui, system-ui, sans-serif);
+  cursor: pointer;
+  text-align: left;
+}
+.qs-slot:hover { border-color: #6fb6ff; background: #223041; }
+.qs-slot.is-equipped { border-color: #6fb6ff; box-shadow: inset 0 0 0 1px rgba(111, 182, 255, 0.45); }
+.qs-slot.is-selected { background: linear-gradient(180deg, #1f3b58 0%, #15283d 100%); }
+.qs-slot.is-empty { opacity: 0.62; color: #8c9db2; }
+.qs-key { font-size: 0.62rem !important; opacity: 0.9; }
+.qs-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.qs-qty {
+  position: absolute;
+  top: 2px;
+  right: 16px;
+  font: 700 0.64rem/1 var(--font-mono, monospace);
+  color: #f0d788;
+}
+.qs-edit-btn {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: rgba(8, 12, 18, 0.65);
+  color: #9ab0c7;
+  font-size: 0.62rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.qs-edit-btn:hover { color: #fff; background: #26486e; }
+
+.qs-picker {
+  position: fixed;
+  left: 50%;
+  bottom: 7.7rem;
+  transform: translateX(-50%);
+  z-index: 32;
+  width: min(22rem, 92vw);
+  max-height: 18rem;
+  overflow-y: auto;
+  padding: 0.6rem;
+  background: #141b25;
+  border: 1px solid rgba(111, 182, 255, 0.45);
+  border-radius: 5px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+  color: #e4eaf2;
+  display: grid;
+  gap: 0.45rem;
+  pointer-events: auto;
+}
+.qs-picker[hidden] { display: none; }
+.qs-picker-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; }
+.qs-picker-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.qs-pick-item {
+  width: 100%;
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  background: #1c2635;
+  border: 1px solid rgba(145, 168, 198, 0.22);
+  color: #e4eaf2;
+  border-radius: 3px;
+  font: 0.8rem var(--font-ui, system-ui, sans-serif);
+  cursor: pointer;
+}
+.qs-pick-item:hover { border-color: #6fb6ff; background: #24364d; }
+.qs-picker-empty { margin: 0; color: #9ab0c7; font-size: 0.8rem; }
+.qs-picker-foot { display: flex; justify-content: flex-end; }
+
+/* ---- HUD conveniences strip ---- */
+.hud-conv {
+  position: fixed;
+  top: 3.35rem;
+  left: 0.8rem;
+  z-index: 19;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: min(36rem, 62vw);
+  pointer-events: none;
+}
+.hud-conv[hidden] { display: none; }
+.hud-chip {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0.26rem 0.55rem;
+  background: rgba(12, 18, 26, 0.88);
+  border: 1px solid rgba(145, 168, 198, 0.34);
+  border-radius: 3px;
+  color: #dfe8f2;
+  font: 600 0.74rem/1.2 var(--font-ui, system-ui, sans-serif);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+button.hud-chip { cursor: pointer; }
+button.hud-chip:hover { border-color: #6fb6ff; color: #fff; }
+.hud-chip.is-warn { border-color: #e6b85c; color: #f6dc9b; }
+.hud-chip.is-danger { border-color: #e2796c; color: #f7bcb4; }
+.hud-chip.is-accent { border-color: #6fb6ff; background: rgba(24, 52, 82, 0.92); color: #d6ecff; }
+
+/* ---- Privateer's Hold Opening Tutorial card ---- */
+.hud-tutorial {
+  position: fixed;
+  top: 6rem;
+  left: 0.8rem;
+  z-index: 19;
+  width: min(23rem, 88vw);
+  padding: 0.65rem 0.8rem;
+  background: rgba(12, 19, 28, 0.92);
+  border: 1px solid rgba(111, 182, 255, 0.48);
+  border-radius: 5px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
+  color: #e4eaf2;
+  display: grid;
+  gap: 0.45rem;
+  pointer-events: auto;
+}
+.hud-tutorial[hidden] { display: none; }
+.tut-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 0.84rem; color: #b6dcff; }
+.tut-step { font: 600 0.74rem var(--font-mono, monospace); color: #8fa6bf; }
+.tut-body { margin: 0; font-size: 0.82rem; line-height: 1.45; color: #d9e3ee; }
+.tut-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+
+/* ---- Searchable Contextual Help panel ---- */
+.help-root { display: grid; gap: 0.85rem; }
+.help-search-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.help-search-input {
+  flex: 1 1 16rem;
+  min-height: 2.1rem;
+  padding: 0.35rem 0.65rem;
+  background: var(--surface-0, #0a0e14);
+  color: var(--sh-text, #dfe6ee);
+  border: 1px solid var(--border-strong, rgba(145, 168, 198, 0.38));
+  border-radius: 3px;
+  font: 0.9rem var(--font-ui, system-ui, sans-serif);
+}
+.help-entries {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: 0.65rem;
+}
+.help-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.65rem 0.8rem;
+  background: var(--surface-2, #18212e);
+  border: 1px solid var(--border-subtle, rgba(145, 168, 198, 0.22));
+  border-radius: 4px;
+}
+.help-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; font-size: 0.88rem; }
+.help-cat {
+  font: 700 0.66rem/1 var(--font-mono, monospace);
+  text-transform: uppercase;
+  padding: 0.16rem 0.38rem;
+  border-radius: 2px;
+  background: rgba(111, 182, 255, 0.16);
+  color: #9ed0ff;
+}
+.help-bind { margin-left: auto; font-size: 0.72rem; }
+.help-card-body { margin: 0; font-size: 0.83rem; line-height: 1.42; color: #b8c6d8; }
+.help-tutorial-box {
+  padding: 0.75rem 0.9rem;
+  background: rgba(15, 25, 38, 0.7);
+  border: 1px solid rgba(111, 182, 255, 0.3);
+  border-radius: 4px;
+  display: grid;
+  gap: 0.5rem;
+}
+.help-tut-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.help-tut-list { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.35rem; font-size: 0.84rem; color: #cfdbe8; }
+
+/* ---- Road-following HUD banner ---- */
+.road-hud {
+  position: fixed;
+  top: 3.35rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 19;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0.32rem 0.7rem;
+  background: rgba(11, 18, 27, 0.9);
+  border: 1px solid rgba(127, 224, 196, 0.45);
+  border-radius: 4px;
+  color: #e4f3ef;
+  font: 600 0.78rem/1.25 var(--font-ui, system-ui, sans-serif);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.48);
+  pointer-events: auto;
+}
+.road-hud[hidden] { display: none; }
+.road-cue { color: #7fe0c4; font-family: var(--font-mono, monospace); }
+.road-junction-bar { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; border-top: 1px solid rgba(145, 168, 198, 0.2); padding-top: 4px; }
+
+/* ---- Phone touch controls overlay ---- */
+.touch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 18;
+  pointer-events: none;
+  user-select: none;
+  touch-action: none;
+}
+.touch-overlay[hidden] { display: none; }
+body[data-menu] .touch-overlay { display: none; }
+.touch-stick-zone {
+  position: fixed;
+  left: 1rem;
+  bottom: 5.5rem;
+  width: 7.5rem;
+  height: 7.5rem;
+  border-radius: 50%;
+  background: rgba(12, 18, 26, 0.55);
+  border: 2px solid rgba(111, 182, 255, 0.45);
+  pointer-events: auto;
+  touch-action: none;
+}
+.touch-stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3rem;
+  height: 3rem;
+  margin: -1.5rem 0 0 -1.5rem;
+  border-radius: 50%;
+  background: rgba(111, 182, 255, 0.65);
+  border: 2px solid #d6ecff;
+}
+.touch-look-zone {
+  position: fixed;
+  right: 0;
+  top: 4rem;
+  width: 45vw;
+  bottom: 12rem;
+  pointer-events: auto;
+  touch-action: none;
+}
+.touch-actions {
+  position: fixed;
+  right: 1rem;
+  bottom: 5.5rem;
+  display: grid;
+  grid-template-columns: repeat(3, 3.6rem);
+  gap: 6px;
+  pointer-events: auto;
+}
+.touch-btn {
+  min-height: 3rem;
+  border-radius: 6px;
+  background: rgba(16, 25, 38, 0.82);
+  border: 1px solid rgba(145, 168, 198, 0.45);
+  color: #e4eaf2;
+  font: 700 0.7rem/1.1 var(--font-ui, system-ui, sans-serif);
+  text-transform: uppercase;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.touch-btn:active { background: #265180; border-color: #9ed0ff; }
+
+@media (max-width: 720px) {
+  .qs-bar { max-width: 96vw; overflow-x: auto; }
+  .qs-slot { width: 4.1rem; }
+}

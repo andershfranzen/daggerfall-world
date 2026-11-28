@@ -13,7 +13,7 @@ import { compileAction } from '../server/rpg/quests/actions.js';
 import { readQbn, decompileQbn } from '../server/rpg/quests/qbn.js';
 import { loadCatalog, metaFromName } from '../server/rpg/quests/catalog.js';
 
-const ARENA2 = ['gamedata/DaggerfallGameFiles/arena2', 'gamedata/arena2', 'gamedata/ARENA2'].find((d) => existsSync(join(d, 'A0C00Y10.QBN')));
+const ARENA2 = [process.env.ARENA2_DIR, 'gamedata/DaggerfallGameFiles/arena2', 'gamedata/arena2', 'gamedata/ARENA2'].filter(Boolean).find((d) => existsSync(join(d, 'A0C00Y10.QBN')));
 const TOWN = 'town:Daggerfall/Gothway Garden';
 const ok = (r) => assert.equal(r.ok, true, r.error);
 
@@ -240,14 +240,15 @@ test('new opcode lines compile to their engine actions', () => {
   assert.equal(compileAction('cast spell Shield on _giver_').status, 'unsupported', 'named spells on actors stay unsupported');
 });
 
-test('classic: every installed QBN opcode is decoded except 0x3c (Auriel’s Bow, B0B71Y03)', { skip: !ARENA2 && 'no ARENA2 in gamedata/' }, () => {
+test('classic: every installed QBN opcode is decoded (including 0x3c in Auriel’s Bow, B0B71Y03)', { skip: !ARENA2 && 'no ARENA2 in gamedata/' }, () => {
   const unknown = new Map();
   for (const f of readdirSync(ARENA2).filter((x) => /\.qbn$/i.test(x))) {
     for (const code of decompileQbn(readQbn(readFileSync(join(ARENA2, f)))).unknownOpcodes) unknown.set(code, [...(unknown.get(code) ?? []), f]);
   }
-  assert.deepEqual([...unknown.keys()], [0x3c], JSON.stringify([...unknown]));
+  assert.deepEqual([...unknown.keys()], [], JSON.stringify([...unknown]));
   // Operand order, checked against Daggerfall Unity's translations of the same quests.
   const lines = (n) => decompileQbn(readQbn(readFileSync(join(ARENA2, `${n}.QBN`)))).lines.join('\n');
+  assert.match(lines('B0B71Y03'), /_0x3c_ 19/);
   assert.match(lines('K0C30Y03'), /send _\S+_ every 80 minutes 30 times with 15% success/);
   assert.match(lines('S0000021'), /send _\S+_ every 1410 minutes indefinitely with 100% success/);
   assert.match(lines('A0C00Y11'), /clicked _\S+_ and at least 20 gold otherwise do _S\.10_/);
@@ -256,12 +257,13 @@ test('classic: every installed QBN opcode is decoded except 0x3c (Auriel’s Bow
   assert.match(lines('S0000010'), /level 8 completed/);
 });
 
-test('classic: random-dungeon placement no longer blocks; remaining blockers are source facts', { skip: !ARENA2 && 'no ARENA2 in gamedata/' }, () => {
-  const cat = loadCatalog({ dataPath: ARENA2 });
+test('classic: random-dungeon placement no longer blocks; B0B71Y03 is offerable with artifacts and 243/302 quests are offerable', { skip: !ARENA2 && 'no ARENA2 in gamedata/' }, () => {
+  const cat = loadCatalog({ dataPath: ARENA2, artifact: () => true });
   const all = [...cat.quests.values()];
   assert.ok(!all.some((q) => q.analysis.unsupported.some((u) => /random dungeons are not placed/.test(u))));
-  assert.ok(!all.some((q) => q.analysis.unsupported.some((u) => /unknown opcode 0x(1b|47|48|31|3a|3b|49|4d|4f|52|54|57|11|3f|40)/.test(u))));
-  for (const n of ['K0C00Y09', 'A0C01Y03', 'N0C00Y12', 'R0C10Y21']) assert.equal(cat.quests.get(n).analysis.offerable, true, n);
+  assert.ok(!all.some((q) => q.analysis.unsupported.some((u) => /unknown opcode/i.test(u))));
+  for (const n of ['K0C00Y09', 'A0C01Y03', 'N0C00Y12', 'R0C10Y21', 'B0B71Y03']) assert.equal(cat.quests.get(n).analysis.offerable, true, n);
+  assert.equal(all.filter((q) => q.analysis.offerable).length, 243, 'all 243 guild/social/knightly quests are offerable');
   assert.deepEqual(cat.failures.map((f) => f.name).sort(), ['80C00Y00', 'A0C00Y04', 'N0C00Y01', 'R0C40Y23'], 'four QBN files ship without QRC text');
   const dragonslayer = cat.quests.get('B0B70Y16').def.resources;
   assert.deepEqual(dragonslayer.get('l.00').types, ['dungeon14']);

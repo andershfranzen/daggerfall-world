@@ -1320,7 +1320,8 @@ export function install(ctx, options = {}) {
     if (id && vessels.has(id)) return `vessel:${id}`;
     return `own:${p.id}`;
   }
-  services.presenceScope = presenceScope;
+  const prevPresenceScope = services.presenceScope;
+  services.presenceScope = (p) => presenceScope(p) ?? (typeof prevPresenceScope === 'function' ? prevPresenceScope(p) : null);
 
   // ------------------------------------------------------------------ property hooks
 

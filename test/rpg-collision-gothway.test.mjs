@@ -8,9 +8,9 @@ import { join } from 'node:path';
 import { arena2Loader } from '../server/rpg/collision/arena2.js';
 import { createCollision } from '../server/rpg/collision.js';
 
-const ARENA2 = fileURLToPath(new URL('../gamedata/DaggerfallGameFiles/arena2/', import.meta.url));
-const INSTALL = fileURLToPath(new URL('../gamedata/DaggerfallGameFiles/', import.meta.url));
-const skip = existsSync(join(ARENA2, 'MAPS.BSA')) ? false : 'local Daggerfall data not present in gamedata/DaggerfallGameFiles/arena2';
+const ARENA2 = process.env.ARENA2_DIR || fileURLToPath(new URL('../gamedata/DaggerfallGameFiles/arena2/', import.meta.url));
+const INSTALL = process.env.ARENA2_DIR || fileURLToPath(new URL('../gamedata/DaggerfallGameFiles/', import.meta.url));
+const skip = existsSync(join(ARENA2, 'MAPS.BSA')) ? false : `local Daggerfall data not present in ${ARENA2}`;
 const TOWN = 'town:Daggerfall/Gothway Garden';
 
 let world;

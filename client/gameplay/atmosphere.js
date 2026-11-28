@@ -25,6 +25,7 @@ import { loadPrefs, savePrefs } from './atmosphere/prefs.js';
 import { sceneKind, chooseSong, clipsForEvent, ambienceFor, footstepClips, creatureClip, mechanismClip, hearingRadius, creatureSoundVolume, CREATURE_ATTRACT, CLIP } from './atmosphere/playlists.js';
 import { lightFor, restoreLight, heldLightRadius, gutter } from './atmosphere/light.js';
 import { WeatherLayer } from './atmosphere/weather.js';
+import { skyStateFor } from '../render/sky-dome.js';
 import { cityGatesClosed } from '../world/cityGates.js';
 import { seaSound } from './sailing/sound.js';
 
@@ -74,6 +75,7 @@ export function install(api) {
   let nextAmbient = 0;
   let lastSceneKey = '';
   let flash = 0;
+  let flashDir = [0.5, 0.45, -0.74];
   let lastLight = null;
   let lastStep = null;
   let lastCreature = null;
@@ -153,6 +155,39 @@ export function install(api) {
   else document.body.append(shade, weatherCanvas);
   (document.getElementById('hud') ?? document.body).append(chip);
   const weather = new WeatherLayer(weatherCanvas);
+
+  // When the renderer multiplies the shade over its own frame (so that the sky's moons and stars can outshine
+  // it), the layers drawn over the view and under the shade element (the held weapon, the horse's head) are
+  // darkened by the same colour with a colour-matrix filter instead, and the shade element stays clear.
+  let tint = null;
+  let tintKey = '';
+  const tintOverlays = (rgb) => {
+    const key = rgb.map((v) => Math.min(1, Math.max(0, v)).toFixed(3)).join(' ');
+    const clear = key === '1.000 1.000 1.000';
+    if (!tint && !clear && typeof document.createElementNS === 'function') {
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('aria-hidden', 'true');
+      svg.setAttribute('style', 'position:absolute;width:0;height:0;pointer-events:none');
+      const filter = document.createElementNS(NS, 'filter');
+      filter.setAttribute('id', 'atmo-shade-tint');
+      filter.setAttribute('color-interpolation-filters', 'sRGB');
+      tint = document.createElementNS(NS, 'feColorMatrix');
+      tint.setAttribute('type', 'matrix');
+      filter.append(tint);
+      svg.append(filter);
+      document.body.append(svg);
+    }
+    if (tint && key !== tintKey) {
+      const [r, g, b] = key.split(' ');
+      tint.setAttribute('values', `${r} 0 0 0 0 0 ${g} 0 0 0 0 0 ${b} 0 0 0 0 0 1 0`);
+    }
+    tintKey = key;
+    const want = clear || !tint ? '' : 'url(#atmo-shade-tint)';
+    for (let n = view?.nextElementSibling; n && n !== shade; n = n.nextElementSibling) {
+      if (n.tagName === 'CANVAS' && n.style && n.style.filter !== want) n.style.filter = want;
+    }
+  };
   const reduceMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)');
 
   function updateChip(info = sceneInfo()) {
@@ -372,6 +407,7 @@ export function install(api) {
     engine.setPaused(!inGame);
     if (inGame) { keepLayerOrder(); pickMusic(true); updateChip(); } else {
       if (api.renderer) restoreLight(api.renderer);
+      tintOverlays([1, 1, 1]);
       weather.clear();
     }
   }
@@ -407,16 +443,26 @@ export function install(api) {
     engine.setUnderwater(info.underwater);
     if (renderer) {
       renderer.cityGatesClosed = cityGatesClosed(info.minutes);
-      const L = lightFor({ minuteOfDay: info.minutes % MINUTES_PER_DAY, weather: info.weather, indoors: info.indoors, flash, kind: info.kind, lightRadius: info.lightRadius, underwater: info.underwater });
+      // The classic sky's own colours for the minute, while its panorama is being drawn (client/render/sky-dome.js).
+      const tone = renderer.skyTone && renderer.frameId - renderer.skyTone.frame <= 2 ? renderer.skyTone : null;
+      const L = lightFor({ minuteOfDay: info.minutes % MINUTES_PER_DAY, weather: info.weather, indoors: info.indoors, flash, kind: info.kind, lightRadius: info.lightRadius, underwater: info.underwater, tone });
       lastLight = { light: L.light ?? (info.indoors ? 'interior' : 'sky'), radius: L.radius ?? null, fog: L.fogOverride ?? null, underwater: info.underwater };
       L.apply(renderer);
-      shade.style.backgroundColor = L.shadeCss;
+      if (renderer.shadeInGl) {
+        renderer.shade = L.shade;
+        renderer.skyState = info.indoors || info.underwater || info.kind === 'dungeon' ? null
+          : skyStateFor({ minuteOfDay: info.minutes % MINUTES_PER_DAY, classicMinutes: info.minutes, weather: info.weather, flash, flashDir });
+        shade.style.backgroundColor = 'rgb(255 255 255)';
+        tintOverlays(L.shade);
+      } else shade.style.backgroundColor = L.shadeCss;
     }
     flash = Math.max(0, flash - dt * 3);
 
     // Storm flashes.
     if (info.weather === 'thunder' && !info.indoors && Math.random() < dt / 14) {
       flash = 1;
+      const bearing = Math.random() * Math.PI * 2; // where in the cloud this one strikes
+      flashDir = [Math.sin(bearing) * 0.85, 0.3 + Math.random() * 0.4, -Math.cos(bearing) * 0.85];
       const delay = 400 + Math.random() * 2600;
       setTimeout(() => engine.playClip(Math.random() < 0.5 ? CLIP.StormLightningThunder : CLIP.StormThunderRoll, { bus: 'ambience', volume: 0.9 }), delay);
     }

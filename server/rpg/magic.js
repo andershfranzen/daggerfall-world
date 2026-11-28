@@ -5,7 +5,7 @@
 // Daggerfall Unity's formulas (MIT, see server/rpg/magic/*.js). The server is authoritative:
 // it validates magicka, cooldown, range, aim, target kind and status before anything changes.
 import { randomUUID } from 'node:crypto';
-import { loadCatalogue, startingSpellIds } from './magic/catalogue.js';
+import { loadCatalogue, startingSpellIds, fallbackSpells } from './magic/catalogue.js';
 import { EFFECTS } from './magic/effects.js';
 import { CONJURED_EQUIPMENT } from './magic/conjuration.js';
 import { CAST_COST_FLOOR, spellCosts, effectGoldCost, rollMagnitude, durationRounds, chanceValue, savingThrow, classicCastingCost } from './magic/formulas.js';
@@ -84,6 +84,11 @@ export function install(ctx, options = {}) {
   });
   if (catalogue.error) console.warn(`magic: ${catalogue.error}; using built-in spells`);
   const vampireSpells = new Map();
+  // Keep built-in fallback spells hidden but resolvable when SPELLS.STD is active, so characters
+  // saved before ARENA2_DIR was enabled can still see and cast their existing ward:* spells.
+  const legacySpells = catalogue.source === 'SPELLS.STD'
+    ? new Map(fallbackSpells().map((s) => [s.id, { ...s, hidden: true }]))
+    : new Map();
 
   const cooldownUntil = new Map(); // player id -> ms
   const entityEffects = new Map(); // entity id -> active effect array
@@ -120,15 +125,42 @@ export function install(ctx, options = {}) {
     return market ? tradePrice(presented, market.quality, false, market) : presented;
   }
 
+  const isLycanthropySpell = (p, spell) => spell?.id === 'std:92' && !!p?.rpg?.conditions?.lycanthrope;
+
   function catalogueEvent(p, market = null) {
     const known = magicOf(p).known;
-    const spells = [...catalogue.spells.values(), ...vampireSpells.values()].filter(s => !s.hidden || known.includes(s.id)).map(s => ({
-      ...publicSpell(s), price: learningPrice(p, s, market),
-    }));
+    const spells = [...catalogue.spells.values(), ...legacySpells.values(), ...vampireSpells.values()]
+      .filter((s) => !s.hidden || known.includes(s.id))
+      .map((s) => {
+        const pub = publicSpell(s);
+        if (isLycanthropySpell(p, s)) {
+          pub.innate = 'lycanthrope';
+          pub.baseCosts = { ...pub.baseCosts, magicka: 0 };
+        }
+        return { ...pub, price: learningPrice(p, s, market) };
+      });
     return {
       kind: 'spellCatalogue', source: catalogue.source, coverage: catalogue.coverage,
       requiresSeller: requiresSeller(), spells: spells.concat(customSpells(p).map(publicSpell)),
     };
+  }
+
+  function syncLycanthropySpell(p) {
+    if (!p?.rpg || !catalogue.spells.has('std:92')) return false;
+    const m = magicOf(p);
+    const hasLycan = !!p.rpg.conditions?.lycanthrope;
+    if (hasLycan) {
+      let changed = false;
+      if (!m.known.includes('std:92')) { m.known.push('std:92'); changed = true; }
+      if (!m.lycanthropeGranted) { m.lycanthropeGranted = true; changed = true; }
+      return changed;
+    }
+    if (!m.lycanthropeGranted) return false;
+    delete m.lycanthropeGranted;
+    const had = m.known.includes('std:92');
+    m.known = m.known.filter((id) => id !== 'std:92');
+    if (m.selected === 'std:92') m.selected = null;
+    return had || true;
   }
 
   // ---------- state helpers ----------
@@ -219,15 +251,45 @@ export function install(ctx, options = {}) {
     }
   }
 
-  /** Grant class starting spells once a character exists. Returns true if anything changed. */
+  function resolveSpellById(p, id) {
+    if (!id) return null;
+    return catalogue.spells.get(id) ?? legacySpells.get(id) ?? vampireSpells.get(id) ?? customSpells(p).find((s) => s.id === id) ?? null;
+  }
+
+  /** Grant class starting spells once a character exists and reconcile stale catalogue ids. Returns true if anything changed. */
   function grantStarting(p) {
     const m = magicOf(p);
     const cls = p.rpg.character?.className;
-    if (m.granted || !cls) return false;
-    m.granted = true;
-    for (const id of startingSpellIds(catalogue, cls)) if (!m.known.includes(id)) m.known.push(id);
-    if (!m.selected && m.known.length) m.selected = m.known.find((id) => catalogue.spells.get(id)?.support !== 'unsupported') ?? null;
-    return true;
+    let changed = false;
+    if (!m.granted && cls) {
+      m.granted = true;
+      changed = true;
+      for (const id of startingSpellIds(catalogue, cls)) if (!m.known.includes(id)) m.known.push(id);
+      if (catalogue.source === 'SPELLS.STD') m.stdGranted = true;
+      else m.fallbackGranted = true;
+    } else if (m.granted && cls) {
+      if (catalogue.source === 'SPELLS.STD' && !m.stdGranted && m.known.some((id) => id.startsWith('ward:')) && !m.known.some((id) => id.startsWith('std:'))) {
+        m.stdGranted = true;
+        changed = true;
+        for (const id of startingSpellIds(catalogue, cls)) if (!m.known.includes(id)) m.known.push(id);
+      } else if (catalogue.source !== 'SPELLS.STD' && !m.fallbackGranted && m.known.length > 0 && !m.known.some((id) => resolveSpellById(p, id))) {
+        m.fallbackGranted = true;
+        changed = true;
+        for (const id of startingSpellIds(catalogue, cls)) if (!m.known.includes(id)) m.known.push(id);
+      }
+    }
+    const sel = m.selected && m.known.includes(m.selected) ? resolveSpellById(p, m.selected) : null;
+    if ((!sel || sel.support === 'unsupported') && m.known.length) {
+      const next = m.known.find((id) => {
+        const sp = resolveSpellById(p, id);
+        return sp && sp.support !== 'unsupported';
+      }) ?? null;
+      if (next && next !== m.selected) {
+        m.selected = next;
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   const activeOf = (t) => (t.kind === 'player' ? magicOf(t.ref).active : entityEffects.get(t.id) ?? []);
@@ -316,6 +378,8 @@ export function install(ctx, options = {}) {
     }
     const a = m.anchor;
     if (!a) throw new Error('You have no Recall anchor.');
+    const pvpBlock = services.pvp?.travelBlocker?.(p);
+    if (pvpBlock) throw new Error(pvpBlock);
     if (!services.portals?.transfer) throw new Error('Recall travel is unavailable here.');
     const collision = services.collision;
     if (collision && !collision.isClear(a.location, a.x, a.z, a.y)) {
@@ -392,7 +456,7 @@ export function install(ctx, options = {}) {
       const skip = own ? (t) => mesh.mechanismAt?.(t) === own.id || (t >= own.firstTriangle && t < own.firstTriangle + own.triangleCount) : undefined;
       return mesh.segmentClear(a.x, a.y, a.z, b.x, b.y, b.z, skip);
     }
-    return services.canSee?.(location, a.x, a.z, b.x, b.z, { y1: a.y - 1.5, y2: b.y - 1.5 }) ?? true;
+    return services.canSee?.(location, a.x, a.z, b.x, b.z, { y1: a.y, y2: b.y, eye: 0, eye2: 0 }) ?? true;
   }
 
   /** Monsters spells may affect: the combat feature's living monsters when it is installed. */
@@ -410,6 +474,16 @@ export function install(ctx, options = {}) {
       if (q !== except && !q.arriving && loc(q) === location && q.rpg?.character?.health > 0 && !q.rpg.defeated) out.push(asPlayerTarget(q));
     }
     return out;
+  }
+  function harmablePlayers(location, caster, spell, pvpContext = null) {
+    if (!services.pvp?.canPlayerHarmPlayer || !caster) return [];
+    return playersAt(location, caster).filter((t) => services.pvp.canPlayerHarmPlayer(caster, t.ref, { kind: 'spell', spell, projectileContext: pvpContext })?.allowed);
+  }
+  function helpablePlayers(location, caster, except, spell, pvpContext = null) {
+    return playersAt(location, except).filter((t) => {
+      if (!caster || t.ref === caster) return true;
+      return services.pvp?.canPlayerHelpPlayer?.(caster, t.ref, { kind: 'heal', spell, projectileContext: pvpContext })?.allowed !== false;
+    });
   }
 
   function findTarget(p, id) {
@@ -447,12 +521,12 @@ export function install(ctx, options = {}) {
     const harmful = spell.harmful;
     const range = t === 'touch' ? opts.touchRange : opts.missileRange;
     const cone = t === 'touch' ? opts.touchCone : opts.aimCone;
-    const pool = harmful ? monstersAt(location, p) : playersAt(location, p);
+    const pool = harmful ? monstersAt(location, p).concat(harmablePlayers(location, p, spell)) : helpablePlayers(location, p, p, spell);
 
     if (t === 'areaAroundCaster') {
       const center = { x: p.x, z: p.z };
       const targets = banishments.length === spell.effects.length ? nearBanishTargets()
-        : inRadius(harmful ? monstersAt(location, p) : playersAt(location, p), position(p, location, 1.2), location);
+        : inRadius(harmful ? monstersAt(location, p).concat(harmablePlayers(location, p, spell)) : helpablePlayers(location, p, p, spell), position(p, location, 1.2), location);
       return { targets, center, area: true };
     }
 
@@ -462,7 +536,14 @@ export function install(ctx, options = {}) {
         if (harmful) throw new Error('You cannot cast that on yourself.');
         if (t !== 'areaAtRange') return { targets: [me], center: { x: p.x, z: p.z } };
       }
-      if (harmful && target.kind === 'player') throw new Error('Harmful spells cannot be cast at other players.');
+      if (harmful && target.kind === 'player') {
+        const elig = services.pvp?.canPlayerHarmPlayer?.(p, target.ref, { kind: 'spell', spell });
+        if (!elig?.allowed) throw new Error(elig?.reason || 'Harmful spells cannot be cast at other players.');
+      }
+      if (!harmful && target.kind === 'player' && !target.self) {
+        const elig = services.pvp?.canPlayerHelpPlayer?.(p, target.ref, { kind: 'heal', spell });
+        if (elig && !elig.allowed) throw new Error(elig.reason || 'You cannot cast helpful spells on that player.');
+      }
       if (!harmful && target.kind === 'entity') throw new Error(`${spell.name} would only help ${target.name}.`);
       const g = geometry(p, yaw, target.x, target.z);
       if (g.dist > range) throw new Error(t === 'touch' ? `${target.name} is out of reach.` : `${target.name} is out of range.`);
@@ -484,7 +565,7 @@ export function install(ctx, options = {}) {
     }
     if (t === 'areaAtRange') {
       const center = { x: target.x, z: target.z };
-      return { targets: inRadius(harmful ? monstersAt(location, p) : playersAt(location, null), bodyPosition(target, location), location), center, area: true, aimed: target };
+      return { targets: inRadius(harmful ? monstersAt(location, p).concat(harmablePlayers(location, p, spell)) : helpablePlayers(location, p, null, spell), bodyPosition(target, location), location), center, area: true, aimed: target };
     }
     return { targets: [target], center: { x: target.x, z: target.z }, aimed: target };
   }
@@ -580,11 +661,23 @@ export function install(ctx, options = {}) {
     const res = { targetId: t.id, target: t.name, effect: tpl.key, name: tpl.name };
     if (tpl.support === 'unsupported') return { ...res, outcome: 'unsupported', reason: tpl.reason };
     const hostile = !!b.harmful;
-    if (hostile && t.kind === 'player' && !cast.enemy && !cast.object && !cast.reflected) return { ...res, outcome: 'skipped' };
+    const isPvpHostile = hostile && t.kind === 'player' && !cast.enemy && !cast.object && !cast.reflected;
+    if (isPvpHostile && !services.pvp?.canPlayerHarmPlayer?.(caster, t.ref, { kind: 'spell', spell, projectileContext: cast.pvpContext })?.allowed) {
+      return { ...res, outcome: 'skipped' };
+    }
+    if (!hostile && t.kind === 'player' && !t.self && !cast.enemy && !cast.object) {
+      const helpElig = services.pvp?.canPlayerHelpPlayer?.(caster, t.ref, { kind: 'heal', spell, projectileContext: cast.pvpContext });
+      if (helpElig && !helpElig.allowed) return { ...res, outcome: 'skipped' };
+      services.pvp?.onPlayerHelp?.(caster, t.ref);
+    }
     if (!hostile && t.kind === 'entity' && !cast.enemy && !spell.harmful) return { ...res, outcome: 'skipped' };
     const playerCaster = (cast.enemy || cast.object) ? null : caster;
     const casterTarget = cast.enemy ? asEntityTarget(caster) : cast.object ? null : asPlayerTarget(caster);
-    const source = cast.enemy || cast.object ? caster : cast.reflected ? { name: spell.name } : null;
+    const source = cast.enemy || cast.object
+      ? caster
+      : cast.reflected
+        ? (cast.reflectedBy ? { kind: 'reflected', player: cast.reflectedBy, name: spell.name } : { name: spell.name })
+        : isPvpHostile ? caster : null;
     const alterPool = (poolName, delta) => applyPool(playerCaster, t, poolName, delta, source);
 
     if (b.status === 'paralyzed' && !canParalyze(t)) return { ...res, outcome: 'saved' };
@@ -608,11 +701,26 @@ export function install(ctx, options = {}) {
       casterId: caster.id, casterName: caster.name, roundsLeft: rounds, totalRounds: rounds,
       ...(cast.enemy ? { casterEntityId: caster.id } : {}), ...(cast.object ? { objectCast: true } : {}),
       ...(cast.reflected ? { reflected: true } : {}),
+      ...(t.kind === 'player' && !cast.enemy && !cast.object && cast.pvpContext ? { pvpContext: cast.pvpContext } : {}),
       // CastWhenHeld (package 16): the bundle lives while its item stays equipped (EntityEffectBundle.FromEquippedItem).
       ...(cast.held ? { bundleType: 'held', source: { itemId: cast.held.itemId, itemName: cast.held.itemName } } : {}),
     };
 
     switch (b.kind) {
+      case 'morphSelf': {
+        if (!t.self || cast.enemy || cast.object) return { ...res, outcome: 'noEffect' };
+        if (typeof services.conditionMorphSelf !== 'function') {
+          return { ...res, outcome: 'noEffect', reason: 'lycanthropy is unavailable here' };
+        }
+        const r = services.conditionMorphSelf(t.ref);
+        if (!r.ok) return { ...res, outcome: 'noEffect', reason: r.reason ?? 'cannot change form' };
+        return {
+          ...res,
+          outcome: 'applied',
+          transformed: r.transformed,
+          message: r.transformed ? 'You shift into beast form.' : 'You return to your normal form.',
+        };
+      }
       case 'recall':
         if (!t.self || cast.enemy || cast.object) return { ...res, outcome: 'noEffect' };
         return { ...res, outcome: 'applied', message: applyRecall(t.ref, args.recall) };
@@ -675,7 +783,9 @@ export function install(ctx, options = {}) {
         return { ...res, outcome: 'applied', pool: b.pool, amount: -d, sign: -1, transferred: gained, killed: t.kind === 'entity' && !alive(t.ref) || undefined };
       }
       case 'heal': {
-        const d = alterPool(b.pool, magnitude());
+        const rawHeal = magnitude();
+        const amt = t.kind === 'player' && services.pvp?.scaleHeal ? services.pvp.scaleHeal(rawHeal, playerCaster, t.ref) : rawHeal;
+        const d = alterPool(b.pool, amt);
         if (d === null) return { ...res, outcome: 'noEffect', reason: `${t.name} has no ${b.pool}` };
         return { ...res, outcome: 'applied', pool: b.pool, amount: d, sign: 1 };
       }
@@ -713,6 +823,9 @@ export function install(ctx, options = {}) {
       case 'shield': {
         let r = rounds;
         if (hostile && r > 0) r = Math.max(1, Math.trunc((r * durationSave) / 100));
+        if (hostile && t.kind === 'player' && !cast.enemy && !cast.object && (b.status === 'paralyzed' || b.status === 'silenced') && services.pvp?.cfg?.pvpCcMaxRounds) {
+          r = Math.min(r, services.pvp.cfg.pvpCcMaxRounds);
+        }
         const entry = { ...base, roundsLeft: r, totalRounds: r };
         if (b.kind === 'status') entry.status = b.status;
         if (deferredChance) entry.chance = chance;
@@ -746,6 +859,17 @@ export function install(ctx, options = {}) {
       return applyPool(null, t, a.pool, a.sign * m, src ?? { kind: 'monster', name: a.casterName });
     }
     const caster = ctx.players.get(a.casterId) ?? null;
+    if (t.kind === 'player' && a.casterId !== t.ref.id) {
+      if (a.hostile) {
+        if (!caster || !services.pvp?.canPlayerHarmPlayer?.(caster, t.ref, { kind: 'dot', projectileContext: a.pvpContext })?.allowed) {
+          throw new Error('PvP DOT no longer eligible');
+        }
+        return applyPool(caster, t, a.pool, a.sign * m, caster);
+      }
+      if (caster && services.pvp?.canPlayerHelpPlayer?.(caster, t.ref, { kind: 'hot', projectileContext: a.pvpContext })?.allowed === false) {
+        throw new Error('PvP HOT no longer eligible');
+      }
+    }
     return applyPool(caster, t, a.pool, a.sign * m);
   }
 
@@ -844,12 +968,13 @@ export function install(ctx, options = {}) {
     const spellId = id ?? m.selected;
     if (!spellId) throw new Error('Select a spell in your spellbook first.');
     if (!m.known.includes(spellId)) throw new Error('That spell is not in your spellbook.');
-    const spell = catalogue.spells.get(spellId) ?? vampireSpells.get(spellId) ?? customSpells(p).find((s) => s.id === spellId);
+    const spell = resolveSpellById(p, spellId);
     if (!spell) throw new Error('That spell no longer exists in this world.');
     return spell;
   }
 
   function costsFor(p, spell) {
+    if (isLycanthropySpell(p, spell)) return { ...spell.baseCosts, magicka: 0 };
     if (spell.innate) return spell.baseCosts;
     const skills = p.rpg?.character?.skills ?? {};
     return spellCosts(spell, (school) => services.skillValue?.(p, school) ?? skills[school] ?? 0);
@@ -892,7 +1017,13 @@ export function install(ctx, options = {}) {
       }
       if (!cast.reflected && !cast.object && roll('spellReflection')) {
         const reflectedTarget = cast.enemy ? asEntityTarget(caster) : asPlayerTarget(caster);
-        const reflected = spellResult({ ...cast, reflected: true }, reflectedTarget);
+        if (t.kind === 'player' && !cast.enemy && services.pvp?.canPlayerHarmPlayer) {
+          const reflElig = services.pvp.canPlayerHarmPlayer(t.ref, caster, { kind: 'reflected', spell, projectileContext: cast.pvpContext });
+          if (!reflElig?.allowed) {
+            return [{ targetId: t.id, target: t.name, outcome: 'applied', effect: 'SpellReflection', name: 'Spell reflected' }];
+          }
+        }
+        const reflected = spellResult({ ...cast, reflected: true, reflectedBy: t.kind === 'player' ? t.ref : null }, reflectedTarget);
         return [{ targetId: t.id, target: t.name, outcome: 'applied', effect: 'SpellReflection', name: 'Spell reflected' }, ...reflected];
       }
       if (roll('spellResistance')) return [{ targetId: t.id, target: t.name, outcome: 'saved', name: spell.name }];
@@ -1045,7 +1176,9 @@ export function install(ctx, options = {}) {
     const { caster, location, enemy, object, spell } = cast;
     if (cast.monsterFight) return harmable(location).filter((e) => services.monsterOpponents?.(caster, e)).map(asEntityTarget);
     if (enemy || object) return playersAt(location, null).filter((t) => enemySpellCanReach(caster, t.ref));
-    return spell.harmful ? monstersAt(location, caster) : playersAt(location, caster);
+    return spell.harmful
+      ? monstersAt(location, caster).concat(harmablePlayers(location, caster, spell, cast.pvpContext))
+      : helpablePlayers(location, caster, caster, spell, cast.pvpContext);
   }
 
   function enemySpellCanReach(caster, player) {
@@ -1110,7 +1243,6 @@ export function install(ctx, options = {}) {
 
   function cast(p, args = {}, itemSpell = null, castOpts = null) {
     if (!p.rpg) throw new Error('No character.');
-    if (services.conditionBeastForm?.(p)) throw new Error('You cannot cast spells in beast form.');
     grantStarting(p);
     const freeCast = !!castOpts?.freeCast;
     if (!itemSpell && !freeCast) {
@@ -1120,6 +1252,8 @@ export function install(ctx, options = {}) {
       }
     }
     const spell = itemSpell ?? knownSpell(p, args.spellId);
+    const isMorphOnly = spell.effects.length > 0 && spell.effects.every((e) => e.template.behaviour?.kind === 'morphSelf');
+    if (services.conditionBeastForm?.(p) && !isMorphOnly) throw new Error('You cannot cast spells in beast form.');
     if (spell.support === 'unsupported') {
       const why = spell.effects.find((e) => e.template.reason)?.template.reason ?? 'unavailable';
       throw new Error(`${spell.name} cannot be cast in this world yet: ${why}.`);
@@ -1176,6 +1310,7 @@ export function install(ctx, options = {}) {
       level: freeCast && Number.isFinite(castOpts?.level) ? Math.max(1, Math.trunc(castOpts.level)) : Math.max(1, c.level ?? 1),
       bundleId: randomUUID(), choices: [],
       yaw: aimYaw(p, args), pitch: Number.isFinite(args.pitch) ? Math.max(-1.45, Math.min(1.45, args.pitch)) : 0,
+      pvpContext: services.pvp?.captureProjectileContext?.(p) ?? null,
     };
     if (ranged(spell.targetType) && Number.isFinite(opts.missileSpeed)) return launch(castInfo, aimed);
     return finishCast(castInfo, targets, center, missed);
@@ -1210,10 +1345,17 @@ export function install(ctx, options = {}) {
   ctx.onJoin?.((p) => {
     if (!p.rpg) return;
     magicOf(p);
-    grantStarting(p);
+    const granted = grantStarting(p);
+    const synced = syncLycanthropySpell(p);
+    if (granted || synced) ctx.dirty?.(p);
     ctx.notify?.(p, catalogueEvent(p));
     const anchor = magicOf(p).anchor;
     if (anchor) services.collision?.preload?.(anchor.location);
+  });
+  ctx.on?.('conditionChanged', ({ player }) => {
+    if (!player || !syncLycanthropySpell(player)) return;
+    ctx.dirty?.(player);
+    ctx.notify?.(player, catalogueEvent(player));
   });
   ctx.onLeave?.((p) => {
     cooldownUntil.delete(p.id);
@@ -1228,6 +1370,7 @@ export function install(ctx, options = {}) {
   });
 
   ctx.onAction('magic.catalogue', (p) => {
+    if (grantStarting(p)) ctx.dirty?.(p);
     ctx.notify?.(p, catalogueEvent(p));
   });
 
@@ -1300,6 +1443,7 @@ export function install(ctx, options = {}) {
     const id = String(args.spellId ?? '');
     if (!m.known.includes(id)) throw new Error('That spell is not in your spellbook.');
     if (vampireSpells.has(id)) throw new Error('You cannot forget a vampire spell.');
+    if (id === 'std:92' && p.rpg?.conditions?.lycanthrope) throw new Error('You cannot forget your lycanthropy spell.');
     m.known = m.known.filter((k) => k !== id);
     if (id.startsWith('custom:')) {
       m.custom = m.custom.filter((s) => s.id !== id);

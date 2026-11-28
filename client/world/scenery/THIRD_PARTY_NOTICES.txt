@@ -17,6 +17,10 @@ follow verbatim.
   tree/rock/plant/prop groups of
   Assets/Game/Addons/RmbBlockEditor/Editor/Persisted/DefaultFlatsCatalog.json
   (colliders.js).
+  client/render/sky-dome.js and the night-sky reader in sky.js also follow
+  Internal/DaggerfallSky.cs (the sky frame for the time of day, the NITEnnI0.IMG
+  chosen for a SKY set, stars over the night image's open-sky indices) and
+  Utility/DaggerfallDateTime.cs (the moons' 32-day cycle and day offsets).
 
 - daggerfall-js-source by Lattymoy, https://github.com/Lattymoy/daggerfall-js-source
   (commit a3eb1605ea1dc391b691fe314377458a7e63e483): src/formats/skyFile.js,

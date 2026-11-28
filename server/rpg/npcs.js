@@ -463,7 +463,7 @@ export function install(ctx, options = {}) {
         region: reputation(p, REGION_FACTION),
       },
       journal: !!(e.questGiver || extra.journal),
-      gold: p.rpg.gold,
+      gold: spendable(p),
       ...(s?.spymaster ? { spymaster: true } : {}),
     };
     // "Where is …?": this speaker can name people and buildings of the town (npc.ask).
@@ -580,10 +580,12 @@ export function install(ctx, options = {}) {
     return Math.max(5, missing * 2);
   }
 
+  const spendable = (p) => (typeof services.spendableGold === 'function' ? services.spendableGold(p) : p.rpg.gold);
   function spend(p, amount) {
     if (!Number.isInteger(amount) || amount < 0) fail('Invalid price.');
-    if (p.rpg.gold < amount) fail(`You need ${amount} gold.`);
-    p.rpg.gold -= amount;
+    if (spendable(p) < amount) fail(`You need ${amount} gold.`);
+    if (typeof services.spendGold === 'function') services.spendGold(p, amount);
+    else p.rpg.gold -= amount;
   }
 
   // ------------------------------------------------------------ lifecycle
@@ -902,9 +904,10 @@ export function install(ctx, options = {}) {
       if (status.reason === 'cap') fail(`You have learned all we can teach in ${skill}.`);
       if (status.reason === 'cooldown') fail(`You are too tired to train again. Wait ${status.minutesLeft} game minutes.`);
       const cost = tut?.price ?? legacyTrainCost(p);
-      if (p.rpg.gold < cost) fail(`Training costs ${cost} gold.`);
+      if (spendable(p) < cost) fail(`Training costs ${cost} gold.`);
       if (!services.characterTraining(p, skill, { max, commit: true }).ok) fail('Training is unavailable right now.');
-      p.rpg.gold -= cost;
+      if (typeof services.spendGold === 'function') services.spendGold(p, cost);
+      else p.rpg.gold -= cost;
       text = `${LINES.train} (${skill}, ${cost} gold)`;
     } else if (id === 'heal') {
       if (!c || !Number.isFinite(c.health) || !Number.isFinite(c.maxHealth)) fail('Create your character first.');

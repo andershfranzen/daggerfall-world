@@ -20,18 +20,80 @@
   <canvas id="view" tabindex="-1" aria-label="First-person view of the town"></canvas>
   <div id="labels" aria-hidden="true"></div>
 
+  <!-- ============ Lobby top bar (matches website SiteHeader; hidden in-game) ============ -->
+  <header class="play-site-bar" aria-label="Site navigation">
+    <div class="play-site-bar-row">
+      <a class="back-link play-brand" href="/">Daggerfall World</a>
+      <nav class="play-site-nav" aria-label="Main">
+        <ul>
+          <li><a class="play-tab" href="/guide/">Guide</a></li>
+          <li><a class="play-tab" href="/map/">World map</a></li>
+          <li><a class="play-tab" href="/hiscores/">Chronicles</a></li>
+          <li><a class="play-tab" href="/development/">Development</a></li>
+          <li><a class="play-tab" href="/signup/">Account</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
   <!-- ============ Landing: name + game data + enter ============ -->
   <section id="screen-landing" class="screen" aria-labelledby="landing-title">
     <div class="panel panel-landing">
       <header class="panel-head">
-        <a class="back-link" href="/">&larr; Back to site</a>
-        <h1 id="landing-title">Daggerfall World</h1>
+        <h1 id="landing-title">Daggerfall <span class="w2">World</span></h1>
+        <div class="rule" aria-hidden="true"><i class="gem"></i></div>
         <p class="lede">Enter the Iliac Bay with other players.</p>
       </header>
 
       <!-- /auth/account.js mounts #account-panel (sign in / create account) before the form. -->
       <form id="join-form" novalidate>
         <p id="account-gate" class="note account-gate" aria-live="polite" hidden></p>
+
+        <!-- Pre-join 3-slot character selector (visible when signed in) -->
+        <section id="char-selector" class="char-selector" aria-label="Character roster" hidden>
+          <div class="char-selector-head">
+            <h2 class="char-selector-title">Choose your character</h2>
+            <span id="char-slot-count" class="char-slot-count">0 / 3 slots</span>
+          </div>
+          <div id="char-slots" class="char-slots" role="list"></div>
+
+          <div id="char-create-box" class="char-drawer" hidden>
+            <div class="char-drawer-head">
+              <strong id="char-create-title">Create character</strong>
+              <button id="char-create-cancel" type="button" class="btn btn-small">Cancel</button>
+            </div>
+            <div class="char-drawer-body">
+              <label for="char-create-name">Character display name</label>
+              <div class="char-drawer-row">
+                <input id="char-create-name" type="text" maxlength="24" autocomplete="off" spellcheck="false"
+                       placeholder="Enter a name (e.g. Lyris Stormblade)">
+                <button id="char-create-submit" type="button" class="btn btn-primary btn-small">Start character</button>
+              </div>
+              <p class="note fine">1–24 letters, digits, spaces, _ ' -. Reserved across the realm once created.</p>
+            </div>
+          </div>
+
+          <div id="char-archive-box" class="char-drawer char-drawer-danger" hidden>
+            <div class="char-drawer-head">
+              <strong id="char-archive-title">Archive character</strong>
+              <button id="char-archive-cancel" type="button" class="btn btn-small">Cancel</button>
+            </div>
+            <div class="char-drawer-body">
+              <p id="char-archive-warn" class="note"></p>
+              <ul id="char-archive-blockers" class="char-blockers" hidden></ul>
+              <div id="char-archive-confirm-wrap">
+                <label for="char-archive-input" id="char-archive-label">Type the character's name to confirm</label>
+                <div class="char-drawer-row">
+                  <input id="char-archive-input" type="text" maxlength="24" autocomplete="off" spellcheck="false">
+                  <button id="char-archive-submit" type="button" class="btn btn-danger btn-small" disabled>Confirm archive</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p id="char-roster-note" class="note" role="status" aria-live="polite" hidden></p>
+        </section>
+
         <div class="field" id="name-field">
           <label for="name-input">Your name</label>
           <input id="name-input" name="name" type="text" maxlength="24" autocomplete="nickname"
@@ -64,6 +126,15 @@
         <button id="enter-btn" type="submit" class="btn btn-primary" disabled>Enter the world</button>
         <p id="form-error" class="note error" role="alert" hidden></p>
       </form>
+
+      <aside id="whats-new" class="whats-new" hidden aria-label="Latest update">
+        <a id="whats-new-link" class="whats-new-link" href="/patch-notes/">
+          <span id="whats-new-badge" class="whats-new-badge" hidden>New</span>
+          <time id="whats-new-date" class="whats-new-date"></time>
+          <span id="whats-new-title" class="whats-new-title"></span>
+          <span class="whats-new-cta" aria-hidden="true">Patch notes &rarr;</span>
+        </a>
+      </aside>
     </div>
   </section>
 
@@ -93,6 +164,7 @@
       <div class="actions">
         <button id="failure-retry" type="button" class="btn btn-primary">Try again</button>
         <button id="failure-folder" type="button" class="btn">Choose another folder</button>
+        <button id="failure-report" type="button" class="btn">Report a bug</button>
         <button id="failure-back" type="button" class="btn">Back</button>
       </div>
     </div>
@@ -116,6 +188,7 @@
         </button>
         <button id="hud-help-btn" type="button" class="btn btn-small" aria-controls="hud-help" aria-expanded="false">Controls</button>
         <button id="hud-menu-btn" type="button" class="btn btn-small" aria-controls="game-menu" aria-expanded="false">Menu</button>
+        <button id="hud-switch-btn" type="button" class="btn btn-small" hidden>Switch</button>
         <button id="hud-leave-btn" type="button" class="btn btn-small">Leave</button>
       </div>
     </header>

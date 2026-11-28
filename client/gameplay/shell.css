@@ -377,9 +377,8 @@ body #game-menu #menu-title {
 .menu-tab-name { min-width: 0; }
 #menu-panel:focus { outline: none; }
 
-/* Character creation is a focused dialog: no section tabs around the wizard. */
-#game-menu[data-wizard="true"] :is(#menu-tabs, #menu-subtabs) { display: none; }
-#game-menu[data-wizard="true"] .menu-topbar { justify-content: flex-end; padding: 0.35rem 0.5rem 0; background: var(--surface-1); }
+/* Character creation is a mandatory focused dialog: no section tabs or close button around the wizard. */
+#game-menu[data-wizard="true"] :is(.menu-topbar, #menu-tabs, #menu-subtabs, #menu-close) { display: none; }
 
 @media (max-width: 640px), (max-height: 560px) {
   .menu-topbar { padding: 0.3rem 0.3rem 0; gap: 0.3rem; }
@@ -460,7 +459,7 @@ body #game-menu #menu-title {
 }
 @container menu-page (min-width: 44rem) {
   .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .settings-bindings { grid-column: 1 / -1; }
+  .settings-bindings, .settings-move-bindings, .settings-gamepad, .settings-portable { grid-column: 1 / -1; }
 }
 .settings-card {
   display: grid;
@@ -577,6 +576,33 @@ table.bindings td { padding: 0.15rem 0; }
 .settings-pad dt { font: 600 0.8rem/1.4 var(--font-mono); color: var(--sh-text); }
 .settings-pad dd { margin: 0; color: var(--sh-text-dim); }
 
+.settings-web-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  margin-top: 0.25rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.82rem;
+}
+.settings-web-label {
+  font: 600 0.7rem/1.2 var(--font-heading, var(--font-ui));
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sh-text-mute);
+}
+.settings-web-link {
+  color: var(--accent-hi);
+  text-decoration: underline;
+  text-decoration-color: rgba(95, 163, 165, 0.45);
+  text-underline-offset: 3px;
+}
+.settings-web-link:hover {
+  color: #fff;
+  text-decoration-color: var(--accent-hi);
+}
+
 /* While a menu is open the HUD bits behind it get out of the way. */
 body[data-menu] #hud-target, body[data-menu] #hud-crosshair { visibility: hidden; }
 /* A menu page is a full window: decorative overlays that live outside #hud (the arrival title
@@ -591,3 +617,75 @@ body[data-menu] .hud-arrival { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .toast, .vital-fill, .toast-out { animation: none; transition: none; }
 }
+
+/* Expanded settings controls: selects, gamepad grid, portable JSON box, handedness & movable HUD mode. */
+.setting-select {
+  background: var(--surface-0);
+  color: var(--sh-text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.5rem;
+  font: 0.85rem var(--font-ui);
+  min-height: 2rem;
+  max-width: 100%;
+}
+.gp-inverts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.3rem 0.8rem;
+}
+.gp-axes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 0.4rem 1rem;
+}
+.gp-btn-select { min-width: 9rem; }
+.settings-json-box {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface-0);
+  color: var(--sh-text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font: 0.78rem/1.4 var(--font-mono);
+  padding: 0.5rem;
+  resize: vertical;
+}
+
+/* Left-handed weapon presentation (purely visual; combat rules remain authoritative). */
+body[data-handedness="left"] .fp-weapon {
+  transform: scaleX(-1);
+}
+
+/* Movable HUD layout edit mode */
+body[data-hud-edit="true"] #hud-vitals,
+body[data-hud-edit="true"] #hud-bar,
+body[data-hud-edit="true"] #hud-compass,
+body[data-hud-edit="true"] #hud-chat,
+body[data-hud-edit="true"] #hud-quickslots,
+body[data-hud-edit="true"] #hud-conveniences,
+body[data-hud-edit="true"] #hud-minimap {
+  outline: 2px dashed var(--accent, #6fb6ff);
+  outline-offset: 2px;
+  cursor: move;
+  pointer-events: auto;
+}
+.hud-edit-banner {
+  position: fixed;
+  top: 3.6rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.85rem;
+  background: rgba(14, 22, 34, 0.94);
+  border: 1px solid var(--accent, #6fb6ff);
+  border-radius: var(--radius-md);
+  color: var(--sh-text);
+  font: 600 0.84rem/1.2 var(--font-ui);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+}
+.hud-edit-banner[hidden] { display: none; }

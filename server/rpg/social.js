@@ -1,15 +1,24 @@
-// Shared-world social play: parties, consensual two-sided trades, party/region/global chat.
-// Location chat stays with the runtime (`{type:"chat"}`); this adds `chat.send` channels.
+// Shared-world social play: parties, consensual two-sided trades, party/region/global chat,
+// account-scoped friends & directed blocks, account mailbox letters, moderation reports,
+// and party location sharing / map pings / atomic group travel ready-checks.
 //
-// Persistence: each member's `rpg.party = {id, version, leaderId, members:[{id,name}]}`.
-// The highest `version` wins when members return after a restart, so a removed member's stale
-// copy cannot re-admit them. Trades and invitations are live-only and end on disconnect.
+// Persistence:
+//   - Party roster: each member's `rpg.party = {id, version, leaderId, members:[{id,name}]}`.
+//     The highest `version` wins when members return after a restart, so a removed member's stale
+//     copy cannot re-admit them.
+//   - Contacts, directed blocks, privacy settings, reports, and account mailbox letters:
+//     persisted via `ctx.dirtyWorld` / `ctx.loadWorld` under `social:*` keys so they survive
+//     restarts and character switches on both SQLite and PostgreSQL.
+//   - Trades, invitations, map pings, and travel ready checks are live-only and reconcile on leave.
 import { randomBytes } from 'node:crypto';
 import { CHANNELS, cleanChatText, createChatLimiter, isMuted, regionOf, tokenBucket } from './social/chat.js';
 import { PROXIMITY_RANGE, SHOUT_RANGE, canonicalChannel, findWhisperTarget, parseChatCommand, selectChatAudience } from './social/proximity.js';
 import { TRADE_RANGE, describeOffer, goldOf, normaliseOffer, offerProblem, settle } from './social/trade.js';
+import { accountKeyOf, createContactsService } from './social/contacts.js';
+import { createMailboxService } from './social/mailbox.js';
+import { createPartyTravelService } from './social/party-travel.js';
 
-export { PROXIMITY_RANGE, SHOUT_RANGE };
+export { PROXIMITY_RANGE, SHOUT_RANGE, accountKeyOf };
 
 export const PARTY_MAX = 6;
 export const INVITE_TTL_MS = 60_000;
@@ -42,28 +51,92 @@ function fingerprint(p) {
 export function install(ctx) {
   const services = (ctx.services ??= {});
   const now = () => (typeof ctx.now === 'function' ? ctx.now() : Date.now());
+  // Wall-clock UTC ms for persisted timestamps (friends, blocks, letters, reports).
+  // Honors injected epoch clocks in tests (>= 1e12), and uses Date.now() when ctx.now() is monotonic performance.now().
+  const wallNow = () => {
+    const t = now();
+    return Number.isFinite(t) && t >= 1_000_000_000_000 ? Math.trunc(t) : Date.now();
+  };
   const parties = new Map(); // partyId -> {id, version, leaderId, members: Map<id,{id,name}>}
   const invites = new Map(); // inviteeId -> Map<inviterId, {partyId|null, expires}>
   const trades = new Map(); // tradeId -> trade
   const tradeOf = new Map(); // playerId -> tradeId (pending or open)
   const limits = new WeakMap(); // player -> {chat, request}
 
+  const online = (id) => ctx.players.get(id) ?? null;
+  const dirty = (p) => p && typeof ctx.dirty === 'function' && ctx.dirty(p);
+  const partyOfPlayer = (p) => {
+    const id = p?.rpg?.party?.id;
+    const party = id ? parties.get(id) : null;
+    return party && party.members.has(p.id) ? party : null;
+  };
+
+  // Forward-declared for sub-services; bound below once view/push exist.
+  let mailbox;
+  let partyTravel;
+
+  const contacts = createContactsService(ctx, {
+    now,
+    wallNow,
+    getLetterForReport: (actorKey, letterId) => mailbox.getLetterForReport(actorKey, letterId),
+    onRelationBroken: (blockerKey, targetKey) => {
+      // Immediately terminate pending/open trades and party invitations between blocked accounts
+      // without telling the blocked player that they were blocked.
+      for (const [toId, box] of [...invites]) {
+        const toPlayer = online(toId);
+        const toKey = toPlayer ? accountKeyOf(toPlayer) : null;
+        for (const [fromId] of [...box]) {
+          const fromPlayer = online(fromId);
+          const fromKey = fromPlayer ? accountKeyOf(fromPlayer) : null;
+          if ((fromKey === blockerKey && toKey === targetKey) || (fromKey === targetKey && toKey === blockerKey)) {
+            box.delete(fromId);
+            if (toPlayer) push(toPlayer);
+            if (fromPlayer) push(fromPlayer);
+          }
+        }
+        if (!box.size) invites.delete(toId);
+      }
+      for (const trade of [...trades.values()]) {
+        const pa = online(trade.a.id);
+        const pb = online(trade.b.id);
+        const ka = pa ? accountKeyOf(pa) : null;
+        const kb = pb ? accountKeyOf(pb) : null;
+        if ((ka === blockerKey && kb === targetKey) || (ka === targetKey && kb === blockerKey)) {
+          endTrade(trade, 'Trade cancelled.');
+        }
+      }
+    },
+  });
+
+  mailbox = createMailboxService(ctx, { now, wallNow, contacts });
+
   // ---- session-state journal ------------------------------------------------------------------
-  // The runtime restores every affected `rpg` (and drops buffered events) when a handler throws or
-  // the store save fails, but it cannot see this module's maps. Each mutating action therefore
-  // snapshots them, restores them if the handler throws, and stamps the actor's `rpg.socialTxn`
-  // with a unique mark. The runtime only keeps that mark if the save committed, so a missing mark
-  // (checked in a microtask, and before any later social handler, tick, join or leave) means the
-  // action was rolled back and the maps are restored too.
+  // The runtime restores every affected `rpg` (and drops buffered events and dirtyWorld rows) when
+  // a handler throws or the store save fails, but it cannot see this module's in-memory maps. Each
+  // mutating action snapshots them, restores them on throw or rollback, and stamps `rpg.socialTxn`
+  // so a failed save also rolls back session state in both the real runtime and mock unit runtimes.
   const BOOT = randomBytes(4).toString('hex');
   let seq = 0;
   let pending = null;
-  const captureState = () => structuredClone({ parties, invites, trades, tradeOf });
+  const captureState = () => ({
+    core: structuredClone({ parties, invites, trades, tradeOf }),
+    contacts: contacts.capture(),
+    mailbox: mailbox.capture(),
+    partyTravel: partyTravel.capture(),
+  });
   function restoreState(saved) {
-    for (const [live, copy] of [[parties, saved.parties], [invites, saved.invites], [trades, saved.trades], [tradeOf, saved.tradeOf]]) {
+    for (const [live, copy] of [
+      [parties, saved.core.parties],
+      [invites, saved.core.invites],
+      [trades, saved.core.trades],
+      [tradeOf, saved.core.tradeOf],
+    ]) {
       live.clear();
       for (const [k, v] of copy) live.set(k, v);
     }
+    contacts.restore(saved.contacts);
+    mailbox.restore(saved.mailbox);
+    partyTravel.restore(saved.partyTravel);
   }
   function settlePending() {
     const pd = pending;
@@ -78,13 +151,20 @@ export function install(ctx) {
     ctx.onAction(verb, (p, args) => {
       settlePending();
       const state = captureState();
+      if (typeof ctx.onRollback === 'function') {
+        ctx.onRollback(() => {
+          if (pending?.mark === mark) pending = null;
+          restoreState(state);
+        });
+      }
+      let mark = null;
       try {
         fn(p, args);
       } catch (err) {
         restoreState(state);
         throw err;
       }
-      const mark = `${BOOT}.${++seq}`;
+      mark = `${BOOT}.${++seq}`;
       p.rpg.socialTxn = mark;
       pending = { player: p, mark, state, verb };
       queueMicrotask(settlePending);
@@ -99,24 +179,30 @@ export function install(ctx) {
     }
     return l;
   }
-  const online = (id) => ctx.players.get(id) ?? null;
-  const dirty = (p) => p && typeof ctx.dirty === 'function' && ctx.dirty(p);
-  const partyOfPlayer = (p) => {
-    const id = p?.rpg?.party?.id;
-    const party = id ? parties.get(id) : null;
-    return party && party.members.has(p.id) ? party : null;
-  };
 
   // ------------------------------------------------------------ view + notification
-  function partyView(party) {
+  function partyView(party, viewer = null) {
     if (!party) return null;
+    const extra = partyTravel.partyExtraView(party, viewer);
     return {
       id: party.id,
       leaderId: party.leaderId,
       max: PARTY_MAX,
+      myLocationSharing: extra.myLocationSharing,
+      leaderDestination: extra.leaderDestination,
+      pings: extra.pings,
+      travelProposal: extra.travelProposal,
       members: [...party.members.values()].map((m) => {
         const live = online(m.id);
-        return { id: m.id, name: live?.name ?? m.name, online: Boolean(live), location: live ? regionOf(locationOf(live), ctx) : null };
+        const locShare = partyTravel.memberLocationView(party, m.id);
+        const showLoc = live && (locShare.shared || (viewer && m.id === viewer.id));
+        return {
+          id: m.id,
+          name: live?.name ?? m.name,
+          online: Boolean(live),
+          location: showLoc ? regionOf(locationOf(live), ctx) : null,
+          locationSharing: locShare,
+        };
       }),
     };
   }
@@ -159,6 +245,9 @@ export function install(ctx) {
         partyMember: Boolean(party && party.members.has(o.id)),
         inParty: Boolean(partyOfPlayer(o)),
         busy: tradeOf.has(o.id),
+        isFriend: contacts.areFriends(p, o),
+        // Only reveal whether the viewer themselves blocked `o` — never whether `o` blocked viewer.
+        blockedByMe: contacts.isDirectedBlocked(p, o),
       });
     }
     players.sort((x, y) => Number(y.sameLocation) - Number(x.sameLocation) || x.name.localeCompare(y.name));
@@ -168,12 +257,14 @@ export function install(ctx) {
       channels: ['say', 'shout', ...CHANNELS],
       proximityRange: PROXIMITY_RANGE,
       shoutRange: SHOUT_RANGE,
-      party: partyView(party),
+      party: partyView(party, p),
       invites: myInvites,
       outgoing: [...invites].filter(([, m]) => m.has(p.id)).map(([toId]) => ({ toId, toName: online(toId)?.name ?? 'Someone' })),
       trade: tid ? tradeView(trades.get(tid), p) : null,
       players,
       tradeRange: TRADE_RANGE,
+      contacts: contacts.friendsView(p),
+      mail: mailbox.summaryView(p),
     };
   }
 
@@ -185,6 +276,25 @@ export function install(ctx) {
     if (!party) return;
     for (const m of party.members.keys()) if (m !== exceptId) push(online(m), text);
   }
+  function pushAccount(acctKey, text, extra = {}) {
+    for (const p of contacts.onlinePlayersForAccount(acctKey)) push(p, text, extra);
+  }
+  function pushFriendsOf(acctKey) {
+    for (const friendKey of contacts.friendAccountKeys(acctKey)) {
+      pushAccount(friendKey);
+    }
+  }
+
+  partyTravel = createPartyTravelService(ctx, {
+    now,
+    wallNow,
+    online,
+    dirty,
+    partyOfPlayer,
+    locationOf,
+    pushParty,
+    push,
+  });
 
   // ------------------------------------------------------------ party persistence
   function writeParty(party) {
@@ -214,11 +324,13 @@ export function install(ctx) {
     return party;
   }
 
-  function removeMember(party, id) {
+  function removeMember(party, id, verb = 'left the party') {
+    const leavingName = party.members.get(id)?.name ?? online(id)?.name ?? 'A member';
     party.members.delete(id);
     party.version += 1;
     if (party.members.size <= 1) {
       // A party of one is no party: disband and clear the last member's record.
+      partyTravel.onPartyDisbanded(party.id);
       for (const rest of party.members.keys()) {
         const r = online(rest);
         clearParty(r);
@@ -233,6 +345,7 @@ export function install(ctx) {
       party.leaderId = next;
     }
     writeParty(party);
+    partyTravel.handleMemberDropped(party, id, leavingName, verb);
     return party;
   }
 
@@ -266,6 +379,7 @@ export function install(ctx) {
     if (!party.members.has(party.leaderId)) party.leaderId = p.id;
     if (party.members.size <= 1) {
       parties.delete(party.id);
+      partyTravel.onPartyDisbanded(party.id);
       return clearParty(p);
     }
     writeParty(party);
@@ -292,6 +406,7 @@ export function install(ctx) {
     const pa = online(trade.a.id);
     const pb = online(trade.b.id);
     if (!pa || !pb) return endTrade(trade, 'Trade cancelled: your partner left.'), false;
+    if (contacts.isBlocked(pa, pb)) return endTrade(trade, 'Trade cancelled.'), false;
     const far = rangeProblem(pa, pb);
     if (far) return endTrade(trade, `Trade cancelled: ${pa.name} and ${pb.name} are too far apart.`), false;
     if (trade.state === 'pending') {
@@ -330,7 +445,7 @@ export function install(ctx) {
     return { trade, side, other };
   }
 
-  // ------------------------------------------------------------ actions: party
+  // ------------------------------------------------------------ actions: sync & party
   function rate(p) {
     if (!limiter(p).request()) throw new Error('Slow down a little.');
   }
@@ -345,6 +460,8 @@ export function install(ctx) {
     if (targetId === p.id) throw new Error('You cannot invite yourself.');
     const target = online(targetId);
     if (!target) throw new Error('That player is not online.');
+    const check = contacts.canInteract(p, target, 'party');
+    if (!check.ok) throw new Error(check.reason);
     if (partyOfPlayer(target)) throw new Error(`${target.name} is already in a party.`);
     const party = partyOfPlayer(p);
     if (party && party.leaderId !== p.id) throw new Error('Only the party leader can invite.');
@@ -374,6 +491,8 @@ export function install(ctx) {
     const inv = takeInvite(p, fromId);
     const inviter = online(fromId);
     if (!inviter) throw new Error('Whoever invited you has left.');
+    const check = contacts.canInteract(p, inviter, 'party');
+    if (!check.ok) throw new Error(check.reason);
     let party = partyOfPlayer(inviter);
     if (inv.partyId && party?.id !== inv.partyId) throw new Error('That party no longer exists.');
     if (party && party.leaderId !== inviter.id) throw new Error('Whoever invited you is no longer the leader.');
@@ -405,7 +524,7 @@ export function install(ctx) {
     const party = partyOfPlayer(p);
     if (!party) throw new Error('You are not in a party.');
     clearParty(p);
-    const rest = removeMember(party, p.id);
+    const rest = removeMember(party, p.id, 'left the party');
     pushParty(rest, `${p.name} left the party.`);
     push(p, 'You left the party.');
   });
@@ -420,7 +539,7 @@ export function install(ctx) {
     if (!member) throw new Error('That player is not in your party.');
     const target = online(targetId);
     clearParty(target);
-    const rest = removeMember(party, targetId);
+    const rest = removeMember(party, targetId, 'was removed from the party');
     pushParty(rest, `${member.name} was removed from the party.`);
     push(target, 'You were removed from the party.');
   });
@@ -436,12 +555,136 @@ export function install(ctx) {
     pushParty(party, `${party.members.get(targetId).name} now leads the party.`);
   });
 
+  // ------------------------------------------------------------ actions: party coordination
+  txAction('party.locationShare', (p, args = {}) => {
+    partyTravel.setLocationSharing(p, args);
+  });
+
+  txAction('party.ping', (p, args = {}) => {
+    partyTravel.sendPing(p, args);
+  });
+
+  ctx.onAction('party.travelQuote', (p, args = {}) => {
+    settlePending();
+    const quote = partyTravel.quoteToLeader(p, args);
+    push(p, null, { partyTravelQuote: quote });
+  });
+
+  txAction('party.travelPropose', (p, args = {}) => {
+    partyTravel.proposeTravel(p, args);
+  });
+
+  txAction('party.travelRespond', (p, args = {}) => {
+    partyTravel.respondTravel(p, args);
+  });
+
+  txAction('party.travelCancel', (p, args = {}) => {
+    partyTravel.cancelTravel(p, args);
+  });
+
+  // ------------------------------------------------------------ actions: friends, blocks, privacy, reports
+  txAction('friends.request', (p, args = {}) => {
+    const res = contacts.sendFriendRequest(p, args);
+    if (res.crossed) {
+      push(p, `You and ${res.otherLabel} are now friends.`);
+      pushAccount(res.otherKey, `${contacts.labelFor(accountKeyOf(p))} accepted your friend request.`);
+    } else {
+      push(p, `Friend request sent to ${res.otherLabel}.`);
+      pushAccount(res.otherKey, `${contacts.labelFor(accountKeyOf(p))} sent you a friend request.`, {
+        friendRequest: { fromAccount: accountKeyOf(p), fromLabel: contacts.labelFor(accountKeyOf(p)) },
+      });
+    }
+  });
+
+  txAction('friends.accept', (p, args = {}) => {
+    const res = contacts.acceptFriendRequest(p, args);
+    push(p, `You are now friends with ${res.otherLabel}.`);
+    pushAccount(res.otherKey, `${contacts.labelFor(accountKeyOf(p))} accepted your friend request.`);
+  });
+
+  txAction('friends.decline', (p, args = {}) => {
+    const res = contacts.declineFriendRequest(p, args);
+    push(p, res.withdrew ? `Friend request to ${res.otherLabel} withdrawn.` : `Friend request from ${res.otherLabel} declined.`);
+    pushAccount(res.otherKey);
+  });
+
+  txAction('friends.remove', (p, args = {}) => {
+    const res = contacts.removeFriend(p, args);
+    push(p, `Removed ${res.otherLabel} from your friends list.`);
+    pushAccount(res.otherKey);
+  });
+
+  txAction('friends.settings', (p, args = {}) => {
+    contacts.updateSettings(p, args);
+    push(p, 'Social privacy settings updated.');
+    pushFriendsOf(accountKeyOf(p));
+  });
+
+  ctx.onAction('friends.list', (p, args = {}) => {
+    settlePending();
+    const page = contacts.friendsView(p, args);
+    push(p, null, { friendsPage: page });
+  });
+
+  txAction('social.block', (p, args = {}) => {
+    const res = contacts.blockPlayer(p, args);
+    push(p, `Blocked ${res.targetLabel}.`);
+    // Refresh blocked party silently without revealing block status.
+    if (res.hadRelation) pushAccount(res.targetKey);
+  });
+
+  txAction('social.unblock', (p, args = {}) => {
+    const res = contacts.unblockPlayer(p, args);
+    push(p, `Unblocked ${res.targetLabel}.`);
+  });
+
+  txAction('social.report', (p, args = {}) => {
+    const res = contacts.submitReport(p, args);
+    push(p, 'Report submitted for moderator review.', { reportSubmitted: res });
+  });
+
+  // ------------------------------------------------------------ actions: account mailbox
+  txAction('mail.send', (p, args = {}) => {
+    const res = mailbox.sendLetter(p, args);
+    const projected = mailbox.projectLetter(res.letter, accountKeyOf(p), { includeBody: true });
+    push(p, res.duplicate ? 'Letter already sent.' : `Letter sent to ${res.letter.toLabel}.`, { mailSent: projected });
+    if (!res.duplicate) {
+      const recipProjected = mailbox.projectLetter(res.letter, res.recipientKey, { includeBody: true });
+      pushAccount(res.recipientKey, `New letter from ${res.letter.fromLabel}: "${res.letter.subject}"`, {
+        mailReceived: recipProjected,
+      });
+    }
+  });
+
+  ctx.onAction('mail.list', (p, args = {}) => {
+    settlePending();
+    const page = mailbox.listLetters(p, args);
+    push(p, null, { mailPage: page });
+  });
+
+  txAction('mail.thread', (p, args = {}) => {
+    const thread = mailbox.getThread(p, args);
+    push(p, null, { mailThread: thread });
+  });
+
+  txAction('mail.read', (p, args = {}) => {
+    const res = mailbox.markRead(p, args);
+    push(p, null, { mailRead: res });
+  });
+
+  txAction('mail.delete', (p, args = {}) => {
+    const res = mailbox.deleteLetter(p, args);
+    push(p, 'Letter removed from your mailbox.', { mailDeleted: res });
+  });
+
   // ------------------------------------------------------------ actions: trade
   txAction('trade.request', (p, args = {}) => {
     const targetId = toPlayerId(args.targetId);
     if (targetId === p.id) throw new Error('You cannot trade with yourself.');
     const target = online(targetId);
     if (!target) throw new Error('That player is not online.');
+    const check = contacts.canInteract(p, target, 'trade');
+    if (!check.ok) throw new Error(check.reason);
     if (tradeOf.has(p.id)) throw new Error('Finish or cancel your current trade first.');
     if (tradeOf.has(targetId)) throw new Error(`${target.name} is busy with another trade.`);
     const far = rangeProblem(p, target);
@@ -466,6 +709,14 @@ export function install(ctx) {
   txAction('trade.accept', (p, args = {}) => {
     const { trade } = myTrade(p, args.tradeId);
     if (trade.state !== 'pending' || trade.b.id !== p.id) throw new Error('There is no trade request waiting for you.');
+    const initiator = online(trade.a.id);
+    if (initiator) {
+      const check = contacts.canInteract(p, initiator, 'trade');
+      if (!check.ok) {
+        endTrade(trade, 'Trade cancelled.');
+        throw new Error(check.reason);
+      }
+    }
     if (!refresh(trade)) throw new Error('That trade is no longer open.');
     trade.state = 'open';
     trade.expires = null;
@@ -552,6 +803,10 @@ export function install(ctx) {
     const whisperTo = channel === 'whisper'
       ? findWhisperTarget(ctx.players, p, { target: args.target, targetId: args.targetId })
       : null;
+    if (whisperTo) {
+      const check = contacts.canInteract(p, whisperTo, 'whisper');
+      if (!check.ok) throw new Error(check.reason);
+    }
     const recipients = chatAudience(p, channel, { recipient: whisperTo });
     const party = channel === 'party' ? partyOfPlayer(p) : null;
     // Moderation needs every delivered line on record: a failed (synchronous) write is not delivered.
@@ -577,7 +832,24 @@ export function install(ctx) {
     for (const r of recipients) ctx.notify(r, event);
   });
 
-  // ------------------------------------------------------------ lifecycle
+  // ------------------------------------------------------------ lifecycle & cleanup
+  function handleAccountDeleted(accountId) {
+    const affectedFriends = contacts.onAccountDeleted(accountId);
+    mailbox.onAccountDeleted(accountId);
+    for (const friendKey of affectedFriends) pushAccount(friendKey);
+  }
+
+  function handleCharacterArchived(accountId, charId) {
+    contacts.onCharacterArchived(accountId, charId);
+    const key = accountKeyOf(accountId);
+    if (key) pushFriendsOf(key);
+  }
+
+  function handleModeration(accountId) {
+    const key = accountKeyOf(accountId);
+    if (key) pushFriendsOf(key);
+  }
+
   // Everyone's partner list changes when someone arrives or leaves.
   const pushAll = (exceptId) => {
     for (const o of ctx.players.values()) if (o.id !== exceptId) push(o);
@@ -585,7 +857,9 @@ export function install(ctx) {
 
   ctx.onJoin((p) => {
     settlePending();
+    const { accountKey } = contacts.registerPlayer(p);
     rejoin(p);
+    pushFriendsOf(accountKey);
     pushAll();
   });
 
@@ -600,11 +874,17 @@ export function install(ctx) {
     }
     const party = partyOfPlayer(p);
     if (party) {
-      // Disconnecting keeps membership; the member shows offline.
+      // Disconnecting keeps membership; the member shows offline and any ready check updates.
+      partyTravel.handleMemberDropped(party, p.id, p.name, 'disconnected');
       const others = [...party.members.keys()].filter((id) => id !== p.id && online(id));
       for (const id of others) push(online(id), `${p.name} went offline.`);
-      if (!others.length) parties.delete(party.id); // rebuilt from saved rosters on return
+      if (!others.length) {
+        parties.delete(party.id); // rebuilt from saved rosters on return
+        partyTravel.onPartyDisbanded(party.id);
+      }
     }
+    const acctKey = contacts.markOffline(p);
+    if (acctKey) pushFriendsOf(acctKey);
     pushAll(p.id);
   });
 
@@ -622,6 +902,7 @@ export function install(ctx) {
       if (!box.size) invites.delete(toId);
     }
     for (const trade of [...trades.values()]) refresh(trade);
+    partyTravel.tick(parties);
   });
 
   // Share kill progression with nearby party members via a gameplay event.
@@ -641,9 +922,23 @@ export function install(ctx) {
         ctx.notify(m, { kind: 'social', text: `${killer.name} slew ${entity?.name ?? 'a foe'} nearby.`, partyKill: { killerId: killer.id, entityId: entity?.id ?? null } });
       }
     });
+    ctx.on('connectionReset', (payload) => {
+      if (payload?.player) push(payload.player);
+    });
+    ctx.on('accountDeleted', (payload) => {
+      if (payload?.accountId != null) handleAccountDeleted(payload.accountId);
+    });
+    ctx.on('characterArchived', (payload) => {
+      if (payload?.accountId != null && payload?.characterId != null) {
+        handleCharacterArchived(payload.accountId, payload.characterId);
+      }
+    });
+    ctx.on('moderation', (payload) => {
+      if (payload?.accountId != null) handleModeration(payload.accountId);
+    });
   }
 
-  // Cross-feature services.
+  // Cross-feature services (including Wave 2 visits/duels/character-slots hooks).
   services.partyOf = (p) => {
     const party = partyOfPlayer(p);
     return party ? { id: party.id, leaderId: party.leaderId, memberIds: [...party.members.keys()] } : null;
@@ -662,5 +957,33 @@ export function install(ctx) {
   services.chatAudience = chatAudience;
   services.parseChatCommand = parseChatCommand;
 
-  return { parties, trades, invites, view, settlePending, chatAudience };
+  // Account-scoped contacts, directed blocks, reports, mailbox, and party travel hooks.
+  services.accountKeyOf = accountKeyOf;
+  services.isDirectedBlocked = (blocker, target) => contacts.isDirectedBlocked(blocker, target);
+  services.isBlocked = (a, b) => contacts.isBlocked(a, b);
+  services.areFriends = (a, b) => contacts.areFriends(a, b);
+  services.canInteract = (actor, target, kind = 'default') => contacts.canInteract(actor, target, kind);
+  services.socialContacts = {
+    accountKeyOf,
+    isBlocked: services.isBlocked,
+    isDirectedBlocked: services.isDirectedBlocked,
+    areFriends: services.areFriends,
+    canInteract: services.canInteract,
+    onAccountDeleted: handleAccountDeleted,
+    onCharacterArchived: handleCharacterArchived,
+    onModeration: handleModeration,
+    listReports: (opts) => contacts.listReports(opts),
+    getReport: (id) => contacts.getReport(id),
+  };
+  services.mailbox = {
+    unreadCount: (p) => mailbox.unreadCount(accountKeyOf(p)),
+    onAccountDeleted: (accountId) => mailbox.onAccountDeleted(accountId),
+  };
+  services.partyTravel = {
+    isRestrictedArea: (p) => partyTravel.isRestrictedArea(p),
+    memberLocationView: (party, id) => partyTravel.memberLocationView(party, id),
+    quoteToLeader: (p, args) => partyTravel.quoteToLeader(p, args),
+  };
+
+  return { parties, trades, invites, contacts, mailbox, partyTravel, view, settlePending, chatAudience };
 }

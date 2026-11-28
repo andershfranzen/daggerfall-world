@@ -281,6 +281,8 @@ export function decompileQbn(q) {
       case 0x31: return [`cure disease ${v(a1)}`];
       case 0x3a: return ['cure vampirism'];
       case 0x3b: return ['cure lycanthropy'];
+      // B0B71Y03 (_S.20_, Auriel's Bow): Daggerfall Unity keeps `_0x3c_ 19` as a no-op so B0B71Y03 runs cleanly.
+      case 0x3c: return [`_0x3c_ ${v(a1)}`];
       case 0x3f: return [`add foe ${fo(a1)} face`];
       case 0x40: return [`drop foe ${fo(a1)} face`];
       // Operands: otherwise-task, gold, person (A0C00Y11: "clicked _healer_ and at least 20 gold otherwise do _S.10_").

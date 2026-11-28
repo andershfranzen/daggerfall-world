@@ -2,9 +2,10 @@
 export const OUTDOOR_FAR = 3600;
 export const CLEAR_VISIBILITY = 2400;
 
-export function fogDistances(far, weatherScale, outdoors) {
+export function fogDistances(far, weatherScale, outdoors, viewDistance = CLEAR_VISIBILITY) {
   if (!outdoors) return [far * 0.35, far * 0.98];
-  const end = Math.min(CLEAR_VISIBILITY * weatherScale, far * 0.98);
+  const baseVis = Number.isFinite(viewDistance) && viewDistance > 0 ? viewDistance : CLEAR_VISIBILITY;
+  const end = Math.min(baseVis * weatherScale, far * 0.98);
   return [Math.min(30 * weatherScale, end * 0.1), end];
 }
 

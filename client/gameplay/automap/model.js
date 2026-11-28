@@ -208,7 +208,7 @@ export function visiblePieces(map, slice) {
 
 // ---------------------------------------------------------------------------------------------- build
 
-function atlasSampler(atlas) {
+export function atlasSampler(atlas) {
   if (!atlas?.pixels || !(atlas.width > 0) || !(atlas.height > 0)) return null;
   const { width: W, height: H, pixels: P } = atlas;
   return (u, v) => {
@@ -220,7 +220,7 @@ function atlasSampler(atlas) {
 }
 
 /** Average texture colour of triangle t from 4 samples (centroid and corner-inset points); null if transparent. */
-function triangleColour(sample, uv, t) {
+export function triangleColour(sample, uv, t) {
   if (!sample || !uv) return null;
   const o = t * 6;
   const u0 = uv[o], v0 = uv[o + 1], u1 = uv[o + 2], v1 = uv[o + 3], u2 = uv[o + 4], v2 = uv[o + 5];
@@ -249,6 +249,10 @@ class Floats {
 }
 
 const binOf = (y) => Math.floor(y / BIN);
+
+/** Plan -> the scene mesh it was built from (the 3D view draws the real triangles; see automap/view3d.js). */
+const sources = new WeakMap();
+export const meshOf = (map) => (map ? sources.get(map) ?? null : null);
 
 /**
  * Build the plan of a scene mesh.
@@ -309,19 +313,20 @@ export function buildAutomap(mesh, { kind = 'unknown' } = {}) {
     const q = col.map((c) => Math.min(255, Math.round((c * shade) / 12) * 12));
     const key = `f${binOf(yMin)}:${binOf(yMax)}:${q.join(',')}`;
     let g = groups.get(key);
-    if (!g) groups.set(key, (g = { yMin: binOf(yMin) * BIN, yMax: (binOf(yMax) + 1) * BIN, kind: 'fill', colour: q, data: new Floats() }));
+    if (!g) groups.set(key, (g = { yMin: binOf(yMin) * BIN, yMax: (binOf(yMax) + 1) * BIN, kind: 'fill', colour: q, data: new Floats(), yData: new Floats() }));
     g.data.push(ax, az, bx, bz, cx, cz);
+    g.yData.push(ay, by, cy);
   }
   if (!Number.isFinite(minX)) throw new Error('automap: the scene has no visible geometry');
 
   const pieces = [...groups.values()]
-    .map((g) => ({ yMin: g.yMin, yMax: g.yMax, kind: g.kind, colour: g.colour, data: g.data.done() }))
+    .map((g) => ({ yMin: g.yMin, yMax: g.yMax, kind: g.kind, colour: g.colour, data: g.data.done(), ...(g.yData ? { yData: g.yData.done() } : {}) }))
     // Painter order: lower surfaces first; at equal height fills before wall lines so walls stay on top.
     .sort((a, b) => (a.yMin + a.yMax) - (b.yMin + b.yMax) || (a.kind === b.kind ? 0 : a.kind === 'fill' ? -1 : 1));
 
   const sliced = kind !== 'town';
   const floors = sliced ? detectFloors(walk) : [];
-  return {
+  const map = {
     kind,
     sliced,
     bounds: { minX, maxX, minZ, maxZ },
@@ -330,6 +335,8 @@ export function buildAutomap(mesh, { kind = 'unknown' } = {}) {
     markers: doorMarkers(mesh.doors),
     triangles: T,
   };
+  sources.set(map, mesh);
+  return map;
 }
 
 /** Doors of an interior/dungeon scene (client/world/interiors/scene.js) as plan markers in output space. */

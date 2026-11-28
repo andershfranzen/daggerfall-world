@@ -52,8 +52,9 @@ const SPELLS = [
   record({ index: 25, name: 'Burst', element: 0, range: 3, effects: [{ type: 4, sub: 0, m: fixed(5) }] }),
   record({ index: 17, name: 'Ward', range: 0, effects: [{ type: 35, sub: -1, d: [2, 0, 1], m: fixed(20) }, { type: 9, sub: 0, d: [2, 0, 1], m: fixed(5) }] }),
   record({ index: 94, name: 'Recall', range: 0, effects: [{ type: 43, sub: -1 }] }),
-  record({ index: 33, name: 'Mixed', range: 2, effects: [{ type: 4, sub: 0, m: fixed(3) }, { type: 29 }] }),
-  record({ index: 93, name: 'Morph', effects: [{ type: 29 }] }),
+  record({ index: 33, name: 'Mixed', range: 2, effects: [{ type: 4, sub: 0, m: fixed(3) }, { type: 99 }] }),
+  record({ index: 92, name: '!Lycanthropy', range: 0, icon: 10, effects: [{ type: 29, sub: -1 }] }),
+  record({ index: 93, name: 'Broken', effects: [{ type: 99 }] }),
   record({ index: 18, name: 'Open', effects: [{ type: 17, c: [100, 0, 1] }] }),
   record({ index: 19, name: 'Lock', effects: [{ type: 16, c: [100, 0, 1] }] }),
   record({ index: 62, name: 'Soul Trap', range: 1, effects: [{ type: 12, d: [4, 0, 1], c: [100, 0, 1] }] }),
@@ -172,10 +173,12 @@ test('SPELLS.STD records parse into spells with classic ids, targets, elements a
   assert.equal(cat.spells.get('std:71').name, 'Nux Vomica');
   assert.deepEqual(cat.spells.get('std:51').effects.map((e) => e.template.key), ['ContinuousDamage-Health', 'Damage-Health']);
   assert.equal(cat.coverage.unsupported, 1);
-  // Effect table covers every classic spell family with an explicit support level.
+  // Effect table covers every classic spell family with an explicit support level (0 unsupported).
   const supports = new Set([...EFFECTS.values()].map((e) => e.support));
-  assert.deepEqual([...supports].sort(), ['applied', 'tracked', 'unsupported']);
-  for (const e of EFFECTS.values()) if (e.support === 'unsupported') assert.ok(e.reason, `${e.key} explains why`);
+  assert.deepEqual([...supports].sort(), ['applied', 'tracked']);
+  assert.equal(cat.spells.get('std:92').support, 'full');
+  assert.equal(cat.spells.get('std:92').hidden, true);
+  assert.equal(cat.spells.get('std:92').name, 'Lycanthropy');
 });
 
 test('costs follow the DFU spellmaker formula: skill discount, target multiplier and 5-point floor', () => {
@@ -360,7 +363,7 @@ test('rejections spend nothing: magicka, cooldown, range, facing, target kind, s
   fails(w.rt.act(p, 'magic.cast', { spellId: 'std:8', targetId: 'player:2' }), /Harmful spells cannot be cast at other players/);
   fails(w.rt.act(p, 'magic.cast', { spellId: 'std:8', targetId: 'ghost' }), /not here/);
   fails(w.rt.act(p, 'magic.cast', { spellId: 'std:25' }), /not in your spellbook/);
-  fails(w.rt.act(p, 'magic.cast', { spellId: 'std:93' }), /Morph cannot be cast in this world yet/);
+  fails(w.rt.act(p, 'magic.cast', { spellId: 'std:93' }), /Broken cannot be cast in this world yet/);
   fails(w.rt.act(p, 'magic.cast', { spellId: 'std:40', targetId: 'near' }), /would only help/);
   p.rpg.character.health = 0;
   fails(w.rt.act(p, 'magic.cast', { spellId: 'std:8' }), /dead/);
@@ -681,7 +684,7 @@ test('partial spells apply what is supported and name what is not', () => {
   ok(w.rt.act(p, 'magic.cast', { spellId: 'std:33' }));
   w.rt.tick(0.3);
   assert.equal(rat.hp, 27);
-  assert.match(w.events(1, 'spellResult')[0].text, /Morph Self.*not supported/);
+  assert.match(w.events(1, 'spellResult')[0].text, /Unknown effect 99\/-1.*not supported/);
 });
 
 test('a failed save rolls back magicka, entity damage, effects and the cooldown', () => {
@@ -937,16 +940,25 @@ test('Spell Maker validates rank and effect compatibility, then saves a private 
   assert.equal(rejoined.rpg.magic.custom.length, 0);
 });
 
-const REAL = 'gamedata/DaggerfallGameFiles/arena2/SPELLS.STD';
+const REAL_DIR = process.env.ARENA2_DIR && existsSync(`${process.env.ARENA2_DIR}/SPELLS.STD`)
+  ? process.env.ARENA2_DIR
+  : 'gamedata/DaggerfallGameFiles/arena2';
+const REAL = `${REAL_DIR}/SPELLS.STD`;
 test('operator SPELLS.STD (local only)', { skip: !existsSync(REAL) && 'no local game data' }, () => {
   const records = parseSpellsStd(readFileSync(REAL));
   assert.equal(records.length, 89);
-  const cat = loadCatalogue({ arena2Dir: 'gamedata/DaggerfallGameFiles' });
+  const cat = loadCatalogue({ arena2Dir: REAL_DIR });
   assert.equal(cat.source, 'SPELLS.STD');
-  assert.deepEqual(cat.coverage, { total: 89, full: 44, tracked: 44, partial: 0, unsupported: 1, hidden: 12 });
+  assert.deepEqual(cat.coverage, { total: 89, full: 45, tracked: 44, partial: 0, unsupported: 0, hidden: 12 });
   const effectCounts = Object.groupBy(EFFECTS.values(), (t) => t.support);
   assert.deepEqual(Object.fromEntries(Object.entries(effectCounts).map(([support, list]) => [support, list.length])),
-    { tracked: 40, applied: 50, unsupported: 1 });
+    { tracked: 40, applied: 51 });
+  const lyc = cat.spells.get('std:92');
+  assert.equal(lyc.name, 'Lycanthropy');
+  assert.equal(lyc.support, 'full');
+  assert.equal(lyc.hidden, true);
+  assert.equal(lyc.effects[0].template.key, 'MorphSelf');
+  assert.equal(lyc.effects[0].template.spellMaker, false);
   const shock = cat.spells.get('std:8');
   assert.equal(shock.targetType, 'touch');
   assert.equal(shock.support, 'full');
@@ -979,4 +991,117 @@ test('feedback: healing sends a private heal with the amount applied; enemy spel
   assert.ok(w2.rt.ctx.services.enemyCast(w2.monster('foe', 0, -10, 50, { magicka: 1000 }), 8, r).pending);
   w2.rt.tick(0.5);
   assert.deepEqual(causes, ['spell']);
+});
+
+test('legacy built-in spells remain castable and receive SPELLS.STD class starting spells on migration', () => {
+  const w = world();
+  // Simulate a character saved before ARENA2_DIR was enabled (with ward:* spells).
+  const p = {
+    id: 9, name: 'Anders', x: 0, z: 0, yaw: 0, dirty: false,
+    rpg: {
+      location: 'town',
+      gold: 100,
+      character: character({ className: 'Mage', magicka: 90, maxMagicka: 90 }),
+      magic: { known: ['ward:ember-dart', 'ward:mending'], active: [], custom: [], selected: 'ward:ember-dart', readySpell: null, granted: true },
+    },
+  };
+  w.players.set(9, p);
+  w.rt.join(p);
+  const catEv = w.events(9, 'spellCatalogue').at(-1);
+  assert.ok(catEv.spells.some((s) => s.id === 'ward:ember-dart'), 'legacy known ward:ember-dart is included in catalogue');
+  assert.ok(catEv.spells.some((s) => s.id === 'ward:mending'), 'legacy known ward:mending is included in catalogue');
+  assert.ok(!catEv.spells.some((s) => s.id === 'ward:static-palm'), 'unknown legacy spells stay hidden');
+  assert.equal(p.rpg.magic.selected, 'ward:ember-dart', 'valid legacy selection is preserved');
+  assert.ok(p.rpg.magic.known.includes('std:8'), 'Mage also receives SPELLS.STD starting spell');
+  // Casting the legacy ranged spell succeeds and launches a missile.
+  ok(w.rt.act(p, 'magic.cast', { spellId: 'ward:ember-dart', yaw: 0, pitch: 0 }));
+  assert.ok(w.events(9, 'spellCast').some((e) => e.spellId === 'ward:ember-dart' && e.missile), 'legacy Ember Dart launches');
+  // A fresh player on the SPELLS.STD server does not see legacy ward:* spells in their catalogue.
+  const fresh = w.add(10, 'Fresh');
+  const freshCat = w.events(10, 'spellCatalogue').at(-1);
+  assert.ok(!freshCat.spells.some((s) => s.id.startsWith('ward:')), 'fresh SPELLS.STD players do not see legacy spells');
+});
+
+test('stale or missing selected spell reconciles on join, including fallback without SPELLS.STD', () => {
+  const w = world({ magicOpts: { spellsStd: null } });
+  const p = {
+    id: 11, name: 'Traveller', x: 0, z: 0, yaw: 0, dirty: false,
+    rpg: {
+      location: 'town',
+      gold: 100,
+      character: character({ className: 'Mage', magicka: 100, maxMagicka: 100 }),
+      magic: { known: ['std:1', 'std:8'], active: [], custom: [], selected: 'std:1', readySpell: null, granted: true },
+    },
+  };
+  w.players.set(11, p);
+  w.rt.join(p);
+  assert.ok(p.rpg.magic.known.includes('ward:ember-dart'), 'grants built-in fallback spells when SPELLS.STD is absent');
+  assert.equal(p.rpg.magic.selected, 'ward:ember-dart', 'auto-selects a castable fallback spell');
+  ok(w.rt.act(p, 'magic.cast', { spellId: p.rpg.magic.selected, yaw: 0, pitch: 0 }));
+});
+
+test('MorphSelf (Lycanthropy std:92) transforms lycanthropes at 0 magicka, reverts from beast form, and stays out of Spell Maker', () => {
+  let transformed = false;
+  let cooldownUsed = false;
+  const services = {
+    conditionBeastForm: (pl) => (pl.rpg?.conditions?.lycanthrope && transformed ? pl.rpg.conditions.lycanthrope.form : null),
+    conditionMorphSelf: (pl) => {
+      if (!pl.rpg?.conditions?.lycanthrope) return { ok: false, transformed: false, reason: 'You are not a lycanthrope.' };
+      if (!transformed && cooldownUsed) return { ok: false, transformed: false, reason: 'You can only do this once per day.' };
+      transformed = !transformed;
+      if (transformed) cooldownUsed = true;
+      return { ok: true, transformed };
+    },
+    requireNpcService: () => ({ guild: 'mages', factionId: 40, rank: 1 }),
+  };
+  const w = world({ services });
+  const p = w.add(1, 'Ana');
+  assert.ok(!p.rpg.magic.known.includes('std:92'), 'non-lycanthrope does not start with Lycanthropy');
+  // Excluded from Spell Maker even though MorphSelf is supported.
+  fails(w.rt.act(p, 'magic.make', {
+    targetId: 'maker', session: 'live', name: 'Bad Morph', targetType: 'caster', element: 'magic', icon: 10,
+    effects: [{ key: 'MorphSelf', settings: {} }],
+  }), /unavailable in the Spell Maker/);
+
+  // Non-lycanthrope manually taught std:92 gets a clean no-effect message.
+  p.rpg.magic.known.push('std:92');
+  ok(w.rt.act(p, 'magic.cast', { spellId: 'std:92' }));
+  assert.match(w.events(1, 'spellResult').at(-1).text, /You are not a lycanthrope/);
+  p.rpg.magic.known = p.rpg.magic.known.filter((id) => id !== 'std:92');
+
+  // Contracting lycanthropy grants std:92 automatically as an innate 0-mp unremovable spell.
+  p.rpg.conditions = { lycanthrope: { form: 'werewolf', transformed: false } };
+  w.rt.ctx.emit('conditionChanged', { player: p, change: 'deployed', kind: 'lycanthropy', key: 'werewolf' });
+  assert.ok(p.rpg.magic.known.includes('std:92'));
+  const cat = w.events(1, 'spellCatalogue').at(-1);
+  const lyc = cat.spells.find((s) => s.id === 'std:92');
+  assert.equal(lyc.innate, 'lycanthrope');
+  assert.equal(lyc.baseCosts.magicka, 0);
+  fails(w.rt.act(p, 'magic.forget', { spellId: 'std:92' }), /cannot forget your lycanthropy spell/);
+
+  // Casting Lycanthropy costs 0 magicka and shifts into beast form.
+  w.advance(2000);
+  const manaBefore = p.rpg.character.magicka;
+  ok(w.rt.act(p, 'magic.cast', { spellId: 'std:92' }));
+  assert.equal(p.rpg.character.magicka, manaBefore, 'innate Lycanthropy costs 0 magicka');
+  assert.equal(transformed, true);
+  assert.match(w.events(1, 'spellResult').at(-1).text, /shift into beast form/);
+
+  // Other spells are still blocked in beast form, but Lycanthropy can revert to human form.
+  w.advance(2000);
+  fails(w.rt.act(p, 'magic.cast', { spellId: 'std:8' }), /cannot cast spells in beast form/);
+  ok(w.rt.act(p, 'magic.cast', { spellId: 'std:92' }));
+  assert.equal(transformed, false);
+  assert.match(w.events(1, 'spellResult').at(-1).text, /return to your normal form/);
+
+  // Once-per-day cooldown is honoured on second shift.
+  w.advance(2000);
+  ok(w.rt.act(p, 'magic.cast', { spellId: 'std:92' }));
+  assert.equal(transformed, false);
+  assert.match(w.events(1, 'spellResult').at(-1).text, /once per day/);
+
+  // Curing lycanthropy removes the auto-granted std:92 spell.
+  p.rpg.conditions.lycanthrope = null;
+  w.rt.ctx.emit('conditionChanged', { player: p, change: 'cured', kind: 'lycanthropy', key: 'werewolf' });
+  assert.ok(!p.rpg.magic.known.includes('std:92'));
 });

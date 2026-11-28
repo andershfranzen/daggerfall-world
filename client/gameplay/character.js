@@ -38,6 +38,7 @@ function restoreFocus(key, root) {
 export function install(api) {
   const ui = {
     mode: 'sheet', // sheet | wizard
+    inWizard: false,
     dismissedWizard: false,
     draft: null,
     levelDraft: null,
@@ -161,8 +162,9 @@ export function install(api) {
       container.replaceChildren(h('p', { class: 'cc-note' }, 'Connecting to the world…'));
       return;
     }
-    if (!ch.created && !ui.dismissedWizard) ui.mode = 'wizard';
+    if (!ch.created) ui.mode = 'wizard';
     if (ui.mode === 'wizard' && !ch.created) {
+      ui.inWizard = true;
       ui.draft ??= new CharacterDraft(ch.name);
       ui.draft.localCareers ??= ui.localCareers ?? null;
       ui.draft.classic ??= ui.classic ?? null;
@@ -172,6 +174,8 @@ export function install(api) {
       if (ch.draft) ui.draft.syncRoll(ch.draft);
       const step = ui.draft.step;
       renderWizard(container, ui.draft, ctl);
+      const menu = container.closest?.('#game-menu');
+      if (menu) menu.dataset.wizard = 'true';
       if (step !== ui.lastStep) {
         // New step: start keyboard navigation at its field or heading. A microtask runs after the
         // shell's own focus restore, whichever of us drew the panel.
@@ -183,6 +187,8 @@ export function install(api) {
       }
     } else {
       ui.mode = 'sheet';
+      const menu = container.closest?.('#game-menu');
+      if (menu) delete menu.dataset.wizard;
       syncLevel(ch);
       renderSheet(container, ch, ctl);
     }
@@ -217,11 +223,16 @@ export function install(api) {
     const ch = character();
     if (!ch) return;
     ui.busy = false;
-    if (ch.created && ui.mode === 'wizard') {
+    if (ch.created && (ui.mode === 'wizard' || ui.inWizard)) {
       ui.mode = 'sheet';
+      ui.inWizard = false;
       ui.dismissedWizard = false;
       ui.draft = null;
       try { sessionStorage.removeItem(promptKeyFor(ch)); } catch {}
+      if (isOpen()) {
+        api.refreshPanel?.();
+        api.closePanel?.();
+      }
     }
     const rollBefore = ui.draft?.rollKey;
     if (ui.draft && ch.draft) ui.draft.syncRoll(ch.draft);
@@ -255,14 +266,10 @@ export function install(api) {
 
   const promptKeyFor = (ch) => `${PROMPT_KEY}:${ch?.name ?? ''}`;
 
-  /** Seamless first-run creation: open the wizard once per browser session for an uncreated character. */
+  /** Mandatory first-run creation: open the wizard for any uncreated character. */
   function maybePrompt(ch) {
-    if (!ch || ch.created || ui.dismissedWizard) return;
-    const key = promptKeyFor(ch);
-    let prompted = false;
-    try { prompted = sessionStorage.getItem(key) === '1'; } catch {}
-    if (prompted) return;
-    try { sessionStorage.setItem(key, '1'); } catch {}
+    if (!ch || ch.created) return;
+    if (isOpen() && ui.mode === 'wizard') return;
     startWizard();
   }
 

@@ -212,21 +212,54 @@ export function install(api) {
 
   const projectileLayer = el('div', { class: 'mg-projectiles', 'aria-hidden': true });
   document.body.append(projectileLayer);
-  function drawMissiles(renderer) {
+  function rayPoint(m, d) {
+    return { x: m.x + m.direction.x * d, y: m.y + m.direction.y * d, z: m.z + m.direction.z * d };
+  }
+  function drawMissiles(renderer, camera) {
     const now = performance.now();
     for (const [id, m] of missiles) {
       const elapsed = (now - m.started) / 1000;
       const d = Math.max(0, elapsed * m.speed);
-      if (m.location !== api.location || d > m.range || (m.end && elapsed > 0.28)) {
+      const impact = m.end ?? m.predictedEnd ?? null;
+      const impactAge = impact ? (now - (m.impactAt ?? m.started)) / 1000 : 0;
+      if (m.location !== api.location || (!impact && d > m.range) || (impact && impactAge > 0.28)) {
         m.node.remove();
         missiles.delete(id);
         continue;
       }
-      const q = m.end ?? { x: m.x + m.direction.x * d, y: m.y + m.direction.y * d, z: m.z + m.direction.z * d };
+      let q = impact ?? rayPoint(m, d);
+      // Predict local ground/wall impact so the 2D spell orb never passes through the floor or walls while awaiting server impact.
+      if (!impact && api.canSee && d > 0.05) {
+        const prevD = m.lastClear ?? 0;
+        const prev = rayPoint(m, prevD);
+        if (api.canSee(prev.x, prev.z, q.x, q.z, { y1: prev.y, y2: q.y, eye: 0, eye2: 0 }) === false) {
+          let lo = prevD, hi = d;
+          for (let step = 0; step < 10; step++) {
+            const mid = (lo + hi) * 0.5;
+            const pt = rayPoint(m, mid);
+            if (api.canSee(prev.x, prev.z, pt.x, pt.z, { y1: prev.y, y2: pt.y, eye: 0, eye2: 0 })) lo = mid;
+            else hi = mid;
+          }
+          q = rayPoint(m, lo);
+          m.predictedEnd = q;
+          m.impactAt = now;
+          m.node.classList.add('mg-missile-impact');
+        } else {
+          m.lastClear = d;
+        }
+      }
       const p = renderer?.project(q.x, q.y, q.z);
-      m.node.hidden = !p || p.depth < 0.5;
-      if (p) {
-        const scale = Math.max(0.45, Math.min(m.end ? 3 : 1.8, 7 / p.depth));
+      let occluded = false;
+      if (p && p.depth >= 0.5 && camera && api.canSee) {
+        const pull = (m.end || m.predictedEnd) ? 0.18 : 0.05;
+        const cx = q.x - m.direction.x * pull;
+        const cy = q.y - m.direction.y * pull;
+        const cz = q.z - m.direction.z * pull;
+        occluded = api.canSee(camera.x, camera.z, cx, cz, { y1: camera.y, y2: cy, eye: 0, eye2: 0 }) === false;
+      }
+      m.node.hidden = !p || p.depth < 0.5 || occluded;
+      if (p && !m.node.hidden) {
+        const scale = Math.max(0.45, Math.min((m.end || m.predictedEnd) ? 3 : 1.8, 7 / p.depth));
         m.node.style.transform = `translate(${p.x}px,${p.y}px) translate(-50%,-50%) scale(${scale})`;
       }
     }
@@ -250,9 +283,9 @@ export function install(api) {
       api.act('magic.choose', { token, cancel: true }, { quiet: true });
     }
   });
-  api.on('frame', ({ dt, renderer } = {}) => {
+  api.on('frame', ({ dt, renderer, camera } = {}) => {
     drawHands(Number(dt) || 0.016);
-    drawMissiles(renderer);
+    drawMissiles(renderer, camera);
     const hide = !(readyTrapSpell() ?? selectedSpell()) || screen !== 'game' || api.modalOpen || inJourney;
     if (chip.hidden !== hide) chip.hidden = hide;
   });
@@ -392,8 +425,10 @@ export function install(api) {
       const m = missiles.get(ev.missileId);
       if (m && ev.center && ev.reason !== 'range') {
         m.end = ev.center;
-        m.started = performance.now();
-        m.node.classList.add('mg-missile-impact');
+        if (!m.impactAt) {
+          m.impactAt = performance.now();
+          m.node.classList.add('mg-missile-impact');
+        }
       } else if (m) { m.node.remove(); missiles.delete(ev.missileId); }
       if (ev.targetIds?.includes(`player:${self}`)) flashElement(ev.element);
     }

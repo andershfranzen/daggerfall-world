@@ -6,6 +6,8 @@
 //
 // Contract with the game runtime (server/game.js, createGameServer({ accounts })):
 //   accounts.handleHttp(req, res)      -> Promise; answers every /api/* request (JSON).
+//   accounts.sessionUser(req)          -> { id, username } | null (or Promise in Postgres) from session cookie.
+//   accounts.healthy()                 -> boolean (or Promise<boolean> in Postgres); DB health probe.
 //   accounts.resolveUpgrade(req)       -> { id, username } | null from the session cookie.
 //                                         null for no/expired/revoked session or a banned account.
 //   accounts.isMuted(accountId)        -> boolean (temporary or permanent mute in force).
@@ -985,6 +987,20 @@ export function createAccounts(options = {}) {
     cookieName,
     store,
     handleHttp,
+    sessionUser(req) {
+      try {
+        return sessionFor(req)?.user ?? null;
+      } catch {
+        return null;
+      }
+    },
+    healthy() {
+      try {
+        return Boolean(store.db?.isOpen && store.db.prepare('SELECT 1').get());
+      } catch {
+        return false;
+      }
+    },
     resolveUpgrade(req) {
       try {
         const s = sessionFor(req);
@@ -1455,6 +1471,22 @@ export async function createPostgresAccounts(options = {}) {
     cookieName,
     store,
     handleHttp,
+    async sessionUser(req) {
+      try {
+        return (await sessionFor(req))?.user ?? null;
+      } catch {
+        return null;
+      }
+    },
+    async healthy() {
+      try {
+        if (closed || !store.pool || typeof store.pool.query !== 'function') return false;
+        await store.pool.query('SELECT 1');
+        return true;
+      } catch {
+        return false;
+      }
+    },
     async resolveUpgrade(req) {
       try {
         const s = await sessionFor(req);

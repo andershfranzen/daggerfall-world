@@ -160,6 +160,7 @@ const BEHAVIOUR = {
   'Detect-Magic': { support: 'tracked', kind: 'status', status: 'detectMagic' },
   'Detect-Treasure': { support: 'tracked', kind: 'status', status: 'detectTreasure' },
   ComprehendLanguages: { support: 'tracked', kind: 'status', status: 'comprehendLanguages' },
+  MorphSelf: { support: 'applied', kind: 'morphSelf' },
 };
 for (const attribute of ATTRIBUTES) {
   BEHAVIOUR[`Fortify-${attribute}`] = { support: 'tracked', kind: 'fortify', attribute };
@@ -174,10 +175,8 @@ for (const el of ['Fire', 'Frost', 'Poison', 'Shock', 'Magicka']) {
   BEHAVIOUR[`ElementalResistance-${el}`] = { support: 'tracked', kind: 'status', status: `resist${el}` };
 }
 
-// Why the remaining classic families are not available, shown in the spellbook.
-const UNSUPPORTED_REASON = {
-  MorphSelf: 'lycanthropy supplies its own transformation and classic excludes this effect from the Spell Maker',
-};
+// Why any remaining classic families are not available, shown in the spellbook.
+const UNSUPPORTED_REASON = {};
 
 function reasonFor(key) {
   if (UNSUPPORTED_REASON[key]) return UNSUPPORTED_REASON[key];
@@ -198,6 +197,7 @@ for (const [key, type, subType, school, flags, d, c, m, targets] of ROWS) {
     targets: /^Dispel-(Undead|Daedra)$/.test(key) ? 'self' : targets,
     elements: anyElement.test(key) ? ['fire', 'cold', 'poison', 'shock', 'magic'] : ['magic'],
     duration: flags.includes('D'), chance: flags.includes('C'), magnitude: flags.includes('M'),
+    spellMaker: key !== 'MorphSelf',
     showSpellIcon: !/^(?:CreateItem|Dispel-Magic|Lock|MorphSelf|Open|SoulTrap|Teleport)$|^(?:Drain|Transfer)-/.test(key),
     durationCosts: costs(d), chanceCosts: costs(c), magnitudeCosts: costs(m),
     support: b?.support ?? 'unsupported',

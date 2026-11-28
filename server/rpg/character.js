@@ -750,7 +750,7 @@ export function install(ctx) {
     liveOf(p);
     if (JSON.stringify(p.rpg.character) !== before) ctx.dirty(p);
     if (!p.rpg.character.created) {
-      ctx.notify(p, { kind: 'characterNeeded', text: 'Create your character to begin your own story. You can play with a default warrior until then.' });
+      ctx.notify(p, { kind: 'characterNeeded', text: 'Create your character to begin your adventure.' });
     }
   });
 

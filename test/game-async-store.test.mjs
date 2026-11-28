@@ -101,7 +101,42 @@ function createMockPgPool({ delayMs = 2 } = {}) {
       if (!link) return { rows: [], rowCount: 0 };
       const p = state.players.get(Number(link.player_id));
       if (!p) return { rows: [], rowCount: 0 };
-      return { rows: [{ ...structuredClone(p), username: link.username }], rowCount: 1 };
+      return {
+        rows: [{
+          ...structuredClone(p),
+          account_id: link.account_id,
+          slot: link.slot ?? 1,
+          username: link.username,
+          display_name: link.display_name ?? p.name,
+          display_name_key: (link.display_name ?? p.name).toLowerCase(),
+          grandfathered: link.grandfathered ?? true,
+          status: link.status ?? 'active',
+          draft: link.draft ?? false,
+          linked_at: link.linked_at,
+          last_played_at: link.last_played_at ?? link.linked_at,
+          last_selected: link.last_selected ?? true,
+          archived_at: link.archived_at ?? null,
+          purge_after: link.purge_after ?? null,
+        }],
+        rowCount: 1,
+      };
+    }
+
+    if (sql.startsWith('SELECT player_id, account_id, slot, display_name FROM account_characters WHERE')) {
+      const nowCutoff = sql.includes('account_id = $1') ? Number(params[1]) : Number(params[0]);
+      const acctFilter = sql.includes('account_id = $1') ? String(params[0]) : null;
+      const rows = [...state.accountCharacters.values()]
+        .filter((a) => (!acctFilter || a.account_id === acctFilter)
+          && a.status === 'archived'
+          && a.purge_after != null
+          && Number(a.purge_after) <= nowCutoff)
+        .map((a) => ({
+          player_id: a.player_id,
+          account_id: a.account_id,
+          slot: a.slot ?? 1,
+          display_name: a.display_name ?? a.username,
+        }));
+      return { rows, rowCount: rows.length };
     }
 
     if (sql === 'SELECT player_id FROM account_characters WHERE account_id = $1') {
@@ -114,7 +149,13 @@ function createMockPgPool({ delayMs = 2 } = {}) {
       state.accountCharacters.set(String(account_id), {
         account_id: String(account_id),
         player_id: String(player_id),
+        slot: 1,
         username,
+        display_name: username,
+        status: 'active',
+        draft: false,
+        last_selected: true,
+        last_played_at: String(linked_at),
         linked_at: String(linked_at),
       });
       return { rows: [], rowCount: 1 };
@@ -126,9 +167,39 @@ function createMockPgPool({ delayMs = 2 } = {}) {
       return { rows: [], rowCount: link ? 1 : 0 };
     }
 
+    if (sql === 'UPDATE account_characters SET last_selected = FALSE WHERE account_id = $1') {
+      const link = state.accountCharacters.get(String(params[0]));
+      if (link) link.last_selected = false;
+      return { rows: [], rowCount: link ? 1 : 0 };
+    }
+
+    if (sql.startsWith('UPDATE account_characters SET last_played_at = $1, last_selected = TRUE WHERE account_id = $2')) {
+      const link = state.accountCharacters.get(String(params[1]));
+      if (link && Number(link.player_id) === Number(params[2])) {
+        link.last_played_at = String(params[0]);
+        link.last_selected = true;
+      }
+      return { rows: [], rowCount: link ? 1 : 0 };
+    }
+
     if (sql === 'DELETE FROM account_characters WHERE account_id = $1') {
       const existed = state.accountCharacters.delete(String(params[0]));
       return { rows: [], rowCount: existed ? 1 : 0 };
+    }
+
+    if (sql === 'DELETE FROM account_characters WHERE player_id = $1') {
+      let deleted = 0;
+      for (const [k, v] of state.accountCharacters) {
+        if (Number(v.player_id) === Number(params[0])) {
+          state.accountCharacters.delete(k);
+          deleted += 1;
+        }
+      }
+      return { rows: [], rowCount: deleted };
+    }
+
+    if (sql.startsWith('SELECT * FROM escrow_records') || sql.startsWith('SELECT * FROM claim_records')) {
+      return { rows: [], rowCount: 0 };
     }
 
     if (sql === 'DELETE FROM players WHERE id = $1') {

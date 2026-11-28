@@ -92,7 +92,8 @@ export function installMaker(api, el, icon) {
       const groups = template.groups.map(({ group, fields }) => {
         const controls = fields.map(([field, label, max]) => el('label', { class: 'mg-maker-control' }, label,
           el('input', { type: 'number', min: 1, max, required: true, value: settings[field] ?? 1, oninput: (e) => {
-            settings[field] = e.target.valueAsNumber;
+            const v = e.target.valueAsNumber;
+            settings[field] = Number.isFinite(v) ? Math.max(1, Math.min(max, Math.trunc(v))) : 1;
             updateCost();
           } })));
         return el('fieldset', {}, el('legend', { text: group[0].toUpperCase() + group.slice(1) }), controls);

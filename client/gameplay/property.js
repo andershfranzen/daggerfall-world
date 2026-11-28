@@ -97,7 +97,12 @@ export function install(api) {
         el('dt', { text: 'Account here' }), el('dd', { text: place ? String(c.townServices?.accounts?.[regionKey(place.region)]?.gold ?? 0) : '—' }))));
     const cols = el('div', { class: 'tsv-cols' });
     cols.append(bankSection(bank, place), transportSection());
-    wrap.append(cols, storesSection());
+    const homesShortcut = api.getPanel?.('homes')
+      ? el('div', { class: 'tsv-row' },
+        button('Personal Homes (Furnishing, Guests & Chests)', () => api.openPanel('homes')),
+        api.getPanel?.('market') ? button('Player Market Board', () => api.openPanel('market')) : null)
+      : null;
+    wrap.append(homesShortcut, cols, storesSection());
   }
 
   function bankSection(bank, place) {

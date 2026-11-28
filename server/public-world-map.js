@@ -144,9 +144,11 @@ function resolveRemoteSnapshots(extra) {
 export function mergeWorldMapSnapshots(snapshots, now = Date.now()) {
   const byPixel = new Map();
   let online = 0;
+  let vessels = 0;
   for (const snap of snapshots) {
     if (!snap || typeof snap !== 'object') continue;
     if (Number.isFinite(snap.online) && snap.online > 0) online += snap.online;
+    if (Number.isFinite(snap.vessels) && snap.vessels > 0) vessels += snap.vessels;
     for (const loc of Array.isArray(snap.locations) ? snap.locations : []) {
       const count = Number.isFinite(loc?.count) && loc.count > 0 ? loc.count : 0;
       if (!count) continue;
@@ -157,7 +159,7 @@ export function mergeWorldMapSnapshots(snapshots, now = Date.now()) {
   const locations = [...byPixel.values()].sort((a, b) =>
     b.count - a.count || a.name.localeCompare(b.name) || a.y - b.y || a.x - b.x);
   const placed = locations.reduce((n, l) => n + l.count, 0);
-  return { version: 1, generatedAt: new Date(now).toISOString(), online, unplaced: Math.max(0, online - placed), locations };
+  return { version: 1, generatedAt: new Date(now).toISOString(), online, unplaced: Math.max(0, online - placed), vessels, locations };
 }
 
 /**

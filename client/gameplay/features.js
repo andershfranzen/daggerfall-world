@@ -20,16 +20,25 @@ import { install as guilds } from './guilds.js';
 import { install as hiscores } from './hiscores.js';
 import { install as peerInspect } from './peerInspect.js';
 import { install as atmosphere } from './atmosphere.js';
+import { install as videoAudioMods } from './video-audio-mods.js';
 import { install as scenery } from './scenery.js';
 import { install as water } from './water.js';
 import { install as wilderness } from './wilderness.js';
 import { install as wildernessMap } from './wildernessMap.js';
 import { install as mount } from './mount.js';
 import { install as property } from './property.js';
+import { install as professions } from './professions.js';
+import { install as homes } from './homes.js';
+import { install as market } from './market.js';
+import { install as pvp } from './pvp.js';
 import { install as sailing } from './sailing.js';
+import { install as coopWorld } from './coop-world.js';
 import { install as journey } from './journey.js';
 import { install as conditions } from './conditions.js';
 import { install as cinematics } from './cinematics.js';
+import { install as quickslots } from './quickslots.js';
+import { install as roadFollow } from './travel/road-follow.js';
+import { install as touch } from '../lib/touch.js';
 
 export const features = [
   { name: 'character', install: character },
@@ -54,16 +63,25 @@ export const features = [
   { name: 'hiscores', install: hiscores },
   { name: 'peerInspect', install: peerInspect },
   { name: 'atmosphere', install: atmosphere },
+  { name: 'videoAudioMods', install: videoAudioMods }, // retro VGA, quality/lighting presets, audio sources & local asset overrides
   { name: 'scenery', install: scenery },
   { name: 'water', install: water }, // dungeon water sheets, after collision (package 21)
   { name: 'wilderness', install: wilderness },
   { name: 'wildernessMap', install: wildernessMap },
   { name: 'mount', install: mount },
   { name: 'property', install: property }, // loans, houses, ships, wagon (package 13)
+  { name: 'professions', install: professions }, // Professions sub-tab, contextual crafting station & gathering HUD
+  { name: 'homes', install: homes }, // Personal Homes under Property/Character (furnishing, guests, chests)
+  { name: 'market', install: market }, // Contextual Player Market board & House Trader
+  { name: 'pvp', install: pvp }, // Contextual Land PvP (Duels, Arena, Open District, Order Sieges) + HUD
   { name: 'sailing', install: sailing },
+  { name: 'coopWorld', install: coopWorld }, // Contextual Co-op, Instances, Smaller Dungeons, Delves, Living World & Survival
   { name: 'journey', install: journey },
   { name: 'conditions', install: conditions }, // Health panel (package 10)
   { name: 'cinematics', install: cinematics },
+  { name: 'quickslots', install: quickslots },
+  { name: 'roadFollow', install: roadFollow },
+  { name: 'touch', install: touch },
 ];
 
 export default features;

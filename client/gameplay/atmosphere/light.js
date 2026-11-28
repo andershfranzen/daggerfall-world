@@ -3,8 +3,12 @@
 // The renderer reads its sky colours from the exported PALETTE arrays and its light from
 // `renderer.sunDir`, and scales outdoor visibility with `renderer.fogScale`; this adapter writes those in place
 // each frame and restores them on demand, so the renderer itself needs no changes.
-// Overall darkness comes from a multiply-blend shade element laid over the canvas
-// (`shadeCss`), because the world shader has no global brightness input.
+// Overall darkness is one colour multiplied over the finished frame (`shade`): the renderer does it itself when
+// it can (`renderer.shade`, after which it adds the outdoor sky's own light back, so moons and stars are not
+// dimmed with the ground); otherwise a multiply-blend element laid over the canvas (`shadeCss`).
+// When the classic SKYnn.DAT panorama is on screen the renderer reports its colours for the moment
+// (`renderer.skyTone`); given as `tone`, the fog and sky colours follow the painting's own palette through the
+// day instead of the fixed day/night blend.
 
 import { PALETTE } from '../../render/renderer.js';
 import { daylight, sunDirection } from './calendar.js';
@@ -47,7 +51,7 @@ const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
  * @returns {{zenith:number[],horizon:number[],ground:number[],sunDir:number[],fogScale:number,shade:number[],shadeCss:string,daylight:number,apply:(r:object)=>void}}
  */
 export function lightFor(input) {
-  const { minuteOfDay, weather = 'sunny', indoors = false, flash = 0, base = BASE, kind = null, lightRadius = 0, underwater = false } = input;
+  const { minuteOfDay, weather = 'sunny', indoors = false, flash = 0, base = BASE, kind = null, lightRadius = 0, underwater = false, tone = null } = input;
   if (underwater) {
     const water = UNDERWATER;
     return finish({ zenith: [...water.fog], horizon: [...water.fog], ground: [...water.fog], sunDir: indoors ? null : sunDirection(minuteOfDay), fogScale: 1,
@@ -71,15 +75,31 @@ export function lightFor(input) {
   const glow = Math.max(0, 1 - Math.abs(d - 0.45) / 0.45) * (1 - look.grey) * 0.55; // warm horizon at dawn/dusk
   const sky = {};
   for (const k of ['zenith', 'horizon', 'ground']) {
+    if (tone?.[k]) {
+      // The classic sky's colour for this minute (dawn reds, the night's blue) only loses saturation to the weather.
+      const l = 0.3 * tone[k][0] + 0.5 * tone[k][1] + 0.2 * tone[k][2];
+      sky[k] = mix(tone[k], [l, l, l * 1.03], look.grey * 0.8);
+      continue;
+    }
     let c = mix(base[k], GREY[k], look.grey);
     c = mix(NIGHT[k], c, d);
     sky[k] = c;
   }
-  sky.horizon = mix(sky.horizon, DUSK_GLOW, glow);
+  if (!tone?.horizon) sky.horizon = mix(sky.horizon, DUSK_GLOW, glow);
   if (flash > 0) for (const k of ['zenith', 'horizon']) sky[k] = mix(sky[k], [0.85, 0.88, 1], Math.min(1, flash) * 0.7);
   const nightness = 1 - d;
   let shade = mix([1, 1, 1], SHADE_NIGHT, nightness);
   shade = shade.map((v) => v * (look.dim + (1 - look.dim) * nightness));
+  if (tone?.horizon) {
+    // Under the classic sky the ground takes its light from the painting: dimmer and warmer as its horizon reddens.
+    const h = tone.horizon, peak = Math.max(h[0], h[1], h[2], 1e-3);
+    const bright = Math.min(1, 0.45 + 0.75 * peak);
+    const day = 1 - nightness;
+    // Only a coloured horizon tints: the pale blue-white of midday leaves the ground its own colours.
+    const sat = 1 - Math.min(h[0], h[1], h[2]) / peak;
+    const warm = 0.3 * day * (1 - look.grey) * Math.min(1, Math.max(0, (sat - 0.2) / 0.4));
+    shade = shade.map((v, i) => v * (1 + (bright - 1) * day) * (1 + (h[i] / peak - 1) * warm));
+  }
   if (flash > 0) shade = mix(shade, [1, 1, 1], Math.min(1, flash) * 0.8);
   const sun = d > 0.02 ? sunDirection(minuteOfDay) : sunDirection((minuteOfDay + 720) % 1440); // moonlight from the opposite side
   return finish({ ...sky, sunDir: sun, fogScale: look.fog, shade, daylight: d }, input);
@@ -130,6 +150,7 @@ export function restoreLight(renderer) {
   renderer.sunDir = [...a.sunDir];
   renderer.fogScale = a.fogScale;
   renderer.fogOverride = null;
+  if (renderer.shadeInGl) { renderer.shade = null; renderer.skyState = undefined; }
   delete renderer.__atmo;
 }
 

@@ -813,3 +813,15 @@
   text-decoration: underline;
   outline: none;
 }
+
+.hs-web-actions,
+.hs-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.hs-web-link {
+  text-decoration: none;
+}

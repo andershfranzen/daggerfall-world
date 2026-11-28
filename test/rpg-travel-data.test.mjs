@@ -13,9 +13,9 @@ import { DOT_PALETTE_INDEX, REGION_NAMES } from '../client/gameplay/travel/catal
 import { MapImages, OVERVIEW_IMG, PICKER_IMG, REGION_MAP_ORIGIN, regionMapNames, regionMapFor } from '../client/gameplay/travel/mapimages.js';
 import { loadTown } from '../client/world/town.js';
 
-const ARENA2 = new URL('../gamedata/DaggerfallGameFiles/arena2/', import.meta.url).pathname;
+const ARENA2 = process.env.ARENA2_DIR || new URL('../gamedata/DaggerfallGameFiles/arena2/', import.meta.url).pathname;
 const hasData = existsSync(join(ARENA2, 'MAPS.BSA'));
-const skip = hasData ? false : 'local Daggerfall data not present in gamedata/DaggerfallGameFiles/arena2';
+const skip = hasData ? false : `local Daggerfall data not present in ${ARENA2}`;
 
 let world;
 before(async () => {

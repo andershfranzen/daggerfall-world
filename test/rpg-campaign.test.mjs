@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { CharacterDraft } from '../client/gameplay/character/draft.js';
 import { updateSavedCampaignInstance } from '../server/rpg/campaign/progress.js';
@@ -10,7 +12,7 @@ import {
   readPersisted, startLiveWorld, STRICT, tempDir,
 } from './support/rpg-session.mjs';
 
-const dataPath = localArena2();
+const dataPath = (process.env.ARENA2_DIR && existsSync(join(process.env.ARENA2_DIR, 'S0000999.QBN')) ? process.env.ARENA2_DIR : null) ?? localArena2();
 const gate = { skip: !dataPath && !STRICT ? 'operator ARENA2 unavailable' : false };
 const quest = (client, name) => client.character.quests.active.find((q) => q.name === name);
 
@@ -321,6 +323,7 @@ test('Orcish Treaty requires a fresh audience with Mynisera once the court is re
     const host = {
       location: () => 'dungeon:Daggerfall/Daggerfall',
       individual: (person) => ({ name: person.value, factionId: person.factionId }),
+      makeName: () => 'Test NPC',
       itemName: (item) => item.symbol,
       global: (i) => globals.has(i),
       setGlobal: (i, value) => value ? globals.add(i) : globals.delete(i),
@@ -497,4 +500,103 @@ test('tutorial lessons include Daggerfall World controls and auto-save guidance 
   assert.match(annotateTutorialText('_TUTOR__', 1012, 'Move lesson'), /W A S D/);
   assert.match(annotateTutorialText('_TUTOR__', 1020, 'Door lesson'), /press G/i);
   assert.equal(annotateTutorialText('_BRISIEN', 1030, 'Unrelated quest'), 'Unrelated quest');
+});
+
+test('all 34 S0000* campaign scripts pass static analysis and S0000008 -> S0000016 chains all 7 Totem recipients to all 7 endings', gate, () => {
+  assert.ok(dataPath, 'strict integration requires the installed game files');
+  const cat = loadCatalog({ dataPath, artifact: () => true });
+  const campaignScripts = [...cat.quests.values()].filter((q) => /^S0000/i.test(q.name));
+  assert.equal(campaignScripts.length, 34, 'all 34 S0000001-S0000999 scripts loaded');
+  for (const q of campaignScripts) {
+    const unsup = q.analysis.unsupported.filter((u) => !u.includes('not a guild or social quest') && !u.includes('no offer text'));
+    assert.deepEqual(unsup, [], `${q.name} has unsupported actions: ${unsup.join(', ')}`);
+  }
+
+  const def008 = cat.quests.get('S0000008').def;
+  const def016 = cat.quests.get('S0000016').def;
+  // [recipient, personKey in S0000008, receiptGlobal, handoverMsg, endingGlobal, endingMovie]
+  const routes = [
+    ['Gothryd', 'p.01', 1, 1053, 11, 14],
+    ['King of Worms', 'p.06', 2, 1054, 12, 6],
+    ['Gortwog', 'p.04', 3, 1052, 13, 8],
+    ['Akorithi', 'p.03', 4, 1050, 14, 9],
+    ['Underking', 'p.05', 6, 1055, 16, 15],
+    ['Eadwyre', 'p.02', 7, 1051, 17, 7],
+    ['Brisienna', 'p.00', 8, 1056, 18, 10],
+  ];
+
+  for (const [recipient, personKey, receipt, handoverMsg, ending, movie] of routes) {
+    const globals = new Set();
+    const starts = [];
+    const messages = [];
+    const movies = [];
+    let minute = 100;
+    const host = {
+      location: () => 'dungeon:Daggerfall/Daggerfall',
+      remoteTown: () => 'town:Daggerfall/Daggerfall',
+      isAt: () => false,
+      inTown: () => false,
+      reputation: () => 0,
+      travelMinutes: () => 1000,
+      individual: (person) => ({ name: person.value, factionId: person.factionId }),
+      makeName: () => 'Test NPC',
+      itemName: (item) => item.symbol,
+      global: (i) => globals.has(i),
+      setGlobal: (i, value) => (value ? globals.add(i) : globals.delete(i)),
+      text: () => '',
+      message: (_, id) => messages.push(id),
+      prompt() {},
+      placed() {},
+      adjustReputation() {},
+      grant: (inst, item) => { if (inst.items[item]) inst.items[item].held = true; },
+      hasItem: (inst, item) => inst.items[item]?.held === true,
+      releaseItem: (inst, item) => { if (inst.items[item]) inst.items[item].held = false; },
+      makePermanent() {},
+      transfer: () => true,
+      video: (_, cue) => movies.push(cue),
+      startQuest: (_, name) => starts.push(name),
+      end: (inst) => { inst.status = 'ended'; },
+    };
+
+    // 1. Run S0000008 (Who Gets the Totem): meet Brisienna (_P.00_) and accept _S.02_ so the Totem is placed at Castle Daggerfall
+    const inst008 = createInstance(def008, { uid: `totem-${recipient}`, seed: 1, giver: null, host, now: minute });
+    const step = (inst, def, n = 4) => { for (let i = 0; i < n; i++) updateQuest(def, inst, host, ++minute); };
+    step(inst008, def008);
+    inst008.people['p.00'].clicked = true;
+    step(inst008, def008);
+    assert.equal(inst008.prompt?.id, 1000, `${recipient}: Brisienna offers the Totem quest`);
+    assert.ok(answerPrompt(def008, inst008, true), `${recipient}: accept Totem quest`);
+    step(inst008, def008);
+    assert.equal(inst008.items['i.01'].place, 'l.00', `${recipient}: Totem placed at Castle Daggerfall`);
+
+    // Pick up the Totem (_I.01_) and verify an early visit to Nulfaga (303) before delivery does NOT start S0000016
+    inst008.items['i.01'].held = true;
+    inst008.items['i.01'].clicked = true;
+    step(inst008, def008);
+    inst008.individualClicks = [303];
+    step(inst008, def008);
+    assert.ok(!starts.includes('S0000016'), `${recipient}: early Nulfaga visit must not trigger S0000016`);
+
+    // Hand the Totem to this recipient
+    inst008.people[personKey].clicked = true;
+    step(inst008, def008);
+    assert.equal(globals.has(receipt), true, `${recipient}: receipt global ${receipt} set`);
+    assert.ok(messages.includes(handoverMsg), `${recipient}: handover message ${handoverMsg} shown`);
+
+    // Fresh audience with Nulfaga (303) after delivery triggers S0000016
+    inst008.individualClicks = [303];
+    step(inst008, def008);
+    assert.ok(starts.includes('S0000016'), `${recipient}: Nulfaga starts S0000016 after Totem delivery`);
+    assert.equal(inst008.status, 'ended', `${recipient}: S0000008 ends after starting S0000016`);
+
+    // 2. Chain into S0000016 (Journey to Aetherius) carrying the live globals from S0000008
+    const inst016 = createInstance(def016, { uid: `ending-${recipient}`, seed: 1, giver: null, host, now: minute });
+    step(inst016, def016, 2);
+    assert.deepEqual(movies, [], `${recipient}: waits for Mantella`);
+    globals.add(36); // FinishedMantellanCrux
+    step(inst016, def016, 6);
+    assert.equal(inst016.status, 'ended', `${recipient}: S0000016 ends`);
+    assert.deepEqual(movies, [3, movie], `${recipient}: plays Mantella + ending movie ${movie}`);
+    assert.equal(globals.has(ending), true, `${recipient}: ending global ${ending} set`);
+  }
 });

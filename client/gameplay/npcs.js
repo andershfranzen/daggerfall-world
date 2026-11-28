@@ -407,7 +407,7 @@ export function install(api) {
       talk.ask.picker.update(ev.subjects, subjectsNote(ev));
       return;
     }
-    if (ev.kind === 'townServices.offer' && talk.view && ev.counterId === `npc:${talk.view.npc.id}`) {
+    if (ev.kind === 'townServices.offer' && talk.view && (ev.counterId === `npc:${talk.view.npc.id}` || talk.awaiting || Date.now() - talk.lastSpokeAt < 2500)) {
       ev.talkHandled = true;
       ev.silent = true;
       return;
@@ -481,11 +481,13 @@ export function install(api) {
     rerender();
   }
 
-  function send(verb, extra) {
+  function send(verb, extra, then = null) {
     if (!ui.view || ui.busy) return;
     setBusy(true);
     rerender();
-    if (!api.act(verb, commandArgs(ui.view, extra))) setBusy(false);
+    const r = api.act(verb, commandArgs(ui.view, extra));
+    if (!r) { setBusy(false); return; }
+    if (then && typeof r.then === 'function') r.then((res) => { if (res?.ok) then(); });
   }
 
   // ------------------------------------------------------------ Trade & Services page
@@ -523,9 +525,10 @@ export function install(api) {
       if (s.id === 'train' || (s.id === 'rest' && v.tavern)) continue;
       const cost = s.id === 'cure' && Number.isFinite(s.cost) ? s.cost : undefined;
       const label = s.id === 'heal' || s.id === 'cure' ? serviceLabel(s) : s.label;
+      const openTown = !s.locked && (s.id === 'bank' || s.id === 'repair') && api.getPanel('townServices');
       row.append(el('button', {
         type: 'button', class: 'btn', 'data-focus-key': `svc-${s.id}`, disabled: ui.busy,
-        onclick: () => send('npc.service', { service: s.id, cost }),
+        onclick: () => send('npc.service', { service: s.id, cost }, openTown ? () => api.openPanel('townServices') : null),
       }, label));
     }
     if (v.teleport) {

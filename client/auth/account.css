@@ -122,8 +122,17 @@
 }
 .acct input[aria-invalid="true"] { border-color: var(--acct-err); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(232, 122, 132, 0.18); }
 
+.acct-aux { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
 .acct-check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; }
 .acct .acct-check label { font-weight: 400; color: var(--acct-text-2); cursor: pointer; }
+.acct-link {
+  font-size: 0.8125rem;
+  color: var(--acct-accent-hi);
+  text-decoration: underline;
+  text-decoration-color: rgba(111, 182, 255, 0.45);
+  text-underline-offset: 3px;
+}
+.acct-link:hover { color: #fff; text-decoration-color: var(--acct-accent); }
 
 .acct-note { margin: 0; font-size: 0.8125rem; color: var(--acct-text-3); }
 .acct-err { color: var(--acct-err); }
@@ -145,6 +154,7 @@
   font: 600 0.875rem/1.2 var(--font-ui, system-ui, sans-serif);
   letter-spacing: 0.01em;
   text-transform: none;
+  text-decoration: none;
   border: 1px solid var(--acct-line-strong);
   border-radius: var(--radius-sm, 3px);
   cursor: pointer;
@@ -183,6 +193,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.acct-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   flex-wrap: wrap;
 }
 .acct-who { font-size: 0.9rem; color: var(--acct-text-2); }

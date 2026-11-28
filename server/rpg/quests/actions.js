@@ -121,6 +121,8 @@ const DEFS = [
   // travelling with the player. Kept on the instance (`faces`) so the companion persists and is shown to its owner.
   ['addFoeFace', `^(add|drop)\\s+foe\\s+${S}\\s+face(?:\\s+saying\\s+(\\d+))?$`, 'action', 'exact', (m) => ({ add: m[1].toLowerCase() === 'add', foe: m[2], say: m[3] })],
   ['locationMarker', `^location\\s+marker\\b`, 'action', 'ignored', () => ({})],
+  // Classic 0x3c (only in B0B71Y03 _S.20_, Auriel's Bow): Daggerfall Unity treats `_0x3c_ 19` as a no-op so B0B71Y03 is playable.
+  ['opcode3c', `^_0x3c_\\s+${N}$`, 'action', 'ignored', (m) => ({ value: +m[1] })],
   ['addFace', `^add\\s+${S}\\s+face(?:\\s+saying\\s+(\\d+))?$`, 'action', 'exact', (m) => ({ person: m[1], say: m[2] })],
   ['dropFace', `^drop\\s+${S}\\s+face$`, 'action', 'exact', (m) => ({ person: m[1] })],
   // Classic 0x55 / 0x56, Daggerfall Unity AddQuestor / DropQuestor: the person speaks for the quest like its giver.

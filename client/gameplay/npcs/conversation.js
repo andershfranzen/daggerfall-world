@@ -111,7 +111,7 @@ export function replyChoices(view, o = {}) {
         continue;
       }
       const args = s.id === 'cure' && Number.isFinite(s.cost) ? { cost: s.cost } : undefined;
-      out.push({ id: `svc-${s.id}`, label: serviceLabel(s), kind: 'service', service: s.id, panel: SERVICE_PAGES[s.id] ?? null, args });
+      out.push({ id: `svc-${s.id}`, label: serviceLabel(s), kind: 'service', service: s.id, panel: s.locked ? null : (SERVICE_PAGES[s.id] ?? null), args });
     }
     if (o.canRepair && !(view.services ?? []).some((s) => s.id === 'repair')) out.push({ id: 'repairs', label: 'Repairs…', kind: 'panel', panel: 'townServices' });
     if (view.journal && o.canJournal) out.push({ id: 'journal', label: 'Review journal…', kind: 'panel', panel: 'journal' });

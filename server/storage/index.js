@@ -1,7 +1,13 @@
 // Storage backend selector: defaults to zero-config SQLite (node:sqlite) and
 // switches to PostgreSQL when DATABASE_URL (or ACCOUNTS_DATABASE_URL) starts
 // with postgres:// or postgresql://, or when a pg Pool is explicitly injected.
-import { openStore } from '../db.js';
+import {
+  openStore,
+  MAX_CHARACTER_SLOTS,
+  ARCHIVE_WINDOW_MS,
+  DurableConflictError,
+  SlotError,
+} from '../db.js';
 import { openAccountStore, createPostgresAccounts, ACCOUNT_DEFAULTS } from '../accounts.js';
 import {
   openPostgresGameStore,
@@ -20,6 +26,10 @@ export {
   createPostgresAccounts,
   MODERATION_CHANNEL,
   loadSchemaSql,
+  MAX_CHARACTER_SLOTS,
+  ARCHIVE_WINDOW_MS,
+  DurableConflictError,
+  SlotError,
 };
 
 export function isPostgresUrl(value) {

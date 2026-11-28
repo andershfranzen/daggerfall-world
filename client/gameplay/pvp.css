@@ -1,0 +1,412 @@
+/* Land PvP UI & HUD (client/gameplay/pvp.js):
+ * Consent Duels, Ranked 1v1 Arena, Open PvP District, and Scheduled Order Sieges.
+ * Authentic 1996 Daggerfall carved grey granite & oxidized verdigris marble. */
+
+.pvp-root,
+.pvp-hud-host {
+  --pvp-stone: #272a2f;
+  --pvp-stone-hi: #393e46;
+  --pvp-stone-deep: #14161a;
+  --pvp-bevel-hi: #7c818a;
+  --pvp-bevel-lo: #121316;
+  --pvp-verdigris: #1f3739;
+  --pvp-verdigris-hi: #346f72;
+  --pvp-verdigris-edge: #7ab8ba;
+  --pvp-verdigris-lo: #112a2b;
+  --pvp-crimson: #441c19;
+  --pvp-crimson-hi: #8a342c;
+  --pvp-crimson-edge: #d6856a;
+  --pvp-gold: #d9b468;
+  --pvp-ink: var(--text, #e6e9ee);
+  --pvp-dim: var(--text-2, #b4bac4);
+  --pvp-mute: var(--text-3, #838a94);
+  --pvp-accent: #5fa3a5;
+  --pvp-accent-hi: #a4dadb;
+  --pvp-ok: #68b074;
+  --pvp-head: var(--font-heading, "Iowan Old Style", Georgia, serif);
+  --pvp-ui: var(--font-ui, system-ui, -apple-system, "Segoe UI", sans-serif);
+  --pvp-mono: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace);
+  color: var(--pvp-ink);
+  font: 14px/1.45 var(--pvp-ui);
+}
+
+/* ---- Panel Root & Tabs ---- */
+.pvp-root {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pvp-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--pvp-bevel-lo);
+  box-shadow: 0 1px 0 #484c54;
+}
+
+.pvp-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  font: 700 0.78rem/1.15 var(--pvp-head);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pvp-dim);
+  background: linear-gradient(180deg, #3c4047 0 50%, #2b2e34 50% 100%);
+  border: 2px solid;
+  border-color: var(--pvp-bevel-hi) var(--pvp-bevel-lo) var(--pvp-bevel-lo) var(--pvp-bevel-hi);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.pvp-tab-btn:hover {
+  color: #fff;
+  border-color: #9ba1ab var(--pvp-bevel-lo) var(--pvp-bevel-lo) #9ba1ab;
+}
+
+.pvp-tab-btn.is-active {
+  color: #eef7f7;
+  background: linear-gradient(180deg, var(--pvp-verdigris-hi) 0 50%, #214a4c 50% 100%);
+  border-color: var(--pvp-verdigris-edge) var(--pvp-verdigris-lo) var(--pvp-verdigris-lo) var(--pvp-verdigris-edge);
+}
+
+.pvp-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font: 700 0.7rem/1.2 var(--pvp-mono);
+  background: var(--pvp-stone-deep);
+  color: var(--pvp-accent-hi);
+  border: 1px solid var(--pvp-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pvp-badge.is-danger {
+  background: #5b1f1a;
+  color: #ffdcd4;
+  border-color: var(--pvp-crimson-edge);
+}
+
+.pvp-badge.is-ok {
+  background: #1b3a24;
+  color: #c5f0cd;
+  border-color: var(--pvp-ok);
+}
+
+.pvp-badge.is-gold {
+  background: #3a2e16;
+  color: #f6df9e;
+  border-color: var(--pvp-gold);
+}
+
+/* ---- Layout Grid & Granite Cards ---- */
+.pvp-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .pvp-grid { grid-template-columns: 1fr; }
+}
+
+.pvp-col {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.pvp-card {
+  display: grid;
+  gap: 9px;
+  padding: 11px 14px 13px;
+  background: linear-gradient(180deg, #2d3036 0%, #22252a 100%);
+  border: 2px solid;
+  border-color: var(--pvp-bevel-hi) var(--pvp-bevel-lo) var(--pvp-bevel-lo) var(--pvp-bevel-hi);
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 1px #060708;
+}
+
+.pvp-card.is-verdigris {
+  background: linear-gradient(180deg, #233f42 0%, #192e30 100%);
+  border-color: var(--pvp-verdigris-edge) var(--pvp-verdigris-lo) var(--pvp-verdigris-lo) var(--pvp-verdigris-edge);
+  border-left-width: 3px;
+}
+
+.pvp-card.is-danger {
+  background: linear-gradient(180deg, #3b201e 0%, #291514 100%);
+  border-color: var(--pvp-crimson-edge) #1f0c0b #1f0c0b var(--pvp-crimson-edge);
+  border-left-width: 3px;
+}
+
+.pvp-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(164, 218, 219, 0.22);
+}
+
+.pvp-card-title {
+  margin: 0;
+  font: 700 0.88rem/1.2 var(--pvp-head);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pvp-accent-hi);
+}
+
+.pvp-card.is-danger .pvp-card-title {
+  color: #f3c4b7;
+}
+
+.pvp-muted {
+  color: var(--pvp-dim);
+  font-size: 0.84rem;
+  margin: 0;
+}
+
+.pvp-status-line {
+  margin: 0;
+  padding: 6px 10px;
+  background: var(--pvp-stone-deep);
+  border-left: 3px solid var(--pvp-accent);
+  color: var(--pvp-accent-hi);
+  font-size: 0.84rem;
+}
+
+.pvp-status-line:empty {
+  display: none;
+}
+
+/* ---- Buttons ---- */
+.pvp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.pvp-btn {
+  padding: 5px 12px;
+  font: 700 0.76rem/1.2 var(--pvp-head);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pvp-ink);
+  background: linear-gradient(180deg, #434850 0 50%, #2d3138 50% 100%);
+  border: 2px solid;
+  border-color: var(--pvp-bevel-hi) var(--pvp-bevel-lo) var(--pvp-bevel-lo) var(--pvp-bevel-hi);
+  cursor: pointer;
+}
+
+.pvp-btn:hover {
+  color: #fff;
+  background: linear-gradient(180deg, #525862 0 50%, #373c44 50% 100%);
+}
+
+.pvp-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pvp-btn.is-primary {
+  color: #f2fbfb;
+  background: linear-gradient(180deg, var(--pvp-verdigris-hi) 0 50%, #214a4c 50% 100%);
+  border-color: var(--pvp-verdigris-edge) var(--pvp-verdigris-lo) var(--pvp-verdigris-lo) var(--pvp-verdigris-edge);
+}
+
+.pvp-btn.is-danger {
+  color: #fff0ec;
+  background: linear-gradient(180deg, var(--pvp-crimson-hi) 0 50%, #5c201a 50% 100%);
+  border-color: var(--pvp-crimson-edge) #290e0c #290e0c var(--pvp-crimson-edge);
+}
+
+/* ---- Stat Strips & Tables ---- */
+.pvp-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 8px;
+}
+
+.pvp-stat {
+  padding: 7px 9px;
+  background: var(--pvp-stone-deep);
+  border: 1px solid #3c424c;
+  display: grid;
+  gap: 2px;
+}
+
+.pvp-stat-label {
+  font: 600 0.68rem/1 var(--pvp-mono);
+  text-transform: uppercase;
+  color: var(--pvp-mute);
+}
+
+.pvp-stat-val {
+  font: 700 1.05rem/1.15 var(--pvp-mono);
+  color: var(--pvp-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.pvp-stat-val.is-gold { color: var(--pvp-gold); }
+.pvp-stat-val.is-verdigris { color: var(--pvp-accent-hi); }
+.pvp-stat-val.is-danger { color: var(--pvp-crimson-edge); }
+
+.pvp-list {
+  display: grid;
+  gap: 6px;
+}
+
+.pvp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  background: rgba(16, 18, 22, 0.72);
+  border: 1px solid #3f4550;
+}
+
+.pvp-row-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pvp-row-name {
+  font-weight: 700;
+  color: var(--pvp-ink);
+}
+
+.pvp-row-sub {
+  font: 500 0.76rem/1.2 var(--pvp-mono);
+  color: var(--pvp-dim);
+}
+
+.pvp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.pvp-table th,
+.pvp-table td {
+  padding: 5px 7px;
+  border-bottom: 1px solid #363b45;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.pvp-table th {
+  font: 700 0.7rem/1.2 var(--pvp-mono);
+  text-transform: uppercase;
+  color: var(--pvp-accent-hi);
+  background: var(--pvp-stone-deep);
+}
+
+/* ---- Progress & HP Bars ---- */
+.pvp-meter {
+  position: relative;
+  height: 14px;
+  background: var(--pvp-stone-deep);
+  border: 1px solid #4c5360;
+  overflow: hidden;
+}
+
+.pvp-meter-fill {
+  position: absolute;
+  inset: 1px auto 1px 1px;
+  background: linear-gradient(90deg, #2d6f72, #5fa3a5);
+  background-image: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.14) 0 3px, transparent 3px 6px);
+  transition: width 160ms linear;
+}
+
+.pvp-meter-fill.is-hp { background-color: #b84840; }
+.pvp-meter-fill.is-capture { background-color: #d09e48; }
+.pvp-meter-fill.is-danger { background-color: #c95244; }
+
+.pvp-meter-label {
+  position: relative;
+  z-index: 1;
+  display: block;
+  text-align: center;
+  font: 700 0.68rem/12px var(--pvp-mono);
+  color: #fff;
+  text-shadow: 0 1px 2px #000;
+}
+
+/* ---- Ring / Fighter Versus Strip ---- */
+.pvp-vs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--pvp-stone-deep);
+  border: 1px solid var(--pvp-verdigris-edge);
+}
+
+.pvp-vs-center {
+  font: 700 0.85rem/1 var(--pvp-head);
+  color: var(--pvp-gold);
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.pvp-rules {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  color: var(--pvp-dim);
+  font-size: 0.82rem;
+}
+
+/* ---- In-World Floating HUD Overlays ---- */
+.pvp-hud-host {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 42;
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.pvp-hud-card {
+  pointer-events: auto;
+  display: grid;
+  gap: 7px;
+  padding: 9px 12px;
+  background: linear-gradient(180deg, rgba(35, 63, 66, 0.94) 0%, rgba(20, 24, 29, 0.95) 100%);
+  border: 2px solid;
+  border-color: var(--pvp-verdigris-edge) var(--pvp-bevel-lo) var(--pvp-bevel-lo) var(--pvp-verdigris-edge);
+  box-shadow: 0 0 0 1px #060708, 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+.pvp-hud-card.is-danger {
+  background: linear-gradient(180deg, rgba(68, 28, 25, 0.95) 0%, rgba(28, 15, 15, 0.95) 100%);
+  border-color: var(--pvp-crimson-edge) #1d0908 #1d0908 var(--pvp-crimson-edge);
+}
+
+.pvp-hud-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pvp-hud-title {
+  font: 700 0.8rem/1.1 var(--pvp-head);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pvp-accent-hi);
+}
+
+.pvp-hud-card.is-danger .pvp-hud-title {
+  color: #f6c6b8;
+}

@@ -213,6 +213,64 @@ input[type="text"]:focus { outline: 2px solid var(--gold); outline-offset: 1px; 
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
 .actions .btn-primary { width: auto; flex: 1 1 auto; }
 
+/* ------------------------------------------------------------ launcher update banner */
+
+.whats-new {
+  grid-column: 1 / -1;
+  margin-top: 0.25rem;
+}
+.whats-new-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  padding: 0.55rem 0.85rem;
+  color: var(--text, var(--ink));
+  text-decoration: none;
+  background: linear-gradient(rgba(24, 33, 46, 0.9), rgba(15, 21, 30, 0.94));
+  border: 1px solid var(--border-subtle, var(--edge));
+  border-left: 3px solid var(--accent, var(--gold));
+  border-radius: var(--radius-sm, var(--radius));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+.whats-new-link:hover,
+.whats-new-link:focus-visible {
+  border-color: var(--accent, var(--gold));
+  color: #fff;
+}
+.whats-new-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.08rem 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #eef7f7;
+  background: var(--accent-bg, #235052);
+  border: 1px solid var(--accent, #5fa3a5);
+}
+.whats-new-date {
+  font-family: var(--font-mono, var(--mono));
+  font-size: 0.78rem;
+  color: var(--text-3, var(--ink-faint));
+  white-space: nowrap;
+}
+.whats-new-title {
+  flex: 1 1 10rem;
+  min-width: 0;
+  color: var(--text, var(--ink));
+  font-weight: 600;
+}
+.whats-new-cta {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--accent-hi, var(--gold-hi));
+  white-space: nowrap;
+}
+
 /* ------------------------------------------------------------ loading */
 
 .panel-status { text-align: left; }

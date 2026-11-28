@@ -210,7 +210,9 @@ describe('exterior controller: the drawn scene follows the season in place', () 
 // ------------------------------------------------------------------ installed ARENA2
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const ARENA2 = ['gamedata/DaggerfallGameFiles/arena2', 'gamedata/DaggerfallGameFiles/ARENA2'].map((d) => root + d).find((d) => existsSync(d));
+const ARENA2 = [process.env.ARENA2_DIR, process.env.DFW_ARENA2, root + 'gamedata/DaggerfallGameFiles/arena2', root + 'gamedata/DaggerfallGameFiles/ARENA2']
+  .filter(Boolean)
+  .find((d) => existsSync(d));
 
 describe('installed ARENA2: winter and summer builds of one place', { skip: !ARENA2 && 'ARENA2 is not installed' }, () => {
   let files, loadTown, buildWildernessScene;
@@ -244,6 +246,23 @@ describe('installed ARENA2: winter and summer builds of one place', { skip: !ARE
     assert.ok(summer.positions.every((v, i) => v === winter.positions[i]), 'geometry identical');
     assert.deepEqual(summer.colliders?.cylinders?.length, winter.colliders?.cylinders?.length);
     assert.ok(!summer.atlas.pixels.every((v, i) => v === winter.atlas.pixels[i]), 'winter textures differ');
+
+    // Live in-place reskin: Summer -> Winter -> Summer preserves positions & colliders while swapping atlas/UVs.
+    const live = { ...summer };
+    const origPos = live.positions;
+    const origColliders = live.colliders;
+    const toWinter = reskinMesh(live, winter);
+    assert.ok(toWinter && toWinter.atlas, 'in-place summer -> winter swaps atlas');
+    assert.deepEqual(live.look, { winter: true });
+    assert.equal(live.positions, origPos, 'geometry buffer preserved');
+    assert.equal(live.colliders, origColliders, 'collision preserved');
+    assert.ok(live.atlas.pixels.every((v, i) => v === winter.atlas.pixels[i]), 'live atlas now matches winter');
+
+    const toSummer = reskinMesh(live, summer);
+    assert.ok(toSummer && toSummer.atlas, 'in-place winter -> summer swaps atlas back');
+    assert.deepEqual(live.look, { winter: false });
+    assert.equal(live.positions, origPos);
+    assert.ok(live.atlas.pixels.every((v, i) => v === summer.atlas.pixels[i]), 'live atlas restored to summer');
   });
 
   test('a subtropical town (Sentinel) keeps its summer look in winter', async () => {

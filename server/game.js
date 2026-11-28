@@ -6,12 +6,20 @@ import { resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer } from 'ws';
-import { openStore, CorruptCharacterError } from './db.js';
+import {
+  openStore,
+  CorruptCharacterError,
+  DurableConflictError,
+  SlotError,
+  MAX_CHARACTER_SLOTS,
+  ARCHIVE_WINDOW_MS,
+  createKeyedLock,
+} from './db.js';
 import { openSqliteChatLog, createChatLogService } from './chat-log.js';
-import { createHiscoresService, isHiscoresPath } from './hiscores/index.js';
+import { createHiscoresService, isHiscoresPath, projectCharacter, TOTAL_CLASSIC_PLACES } from './hiscores/index.js';
 import { createSceneSpatialIndex } from './scale/spatial-grid.js';
 import { createSiteHandler } from './static.js';
-import { handlePublicWorldMap, handlePublicWorldPois, PUBLIC_MAP_PATH, PUBLIC_MAP_POIS_PATH } from './public-world-map.js';
+import { handlePublicWorldMap, handlePublicWorldPois, publicWorldMap, PUBLIC_MAP_PATH, PUBLIC_MAP_POIS_PATH } from './public-world-map.js';
 import { createLocalAssets } from './local-assets.js';
 import { createRpgRuntime, DEFAULT_LOCATION } from './rpg/runtime.js';
 import { handleWildernessScene, WILDERNESS_SCENE_PATH } from './rpg/wilderness/http.js';
@@ -69,6 +77,9 @@ export const DEFAULTS = Object.freeze({
   accountActionBurst: null, // defaults to actionBurst when null
   maxChatLength: 200,
   maxNameLength: 24,
+  maxCharacterSlots: MAX_CHARACTER_SLOTS,
+  archiveWindowMs: ARCHIVE_WINDOW_MS,
+  archivePurgeIntervalMs: 60_000,
 });
 
 // Close codes (4000-4999 are application-defined).
@@ -87,6 +98,76 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 const NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} _'-]*$/u;
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+const MAX_API_BODY_BYTES = 4096;
+
+function sendJson(req, res, status, body, headers = {}) {
+  const data = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(data),
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...headers,
+  });
+  res.end(req.method === 'HEAD' ? undefined : data);
+}
+
+function sameOriginRequest(req, accounts) {
+  const origin = req.headers.origin;
+  const site = req.headers['sec-fetch-site'];
+  if (site && site !== 'same-origin' && site !== 'none') return false;
+  if (origin === undefined) return site === undefined || site === 'same-origin'; // non-browser clients
+  const publicOrigin = accounts?.config?.publicOrigin;
+  if (publicOrigin) return origin === publicOrigin;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+function isHttpsRequest(req, accounts) {
+  if (req.socket?.encrypted) return true;
+  return Boolean(accounts?.config?.trustProxy) &&
+    String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() === 'https';
+}
+
+function readJsonBody(req, limit = MAX_API_BODY_BYTES) {
+  const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') {
+    return Promise.reject(Object.assign(new Error('expected application/json'), { status: 415 }));
+  }
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    let tooLarge = false;
+    const chunks = [];
+    req.on('data', (c) => {
+      if (tooLarge) return;
+      size += c.length;
+      if (size > limit) {
+        tooLarge = true;
+        reject(Object.assign(new Error('request body too large'), { status: 413 }));
+        req.resume();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (tooLarge) return;
+      let body;
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch {
+        return reject(Object.assign(new Error('invalid JSON'), { status: 400 }));
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return reject(Object.assign(new Error('expected a JSON object'), { status: 400 }));
+      }
+      resolve(body);
+    });
+    req.on('error', reject);
+  });
+}
 
 const r3 = (v) => Math.round(v * 1000) / 1000;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -176,6 +257,10 @@ export function createGameServer(options = {}) {
   const orphans = new Map();
   const lastState = new Map(); // player -> { data, at } of the last `state` sent
   const accountActionBuckets = new Map(); // String(accountId) -> { ok, lastUsed }
+  const withLocks = createKeyedLock();
+  const withAccountLock = (accountId, fn) => withLocks([`acct:${String(accountId)}`], fn);
+  const pendingAccountCleanups = new Set(); // String(accountId) for retryable deletion cleanup
+  let lastArchivePurgeAt = 0;
   function accountActionOk(accountId) {
     const key = String(accountId);
     const rate = cfg.accountActionRatePerSec ?? cfg.actionRatePerSec;
@@ -240,6 +325,8 @@ export function createGameServer(options = {}) {
     }),
     services: {
       wodAssets,
+      store,
+      ...(typeof store.runDurable === 'function' ? { runDurable: (...args) => store.runDurable(...args) } : {}),
       // Moderation hook for chat features (party/regional/global). Guests are never muted here.
       isMuted: (p) => !!(accounts?.isMuted && p?.accountId != null && accounts.isMuted(p.accountId)),
       ...(chatLog ? { logChat: chatLog.logChat, queryChat: chatLog.queryChat, recentChat: chatLog.recentChat } : {}),
@@ -248,6 +335,25 @@ export function createGameServer(options = {}) {
   });
   const services = runtime.ctx.services;
   runtime.ctx.isMuted = (p) => services.isMuted(p); // alias used by chat features
+
+  // Mark slot draft complete (and sync name if changed) when character creation finishes.
+  runtime.ctx.on?.('characterCreated', ({ player: p } = {}) => {
+    if (!p || p.accountId == null || typeof store.markCharacterDraftComplete !== 'function') return;
+    const chosen = cleanName(p.rpg?.character?.name ?? p.name, cfg.maxNameLength);
+    Promise.resolve(store.markCharacterDraftComplete(p.accountId, p.id, chosen && chosen !== p.name ? chosen : null))
+      .then((updated) => {
+        if (updated && updated.name && updated.name !== p.name) {
+          p.name = updated.name;
+          p.dirty = true;
+        }
+      })
+      .catch((err) => {
+        // Non-fatal if chosen name collides with another account; keep reserved slot name and still clear draft.
+        if (err instanceof SlotError && err.code === 'NAME_TAKEN') {
+          Promise.resolve(store.markCharacterDraftComplete(p.accountId, p.id, null)).catch(() => {});
+        }
+      });
+  });
 
   const unsubscribeModeration =
     typeof accounts?.onModeration === 'function'
@@ -270,68 +376,851 @@ export function createGameServer(options = {}) {
           }
         })
       : null;
-  // Self-deletion (POST /api/delete-account): disconnect every socket and unlink/delete the account's character row.
+  async function settleCharacterObligationsForPurge(charId, accountId) {
+    const id = Number(charId);
+
+    // 1. Run feature-owned purge hooks FIRST (market counterparty refunds, guildhall vault depositor
+    //    claims & succession, homes relinquishment, pvp cleanup) so feature-specific state & ledgers
+    //    reconcile cleanly before the generic fallback sweep below.
+    if (Array.isArray(services.onCharacterPurge)) {
+      for (const hook of services.onCharacterPurge) {
+        if (typeof hook === 'function') await Promise.resolve(hook({ characterId: id, accountId: String(accountId) }));
+      }
+    }
+
+    // 2. Generic fallback: settle or return any remaining held counterparty escrow before purging the character.
+    if (typeof store.listEscrow === 'function' && typeof store.runDurable === 'function') {
+      const held = await store.listEscrow({ involvingCharacterId: id, status: 'held', limit: 200 });
+      for (const esc of held) {
+        await store.runDurable(
+          `purge-escrow:${esc.id}`,
+          { accountId: String(accountId), characterId: id, resourceKey: `escrow:${esc.id}`, params: { escrowId: esc.id, purgeChar: id } },
+          async (tx) => {
+            const cur = await tx.getEscrow(esc.id);
+            if (!cur || cur.status !== 'held') return { skipped: true };
+            const hasCounterparty = cur.counterpartyCharacterId != null && Number(cur.counterpartyCharacterId) !== id;
+            const ownerIsCounterparty = cur.ownerCharacterId != null && Number(cur.ownerCharacterId) !== id;
+            const refundTarget = ownerIsCounterparty ? cur.ownerCharacterId : (hasCounterparty ? cur.counterpartyCharacterId : null);
+            if (refundTarget != null && (cur.gold > 0 || cur.item != null)) {
+              await tx.createClaim({
+                ownerCharacterId: refundTarget,
+                kind: 'escrow_refund',
+                sourceRef: cur.sourceRef ?? cur.id,
+                gold: cur.gold,
+                item: cur.item,
+                reason: 'Counterparty account deleted',
+              });
+              await tx.updateEscrowStatus(cur.id, cur.revision, 'refunded');
+            } else {
+              await tx.updateEscrowStatus(cur.id, cur.revision, 'released');
+            }
+            return { settled: cur.id };
+          },
+        );
+      }
+    }
+
+    // 3. Generic fallback: player order leadership succession when guildhall feature is not mounted.
+    const orderRows = (await Promise.resolve(store.loadWorld('pguild:'))) ?? [];
+    for (const [key, ord] of orderRows) {
+      if (!ord || typeof ord !== 'object' || !ord.members || !ord.members[String(id)]) continue;
+      const updated = structuredClone(ord);
+      delete updated.members[String(id)];
+      const remaining = Object.values(updated.members).filter((m) => m && Number.isSafeInteger(m.id));
+      if (!remaining.length) {
+        await Promise.resolve(store.saveCharacters([], [[key, null]]));
+      } else {
+        if (Number(updated.leaderId) === id) {
+          const rankPriority = (r) => (r === 'Officer' ? 0 : r === 'Member' ? 1 : 2);
+          remaining.sort((a, b) => {
+            const rp = rankPriority(a.rank) - rankPriority(b.rank);
+            if (rp !== 0) return rp;
+            const ta = Date.parse(a.joinedAt ?? '') || 0;
+            const tb = Date.parse(b.joinedAt ?? '') || 0;
+            if (ta !== tb) return ta - tb;
+            return Number(a.id) - Number(b.id);
+          });
+          const successor = remaining[0];
+          updated.leaderId = successor.id;
+          updated.members[String(successor.id)].rank = 'Leader';
+        }
+        await Promise.resolve(store.saveCharacters([], [[key, updated]]));
+      }
+    }
+  }
+
+  async function cleanupDeletedAccount(accountId) {
+    if (accountId === undefined || accountId === null) return;
+    const key = String(accountId);
+    accountActionBuckets.delete(key);
+    for (const c of conns) {
+      if (!c.account || String(c.account.id) !== key) continue;
+      const p = c.player;
+      if (p && p.conn === c && players.get(p.id) === p) {
+        orphans.delete(p.id);
+        c.player = null;
+        leave(p, { skipSave: true });
+      }
+      fatal(c.ws, CLOSE.ACCOUNT, 'account deleted');
+    }
+    return withAccountLock(key, async () => {
+      try {
+        let rows = [];
+        if (typeof store.listByAccount === 'function') {
+          rows = (await store.listByAccount(accountId, { includeArchived: true })) ?? [];
+        } else {
+          const single = await store.findByAccount(accountId);
+          if (single) rows = [single];
+        }
+        for (const r of rows) {
+          orphans.delete(r.id);
+          await settleCharacterObligationsForPurge(r.id, key);
+          if (hiscores) await hiscores.removePlayer(r.id);
+        }
+        let deletedIds = [];
+        if (typeof store.deleteAllForAccount === 'function') {
+          deletedIds = (await store.deleteAllForAccount(accountId)) ?? [];
+        } else if (typeof store.deleteForAccount === 'function') {
+          const deletedId = await store.deleteForAccount(accountId);
+          if (deletedId != null) deletedIds = [deletedId];
+        } else if (store.db?.isOpen) {
+          store.transaction(() => {
+            store.db.prepare('DELETE FROM account_characters WHERE account_id = ?').run(key);
+            for (const r of rows) store.db.prepare('DELETE FROM players WHERE id = ?').run(r.id);
+          });
+          deletedIds = rows.map((r) => r.id);
+        }
+        for (const id of deletedIds) {
+          orphans.delete(id);
+          if (hiscores) await hiscores.removePlayer(id);
+        }
+        pendingAccountCleanups.delete(key);
+        return deletedIds;
+      } catch (err) {
+        pendingAccountCleanups.add(key);
+        console.error('[game] failed to delete characters for deleted account (will retry):', err?.message ?? err);
+      }
+    });
+  }
+
+  async function runExpiredArchivePurge(at = Date.now()) {
+    if (typeof store.purgeExpiredArchived !== 'function') return [];
+    try {
+      const purged = (await store.purgeExpiredArchived({ at, limit: 25 })) ?? [];
+      for (const p of purged) {
+        orphans.delete(p.playerId);
+        try {
+          await settleCharacterObligationsForPurge(p.playerId, p.accountId);
+        } catch {}
+        if (hiscores) {
+          try { await hiscores.removePlayer(p.playerId); } catch {}
+        }
+      }
+      return purged;
+    } catch (err) {
+      console.error('[game] archive purge failed:', err?.message ?? err);
+      return [];
+    }
+  }
+
+  // Self-deletion (POST /api/delete-account): disconnect every socket and unlink/delete all characters for the account.
   const unsubscribeAccountDelete =
     typeof accounts?.onAccountDelete === 'function'
-      ? accounts.onAccountDelete(({ accountId } = {}) => {
-          if (accountId === undefined || accountId === null) return;
-          const key = String(accountId);
-          accountActionBuckets.delete(key);
-          for (const c of conns) {
-            if (!c.account || String(c.account.id) !== key) continue;
-            const p = c.player;
-            if (p && p.conn === c && players.get(p.id) === p) {
-              orphans.delete(p.id);
-              c.player = null;
-              leave(p, { skipSave: true });
-            }
-            fatal(c.ws, CLOSE.ACCOUNT, 'account deleted');
-          }
-          if (typeof store.deleteForAccount === 'function') {
-            return Promise.resolve()
-              .then(async () => {
-                const deletedId = await store.deleteForAccount(accountId);
-                if (deletedId != null) {
-                  orphans.delete(deletedId);
-                  if (hiscores) await hiscores.removePlayer(deletedId);
-                }
-              })
-              .catch((err) => {
-                console.error('[game] failed to delete character for deleted account:', err?.message ?? err);
-              });
-          }
-          try {
-            const row = store.findByAccount(accountId);
-            if (row && typeof row.then === 'function') {
-              return row
-                .then((resolved) => {
-                  if (resolved) {
-                    orphans.delete(resolved.id);
-                    if (hiscores) void hiscores.removePlayer(resolved.id);
-                  }
-                })
-                .catch((err) => {
-                  console.error('[game] failed to delete character for deleted account:', err?.message ?? err);
-                });
-            }
-            if (row) {
-              orphans.delete(row.id);
-              if (store.db?.isOpen) {
-                store.transaction(() => {
-                  store.db.prepare('DELETE FROM account_characters WHERE account_id = ?').run(key);
-                  store.db.prepare('DELETE FROM players WHERE id = ?').run(row.id);
-                });
-              }
-              if (hiscores) void hiscores.removePlayer(row.id);
-            }
-          } catch (err) {
-            console.error('[game] failed to delete character for deleted account:', err.message);
-          }
-        })
+      ? accounts.onAccountDelete(({ accountId } = {}) => cleanupDeletedAccount(accountId))
       : null;
 
+  function findLivePlayerByAccount(accountId) {
+    const key = String(accountId);
+    for (const p of players.values()) {
+      if (p.accountId != null && String(p.accountId) === key) return p;
+    }
+    return null;
+  }
+
+  function coarseLocationName(rpg) {
+    const loc = typeof rpg?.location === 'string' && rpg.location ? rpg.location : cfg.defaultLocation;
+    if (!loc) return 'Iliac Bay';
+    const looked = services.travel?.lookup?.(loc);
+    if (looked?.name) {
+      return looked.region ? `${looked.name}, ${looked.region}` : looked.name;
+    }
+    const m = /^(town|dungeon|interior|wild|sea):([^/]+)\/(.+)$/.exec(loc);
+    if (!m) return loc.slice(0, 60);
+    const [, kind, region, rest] = m;
+    const place = rest.split('/')[0];
+    if (kind === 'wild') return `${region} Wilderness`;
+    if (kind === 'sea') return 'Iliac Bay (At Sea)';
+    if (kind === 'dungeon') return `${place} (${region})`;
+    if (kind === 'interior') return `${place}, ${region}`;
+    return `${place}, ${region}`;
+  }
+
+  function projectRosterEntry(row) {
+    const live = players.get(row.id);
+    const orphan = !live ? orphans.get(row.id) : null;
+    const src = live ?? orphan ?? row;
+    const rpg = src.rpg ?? {};
+    const ch = rpg.character ?? {};
+    const created = ch.created === true;
+    return {
+      id: row.id,
+      slot: row.slot ?? 1,
+      name: src.name || row.displayName || row.name,
+      status: row.status ?? 'active',
+      draft: Boolean(row.draft) && !created,
+      created,
+      race: created ? (ch.race || 'Unknown') : null,
+      className: created ? (ch.className || ch.class || 'Adventurer') : null,
+      level: created ? (Number.isFinite(Number(ch.level)) ? Math.max(1, Math.trunc(Number(ch.level))) : 1) : 1,
+      location: typeof rpg.location === 'string' ? rpg.location : cfg.defaultLocation,
+      locationName: created ? coarseLocationName(rpg) : 'Character Creation',
+      lastPlayedAt: row.lastPlayedAt ?? row.linkedAt ?? null,
+      lastSelected: Boolean(row.lastSelected),
+      online: Boolean(live),
+      archivedAt: row.archivedAt ?? null,
+      purgeAfter: row.purgeAfter ?? null,
+      grandfathered: Boolean(row.grandfathered),
+    };
+  }
+
+  async function saveAndFlush(list, world = []) {
+    if (!list?.length && !world?.length) return;
+    await Promise.resolve(store.saveCharacters(list, world));
+    if (typeof store.flush === 'function') await store.flush();
+    for (const p of list ?? []) p.dirty = false;
+    if (hiscores && (list?.length || world?.length)) void hiscores.syncPlayers(list, world);
+  }
+
+  async function checkCharacterBlockers(accountId, characterId, kind = 'archive') {
+    const blockers = [];
+    const id = Number(characterId);
+    const live = players.get(id);
+
+    if (live) {
+      if (live.rpg?.combat?.inCombat === true || services.inCombat?.(live) || services.pvp?.hasActiveCommitment?.(live)) {
+        blockers.push({
+          code: 'ACTIVE_COMBAT',
+          message: 'Finish your active combat engagement before doing that.',
+          route: 'world',
+        });
+      }
+      if (services.tradePartnerOf?.(live) != null) {
+        blockers.push({
+          code: 'ACTIVE_TRADE',
+          message: 'Complete or cancel your active trade before doing that.',
+          route: 'social',
+        });
+      }
+      if (services.law?.custody?.(live)) {
+        blockers.push({
+          code: 'IN_CUSTODY',
+          message: 'Resolve your current legal custody before doing that.',
+          route: 'world',
+        });
+      }
+      if (kind === 'switch' && live.arriving === true) {
+        blockers.push({
+          code: 'ACTIVE_TRANSITION',
+          message: 'Wait until your character finishes arriving before switching.',
+          route: 'world',
+        });
+      }
+    }
+
+    if (kind === 'archive') {
+      if (typeof store.listEscrow === 'function') {
+        const held = await store.listEscrow({ ownerCharacterId: id, status: 'held', limit: 1 });
+        if (held.length > 0) {
+          blockers.push({
+            code: 'OPEN_ESCROW',
+            message: 'Cancel or settle your open market listings, bids, or escrow before archiving.',
+            route: 'market',
+          });
+        }
+      }
+      if (typeof store.listClaims === 'function') {
+        const claims = await store.listClaims({ ownerCharacterId: id, status: 'pending', limit: 1 });
+        if (claims.length > 0) {
+          blockers.push({
+            code: 'UNSETTLED_CLAIMS',
+            message: 'Collect your unsettled claims or proceeds before archiving.',
+            route: 'market',
+          });
+        }
+      }
+      const visitors = services.homes?.activeVisitorsOf?.(id) ?? live?.rpg?.property?.activeVisitors ?? [];
+      if (Array.isArray(visitors) && visitors.length > 0) {
+        blockers.push({
+          code: 'ACTIVE_HOME_VISITORS',
+          message: 'Dismiss active visitors from your home before archiving.',
+          route: 'property',
+        });
+      }
+      const orderRows = (await Promise.resolve(store.loadWorld('pguild:'))) ?? [];
+      for (const [, ord] of orderRows) {
+        if (!ord || typeof ord !== 'object') continue;
+        if (Number(ord.leaderId) !== id) continue;
+        const memberCount = ord.members ? Object.keys(ord.members).length : 0;
+        const hasSharedAssets = memberCount > 1 || Number(ord.treasury ?? 0) > 0 || Boolean(ord.hall) || (Array.isArray(ord.vault) && ord.vault.length > 0);
+        if (hasSharedAssets) {
+          blockers.push({
+            code: 'SOLE_ORDER_LEADER',
+            message: `Transfer leadership of ${ord.name || 'your order'} or settle its shared assets before archiving.`,
+            route: 'guilds',
+          });
+          break;
+        }
+      }
+    }
+
+    if (Array.isArray(services.characterBlockers)) {
+      const seenCodes = new Set(blockers.map((b) => b.code).filter(Boolean));
+      for (const fn of services.characterBlockers) {
+        if (typeof fn !== 'function') continue;
+        const extra = await Promise.resolve(fn(String(accountId), id, kind));
+        if (Array.isArray(extra)) {
+          for (const b of extra) {
+            if (!b || !b.message) continue;
+            if (b.code && seenCodes.has(b.code)) continue;
+            if (b.code) seenCodes.add(b.code);
+            blockers.push(b);
+          }
+        }
+      }
+    }
+
+    return blockers;
+  }
+
+  async function listRosterForAccount(accountId) {
+    if (typeof store.purgeExpiredArchived === 'function') {
+      await store.purgeExpiredArchived({ accountId });
+    }
+    if (typeof store.listByAccount === 'function') {
+      return (await store.listByAccount(accountId, { includeArchived: true })) ?? [];
+    }
+    const single = await store.findByAccount(accountId);
+    return single ? [{ ...single, slot: single.slot ?? 1, status: single.status ?? 'active' }] : [];
+  }
+
+  function parseQueryParam(req, key) {
+    try {
+      const u = new URL(req.url, 'http://localhost');
+      return u.searchParams.get(key);
+    } catch {
+      return null;
+    }
+  }
+
+  function parseCharacterId(raw) {
+    if (raw === null || raw === undefined || raw === '') return null;
+    const n = Number(raw);
+    return Number.isSafeInteger(n) && n > 0 ? n : NaN;
+  }
+
+  function parseUpgradeIntent(req) {
+    try {
+      const u = new URL(req.url, 'http://localhost');
+      const cidRaw = u.searchParams.get('characterId');
+      const swRaw = u.searchParams.get('switch');
+      const characterId = cidRaw != null && cidRaw !== '' ? parseCharacterId(cidRaw) : null;
+      return {
+        characterId: Number.isSafeInteger(characterId) ? characterId : null,
+        switch: swRaw === '1' || swRaw === 'true',
+      };
+    } catch {
+      return { characterId: null, switch: false };
+    }
+  }
+
+  function requirePostSecurity(req, res, corp) {
+    if (!sameOriginRequest(req, accounts)) {
+      sendJson(req, res, 403, { error: 'cross-origin request refused' }, corp);
+      return false;
+    }
+    if (accounts?.config?.secureCookies && accounts?.config?.requireHttps && !isHttpsRequest(req, accounts)) {
+      sendJson(req, res, 403, { error: 'HTTPS required' }, corp);
+      return false;
+    }
+    return true;
+  }
+
+  async function handleCharactersList(req, res) {
+    const corp = { 'Cross-Origin-Resource-Policy': 'same-origin' };
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJson(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET, HEAD', ...corp });
+    }
+    try {
+      const user = await resolveSessionUser(req);
+      if (!user) return sendJson(req, res, 401, { error: 'sign in required' }, corp);
+      const roster = await listRosterForAccount(user.id);
+      const live = findLivePlayerByAccount(user.id);
+      const characters = await Promise.all(roster.map(async (row) => {
+        const entry = projectRosterEntry(row);
+        if (entry.status === 'active') {
+          entry.blockers = await checkCharacterBlockers(user.id, row.id, 'archive');
+        } else {
+          entry.blockers = [];
+        }
+        return entry;
+      }));
+      sendJson(req, res, 200, {
+        maxSlots: cfg.maxCharacterSlots,
+        archiveWindowMs: cfg.archiveWindowMs,
+        activeCharacterId: live ? live.id : null,
+        characters,
+      }, corp);
+    } catch (err) {
+      console.error('[game] GET /api/characters failed:', err?.message ?? err);
+      if (!res.headersSent) sendJson(req, res, 500, { error: 'internal error' }, corp);
+    }
+  }
+
+  async function handleCharactersStart(req, res) {
+    const corp = { 'Cross-Origin-Resource-Policy': 'same-origin' };
+    if (req.method !== 'POST') {
+      return sendJson(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST', ...corp });
+    }
+    if (!requirePostSecurity(req, res, corp)) return;
+    try {
+      const user = await resolveSessionUser(req);
+      if (!user) return sendJson(req, res, 401, { error: 'sign in required' }, corp);
+      if (!accountActionOk(user.id)) return sendJson(req, res, 429, { error: 'too many requests; slow down' }, corp);
+      const body = await readJsonBody(req, accounts?.config?.maxBodyBytes ?? MAX_API_BODY_BYTES);
+      const rawSlot = body.slot === undefined || body.slot === null ? null : Number(body.slot);
+      if (rawSlot !== null && (!Number.isInteger(rawSlot) || rawSlot < 1 || rawSlot > cfg.maxCharacterSlots)) {
+        return sendJson(req, res, 400, { error: `slot must be between 1 and ${cfg.maxCharacterSlots}`, code: 'INVALID_SLOT' }, corp);
+      }
+      const rawName = body.name === undefined || body.name === null || body.name === '' ? user.username : body.name;
+      const name = cleanName(rawName, cfg.maxNameLength);
+      if (!name) {
+        return sendJson(req, res, 400, {
+          error: `invalid name: 1-${cfg.maxNameLength} letters, digits, spaces, _ ' - (must start with a letter or digit)`,
+          code: 'INVALID_NAME',
+          field: 'name',
+        }, corp);
+      }
+      const opKey = typeof body.opKey === 'string' && body.opKey.trim() ? body.opKey.trim().slice(0, 128) : null;
+
+      const created = await withAccountLock(user.id, async () => {
+        if (opKey && typeof store.getDurableOp === 'function' && typeof store.runDurable === 'function') {
+          const scope = { accountId: user.id, resourceKey: 'roster:start', params: { slot: rawSlot, name } };
+          const existing = await store.getDurableOp(opKey, scope);
+          if (existing) {
+            // Replay or conflict check through runDurable.
+            const replay = await store.runDurable(opKey, scope, () => existing.result);
+            return replay.result;
+          }
+          const row = await store.createCharacterSlot(user.id, user.username, {
+            slot: rawSlot,
+            name,
+            maxSlots: cfg.maxCharacterSlots,
+            draft: true,
+          });
+          const summary = projectRosterEntry(row);
+          await store.runDurable(opKey, scope, () => summary);
+          return summary;
+        }
+        const row = await store.createCharacterSlot(user.id, user.username, {
+          slot: rawSlot,
+          name,
+          maxSlots: cfg.maxCharacterSlots,
+          draft: true,
+        });
+        return projectRosterEntry(row);
+      });
+      return sendJson(req, res, 201, { ok: true, character: created }, corp);
+    } catch (err) {
+      if (res.headersSent) return res.end();
+      if (err instanceof SlotError || err instanceof DurableConflictError || err?.status) {
+        return sendJson(req, res, err.status || 409, { error: err.message, code: err.code }, corp);
+      }
+      console.error('[game] POST /api/characters/start failed:', err?.message ?? err);
+      sendJson(req, res, 500, { error: 'internal error' }, corp);
+    }
+  }
+
+  async function handleCharactersArchive(req, res) {
+    const corp = { 'Cross-Origin-Resource-Policy': 'same-origin' };
+    if (req.method !== 'POST') {
+      return sendJson(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST', ...corp });
+    }
+    if (!requirePostSecurity(req, res, corp)) return;
+    try {
+      const user = await resolveSessionUser(req);
+      if (!user) return sendJson(req, res, 401, { error: 'sign in required' }, corp);
+      if (!accountActionOk(user.id)) return sendJson(req, res, 429, { error: 'too many requests; slow down' }, corp);
+      const body = await readJsonBody(req, accounts?.config?.maxBodyBytes ?? MAX_API_BODY_BYTES);
+      const characterId = parseCharacterId(body.characterId);
+      if (!Number.isSafeInteger(characterId)) {
+        return sendJson(req, res, 400, { error: 'valid characterId is required', code: 'INVALID_CHARACTER_ID' }, corp);
+      }
+      const confirmName = typeof body.confirmName === 'string' ? body.confirmName.trim() : '';
+
+      const out = await withAccountLock(user.id, async () => {
+        const row = typeof store.findAccountCharacter === 'function'
+          ? await store.findAccountCharacter(user.id, characterId)
+          : null;
+        if (!row) throw new SlotError('NOT_FOUND', 'Character not found.', 404);
+        if (row.status !== 'active') throw new SlotError('INVALID_STATE', 'Character is already archived.', 409);
+        const expectedName = (players.get(row.id)?.name || row.displayName || row.name).trim();
+        if (!confirmName || confirmName !== expectedName) {
+          throw new SlotError('CONFIRM_NAME_MISMATCH', `Type "${expectedName}" to confirm archiving this character.`, 400);
+        }
+        const blockers = await checkCharacterBlockers(user.id, characterId, 'archive');
+        if (blockers.length > 0) {
+          const err = new SlotError('ARCHIVE_BLOCKED', blockers[0].message, 409);
+          err.blockers = blockers;
+          throw err;
+        }
+        // If this character is currently online, save & leave safely first (retiring active party/invites).
+        const live = players.get(characterId);
+        if (live) {
+          await saveAndFlush([live]);
+          const oldConn = live.conn;
+          if (oldConn) {
+            oldConn.replaced = true;
+            oldConn.player = null;
+            fatal(oldConn.ws, CLOSE.ACCOUNT, 'character archived');
+          }
+          leave(live);
+          if (typeof store.flush === 'function') await store.flush();
+        }
+        const archived = await store.archiveCharacter(user.id, characterId, { archiveWindowMs: cfg.archiveWindowMs });
+        if (hiscores) await hiscores.removePlayer(characterId);
+        return projectRosterEntry(archived);
+      });
+      return sendJson(req, res, 200, { ok: true, character: out }, corp);
+    } catch (err) {
+      if (res.headersSent) return res.end();
+      if (err instanceof SlotError || err instanceof DurableConflictError || err?.status) {
+        return sendJson(req, res, err.status || 409, {
+          error: err.message,
+          code: err.code,
+          ...(err.blockers ? { blockers: err.blockers } : {}),
+        }, corp);
+      }
+      console.error('[game] POST /api/characters/archive failed:', err?.message ?? err);
+      sendJson(req, res, 500, { error: 'internal error' }, corp);
+    }
+  }
+
+  async function handleCharactersRestore(req, res) {
+    const corp = { 'Cross-Origin-Resource-Policy': 'same-origin' };
+    if (req.method !== 'POST') {
+      return sendJson(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST', ...corp });
+    }
+    if (!requirePostSecurity(req, res, corp)) return;
+    try {
+      const user = await resolveSessionUser(req);
+      if (!user) return sendJson(req, res, 401, { error: 'sign in required' }, corp);
+      if (!accountActionOk(user.id)) return sendJson(req, res, 429, { error: 'too many requests; slow down' }, corp);
+      const body = await readJsonBody(req, accounts?.config?.maxBodyBytes ?? MAX_API_BODY_BYTES);
+      const characterId = parseCharacterId(body.characterId);
+      if (!Number.isSafeInteger(characterId)) {
+        return sendJson(req, res, 400, { error: 'valid characterId is required', code: 'INVALID_CHARACTER_ID' }, corp);
+      }
+      const restored = await withAccountLock(user.id, async () => {
+        const row = await store.restoreCharacter(user.id, characterId);
+        if (hiscores && row.rpg?.character?.created && row.rpg?.chronicles?.hidden !== true) {
+          await hiscores.syncPlayer({ id: row.id, name: row.name, rpg: row.rpg, accountId: user.id });
+          hiscores.invalidate?.();
+        }
+        return projectRosterEntry(row);
+      });
+      return sendJson(req, res, 200, { ok: true, character: restored }, corp);
+    } catch (err) {
+      if (res.headersSent) return res.end();
+      if (err instanceof SlotError || err instanceof DurableConflictError || err?.status) {
+        return sendJson(req, res, err.status || 409, { error: err.message, code: err.code }, corp);
+      }
+      console.error('[game] POST /api/characters/restore failed:', err?.message ?? err);
+      sendJson(req, res, 500, { error: 'internal error' }, corp);
+    }
+  }
+
+  async function handleCharactersSelect(req, res) {
+    const corp = { 'Cross-Origin-Resource-Policy': 'same-origin' };
+    if (req.method !== 'POST') {
+      return sendJson(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST', ...corp });
+    }
+    if (!requirePostSecurity(req, res, corp)) return;
+    try {
+      const user = await resolveSessionUser(req);
+      if (!user) return sendJson(req, res, 401, { error: 'sign in required' }, corp);
+      const body = await readJsonBody(req, accounts?.config?.maxBodyBytes ?? MAX_API_BODY_BYTES);
+      const characterId = parseCharacterId(body.characterId);
+      if (!Number.isSafeInteger(characterId)) {
+        return sendJson(req, res, 400, { error: 'valid characterId is required', code: 'INVALID_CHARACTER_ID' }, corp);
+      }
+      const selected = await withAccountLock(user.id, async () => {
+        const row = await store.selectCharacter(user.id, characterId);
+        return projectRosterEntry(row);
+      });
+      return sendJson(req, res, 200, { ok: true, character: selected }, corp);
+    } catch (err) {
+      if (res.headersSent) return res.end();
+      if (err instanceof SlotError || err?.status) {
+        return sendJson(req, res, err.status || 409, { error: err.message, code: err.code }, corp);
+      }
+      console.error('[game] POST /api/characters/select failed:', err?.message ?? err);
+      sendJson(req, res, 500, { error: 'internal error' }, corp);
+    }
+  }
+
+  async function resolveSessionUser(req) {
+    if (!accounts || typeof accounts.sessionUser !== 'function') return null;
+    try {
+      const u = await accounts.sessionUser(req);
+      if (!u || typeof u !== 'object') return null;
+      const id = typeof u.id === 'number' && Number.isSafeInteger(u.id)
+        ? u.id
+        : typeof u.id === 'string' && u.id
+          ? u.id
+          : null;
+      if (id === null || typeof u.username !== 'string' || !u.username) return null;
+      return { id, username: u.username };
+    } catch {
+      return null;
+    }
+  }
+
+  async function handleHealthz(req, res) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJson(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET, HEAD' });
+    }
+    let ok = !closing;
+    if (ok && accounts && typeof accounts.healthy === 'function') {
+      try {
+        ok = Boolean(await accounts.healthy());
+      } catch {
+        ok = false;
+      }
+    }
+    sendJson(req, res, ok ? 200 : 503, { ok });
+  }
+
+  function handlePublicStatus(req, res) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJson(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET, HEAD' });
+    }
+    try {
+      const mapExtra = {
+        ...(cfg.worldBus ? { worldBus: cfg.worldBus } : {}),
+        ...(services.worldClock ? { worldClock: services.worldClock } : {}),
+      };
+      const snap = publicWorldMap(players.values(), services.travel?.lookup, Date.now(), services.sailing, mapExtra);
+      const maxPlayers = cfg.maxPlayers === 0 || !Number.isFinite(cfg.maxPlayers) || cfg.maxPlayers < 0
+        ? null
+        : cfg.maxPlayers;
+      sendJson(req, res, 200, {
+        ok: true,
+        online: snap.online,
+        vessels: snap.vessels,
+        maxPlayers,
+        worldTime: snap.worldTime ?? null,
+      });
+    } catch (err) {
+      console.error('[game] status request failed:', err?.message ?? err);
+      sendJson(req, res, 500, { error: 'unavailable' });
+    }
+  }
+
+  async function handleMeCharacter(req, res) {
+    const corp = { 'Cross-Origin-Resource-Policy': 'same-origin' };
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJson(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET, HEAD', ...corp });
+    }
+    try {
+      const user = await resolveSessionUser(req);
+      if (!user) return sendJson(req, res, 401, { error: 'sign in required' }, corp);
+
+      const requestedId = parseCharacterId(parseQueryParam(req, 'characterId'));
+      let charRow = null;
+      if (Number.isSafeInteger(requestedId)) {
+        const owned = typeof store.findAccountCharacter === 'function'
+          ? await store.findAccountCharacter(user.id, requestedId)
+          : null;
+        if (owned && owned.status === 'active') {
+          charRow = players.get(owned.id) ?? orphans.get(owned.id) ?? owned;
+        }
+      } else {
+        charRow = findLivePlayerByAccount(user.id);
+        if (!charRow) {
+          const stored = await store.findByAccount(user.id);
+          if (stored) charRow = orphans.get(stored.id) ?? stored;
+        }
+      }
+      if (!charRow || !charRow.rpg?.character?.created) {
+        return sendJson(req, res, 200, { character: null }, corp);
+      }
+
+      const rpg = charRow.rpg;
+      const chroniclesHidden = rpg?.chronicles?.hidden === true;
+      const projectionRow = {
+        id: charRow.id,
+        name: charRow.name,
+        accountId: user.id,
+        rpg: chroniclesHidden
+          ? { ...rpg, chronicles: { ...(rpg.chronicles ?? {}), hidden: false } }
+          : rpg,
+      };
+      const projected = projectCharacter(projectionRow, { requireCreated: true });
+      if (!projected) return sendJson(req, res, 200, { character: null }, corp);
+
+      let overallRank = null;
+      let levelRank = null;
+      if (!chroniclesHidden && hiscores && typeof hiscores.getPlayer === 'function') {
+        try {
+          const profile = await hiscores.getPlayer(projected.name);
+          overallRank = profile?.summary?.overallRank ?? null;
+          levelRank = profile?.summary?.levelRank ?? null;
+        } catch {
+          // Non-fatal: omit ranks when hiscores is temporarily unavailable.
+        }
+      }
+
+      sendJson(req, res, 200, {
+        character: {
+          name: projected.name,
+          race: projected.race,
+          className: projected.className,
+          level: projected.level,
+          totalSkill: projected.totalSkill,
+          placesDiscovered: projected.placesDiscovered,
+          totalClassicPlaces: TOTAL_CLASSIC_PLACES,
+          questsCompleted: projected.questsCompleted,
+          monstersSlain: projected.monstersSlain,
+          guilds: projected.guilds,
+          order: projected.order,
+          chroniclesHidden,
+          overallRank,
+          levelRank,
+        },
+      }, corp);
+    } catch (err) {
+      console.error('[game] /api/me/character failed:', err?.message ?? err);
+      if (!res.headersSent) sendJson(req, res, 500, { error: 'internal error' }, corp);
+    }
+  }
+
+  async function handleMeChroniclesPrivacy(req, res) {
+    const corp = { 'Cross-Origin-Resource-Policy': 'same-origin' };
+    if (req.method !== 'POST') {
+      return sendJson(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST', ...corp });
+    }
+    try {
+      if (!sameOriginRequest(req, accounts)) {
+        return sendJson(req, res, 403, { error: 'cross-origin request refused' }, corp);
+      }
+      if (accounts?.config?.secureCookies && accounts?.config?.requireHttps && !isHttpsRequest(req, accounts)) {
+        return sendJson(req, res, 403, { error: 'HTTPS required' }, corp);
+      }
+      const user = await resolveSessionUser(req);
+      if (!user) return sendJson(req, res, 401, { error: 'sign in required' }, corp);
+
+      const body = await readJsonBody(req, accounts?.config?.maxBodyBytes ?? MAX_API_BODY_BYTES);
+      if (typeof body.hidden !== 'boolean') {
+        return sendJson(req, res, 400, { error: 'hidden must be a boolean' }, corp);
+      }
+      const hidden = Boolean(body.hidden);
+      const ts = Date.now();
+
+      const live = findLivePlayerByAccount(user.id);
+      if (live) {
+        if (!live.rpg?.character?.created) {
+          return sendJson(req, res, 404, { error: 'no created character' }, corp);
+        }
+        if (!live.rpg.chronicles || typeof live.rpg.chronicles !== 'object' || Array.isArray(live.rpg.chronicles)) {
+          live.rpg.chronicles = {};
+        }
+        live.rpg.chronicles.hidden = hidden;
+        live.rpg.chronicles.updatedAt = ts;
+        live.dirty = true;
+        await Promise.resolve(store.saveCharacters([live]));
+        live.dirty = false;
+        if (hiscores) {
+          await hiscores.syncPlayer(live);
+          hiscores.invalidate();
+        }
+        try {
+          runtime.sync();
+        } catch {}
+        return sendJson(req, res, 200, { ok: true, hidden }, corp);
+      }
+
+      const stored = await store.findByAccount(user.id);
+      const target = stored ? (orphans.get(stored.id) ?? stored) : null;
+      if (!target || !target.rpg?.character?.created) {
+        return sendJson(req, res, 404, { error: 'no created character' }, corp);
+      }
+      if (!target.rpg.chronicles || typeof target.rpg.chronicles !== 'object' || Array.isArray(target.rpg.chronicles)) {
+        target.rpg.chronicles = {};
+      }
+      target.rpg.chronicles.hidden = hidden;
+      target.rpg.chronicles.updatedAt = ts;
+      await Promise.resolve(store.saveCharacters([target]));
+      if (orphans.get(target.id) === target) orphans.delete(target.id);
+      if (hiscores) {
+        await hiscores.syncPlayer({
+          id: target.id,
+          name: target.name,
+          rpg: target.rpg,
+          accountId: user.id,
+        });
+        hiscores.invalidate();
+      }
+      return sendJson(req, res, 200, { ok: true, hidden }, corp);
+    } catch (err) {
+      if (res.headersSent) return res.end();
+      if (err?.status) return sendJson(req, res, err.status, { error: err.message }, corp);
+      console.error('[game] /api/me/chronicles-privacy failed:', err?.message ?? err);
+      sendJson(req, res, 500, { error: 'internal error' }, corp);
+    }
+  }
+
   const http = createServer((req, res) => {
-    const path = req.url.split('?')[0];
+    const path = String(req.url ?? '').split('?')[0];
+    if (path === '/healthz') {
+      Promise.resolve()
+        .then(() => handleHealthz(req, res))
+        .catch((err) => {
+          console.error('[game] /healthz failed:', err?.message ?? err);
+          if (!res.headersSent) sendJson(req, res, 503, { ok: false });
+        });
+      return;
+    }
+    if (path === '/api/status') {
+      return handlePublicStatus(req, res);
+    }
+    if (path === '/api/characters') {
+      void handleCharactersList(req, res);
+      return;
+    }
+    if (path === '/api/characters/start') {
+      void handleCharactersStart(req, res);
+      return;
+    }
+    if (path === '/api/characters/archive') {
+      void handleCharactersArchive(req, res);
+      return;
+    }
+    if (path === '/api/characters/restore') {
+      void handleCharactersRestore(req, res);
+      return;
+    }
+    if (path === '/api/characters/select') {
+      void handleCharactersSelect(req, res);
+      return;
+    }
+    if (path === '/api/me/character') {
+      void handleMeCharacter(req, res);
+      return;
+    }
+    if (path === '/api/me/chronicles-privacy') {
+      void handleMeChroniclesPrivacy(req, res);
+      return;
+    }
     if (path === PUBLIC_MAP_PATH) {
       const mapExtra = {
         ...(cfg.worldBus ? { worldBus: cfg.worldBus } : {}),
@@ -411,8 +1300,9 @@ export function createGameServer(options = {}) {
       } catch {}
       if (!ok) return reject(403, 'Forbidden');
     }
+    const upgradeIntent = parseUpgradeIntent(req);
     if (!accounts) {
-      wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, null));
+      wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, null, upgradeIntent));
       return;
     }
     Promise.resolve()
@@ -428,7 +1318,7 @@ export function createGameServer(options = {}) {
         if (socket.destroyed) return;
         if (closing) return reject(503, 'Service Unavailable');
         if (!account && !cfg.allowGuests) return reject(401, 'Unauthorized');
-        wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, account));
+        wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, account, upgradeIntent));
       })
       .catch((err) => {
         console.error('[game] upgrade failed:', err?.message ?? err);
@@ -716,14 +1606,16 @@ export function createGameServer(options = {}) {
     }
   }
 
-  function onConnection(ws, account) {
+  function onConnection(ws, account, upgradeIntent = null) {
     sockets.add(ws);
     ws.isAlive = true;
     const conn = {
       ws,
       account,
+      upgradeIntent,
       player: null,
       joining: false,
+      switching: false,
       replaced: false,
       msgOk: bucket(cfg.msgRatePerSec, cfg.msgBurst),
       actionOk: bucket(cfg.actionRatePerSec, cfg.actionBurst),
@@ -781,6 +1673,13 @@ export function createGameServer(options = {}) {
           return handleAction(conn, msg);
         case 'arrived':
           return handleArrived(conn);
+        case 'switch':
+          if (conn.switching) return;
+          handleSwitch(conn, msg).catch((err) => {
+            console.error('[game] switch failed:', err?.message ?? err);
+            if (ws.readyState === ws.OPEN) sendError(ws, 'character switch failed', { code: 'SWITCH_FAILED' });
+          });
+          return;
         case 'join':
           return sendError(ws, 'already joined');
         default:
@@ -885,32 +1784,225 @@ export function createGameServer(options = {}) {
     admit(conn, row, { token }, { accountId: null });
   }
 
-  // Accounts mode: identity comes from the verified upgrade, never from message fields. The
-  // character is found by account id (server-owned); the display name is the account username.
+  // Accounts mode: identity comes from the verified upgrade, never from message fields.
+  // All joins and switches for an account are serialized by withAccountLock.
   async function joinAccount(conn, msg) {
     const { ws, account } = conn;
-    const name = cleanName(account.username, cfg.maxNameLength);
-    if (!name) return fatal(ws, CLOSE.ACCOUNT, 'account name cannot be used in game');
-    let row = await loadCharacter(ws, () => store.findByAccount(account.id));
-    if (row === undefined) return;
-    if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
-    if (!row) {
-      if (serverFull()) return fatal(ws, CLOSE.FULL, 'server full');
-      if (msg.claimToken !== undefined && msg.claimToken !== null) {
-        const t = msg.claimToken;
-        row = typeof t === 'string' && TOKEN_RE.test(t) ? await loadCharacter(ws, () => store.claimGuest(account.id, account.username, t, name)) : null;
-        if (row === undefined) return;
-        if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
-        if (!row) return sendError(ws, 'guest character could not be claimed');
+    const fallbackName = cleanName(account.username, cfg.maxNameLength);
+    if (!fallbackName) return fatal(ws, CLOSE.ACCOUNT, 'account name cannot be used in game');
+
+    const rawCharId = msg.characterId !== undefined && msg.characterId !== null
+      ? parseCharacterId(msg.characterId)
+      : conn.upgradeIntent?.characterId ?? null;
+    if (rawCharId !== null && !Number.isSafeInteger(rawCharId)) {
+      return sendError(ws, 'invalid characterId', { code: 'INVALID_CHARACTER_ID' });
+    }
+    const wantSwitch = msg.switch === true || conn.upgradeIntent?.switch === true;
+
+    await withAccountLock(account.id, async () => {
+      if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+
+      const roster = await loadCharacter(ws, () => listRosterForAccount(account.id));
+      if (roster === undefined) return;
+      if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+
+      const active = roster.filter((r) => (r.status ?? 'active') === 'active');
+      let row = null;
+
+      if (rawCharId !== null) {
+        const chosen = roster.find((r) => Number(r.id) === rawCharId);
+        if (!chosen) return sendError(ws, 'character not found', { code: 'CHARACTER_NOT_FOUND' });
+        if ((chosen.status ?? 'active') !== 'active') {
+          return sendError(ws, 'character is archived; restore it before joining', { code: 'CHARACTER_ARCHIVED' });
+        }
+        row = chosen;
+      } else if (active.length === 1) {
+        row = active[0];
+      } else if (active.length > 1) {
+        return sendError(ws, 'select a character before joining', {
+          code: 'SELECTOR_REQUIRED',
+          characters: active.map(projectRosterEntry),
+        });
+      } else if (roster.length >= cfg.maxCharacterSlots) {
+        return sendError(ws, 'all character slots are archived; restore a character before joining', {
+          code: 'ALL_SLOTS_ARCHIVED',
+        });
+      } else if (roster.length === 0) {
+        if (serverFull()) return fatal(ws, CLOSE.FULL, 'server full');
+        if (msg.claimToken !== undefined && msg.claimToken !== null) {
+          const t = msg.claimToken;
+          row = typeof t === 'string' && TOKEN_RE.test(t)
+            ? await loadCharacter(ws, () => store.claimGuest(account.id, account.username, t, fallbackName))
+            : null;
+          if (row === undefined) return;
+          if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+          if (!row) return sendError(ws, 'guest character could not be claimed');
+        } else {
+          row = await store.createForAccount(account.id, account.username, fallbackName);
+          if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+        }
       } else {
-        row = await store.createForAccount(account.id, account.username, name);
+        // Has archived slot(s) and free slot(s), but 0 active slots: require explicit start/restore.
+        return sendError(ws, 'no active character selected; create or restore a character first', {
+          code: 'SELECTOR_REQUIRED',
+          characters: [],
+        });
+      }
+
+      if (row.username && row.username !== account.username && typeof store.setAccountUsername === 'function') {
+        await store.setAccountUsername(account.id, account.username);
         if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
       }
-    } else if (row.username !== account.username) {
-      await store.setAccountUsername(account.id, account.username);
+
+      // Check whether another character on this account is already live.
+      const live = findLivePlayerByAccount(account.id);
+      if (live && live.id !== row.id) {
+        if (!wantSwitch) {
+          return sendError(ws, 'another character on this account is active; confirm switch to change characters', {
+            code: 'SWITCH_REQUIRED',
+            activeCharacterId: live.id,
+          });
+        }
+        const blockers = await checkCharacterBlockers(account.id, live.id, 'switch');
+        if (blockers.length > 0) {
+          return sendError(ws, blockers[0].message, { code: 'SWITCH_BLOCKED', blockers });
+        }
+        // Save the currently active character BEFORE leaving so a save failure never loses state or switches blindly.
+        try {
+          await saveAndFlush([live]);
+        } catch (err) {
+          console.error('[game] switch aborted: failed to save active character:', err?.message ?? err);
+          return sendError(ws, 'Could not save your active character; switch cancelled.', { code: 'SWITCH_SAVE_FAILED' });
+        }
+        if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+
+        // Run ordinary leave lifecycle on the first character and verify final leave save succeeds before admitting the second.
+        let toSave = [live];
+        try {
+          toSave = runtime.leave(live);
+        } catch (err) {
+          console.error('[game] leave failed during switch:', err);
+        }
+        players.delete(live.id);
+        const oldConn = live.conn;
+        if (oldConn) {
+          oldConn.replaced = true;
+          oldConn.player = null;
+          fatal(oldConn.ws, CLOSE.REPLACED, 'switched character');
+        }
+        if (toSave.length) {
+          try {
+            await saveAndFlush(toSave);
+          } catch (err) {
+            console.error('[game] switch final save failed:', err?.message ?? err);
+            for (const q of toSave) {
+              if (q === live) orphans.set(live.id, live);
+              else q.dirty = true;
+            }
+            if (!closing) {
+              broadcastState(true);
+              runtime.sync();
+            }
+            return sendError(ws, 'Could not finalize saving your previous character; switch cancelled.', { code: 'SWITCH_SAVE_FAILED' });
+          }
+        }
+        if (!closing) {
+          broadcastState(true);
+          runtime.sync();
+        }
+      }
+
       if (conn.player || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+      if (typeof store.touchCharacterPlayed === 'function') {
+        try { await store.touchCharacterPlayed(account.id, row.id); } catch {}
+      }
+      const displayName = row.displayName || row.name || fallbackName;
+      admit(
+        conn,
+        { ...row, name: displayName },
+        { token: null, account: { id: account.id, username: account.username }, slot: row.slot ?? 1 },
+        { accountId: account.id },
+      );
+    });
+  }
+
+  /** Explicit in-session character switch on an already-joined authenticated socket. */
+  async function handleSwitch(conn, msg) {
+    const { ws, account } = conn;
+    if (!account) return sendError(ws, 'character switching requires a signed-in account', { code: 'ACCOUNT_REQUIRED' });
+    const targetId = parseCharacterId(msg.characterId);
+    if (!Number.isSafeInteger(targetId)) return sendError(ws, 'valid characterId is required', { code: 'INVALID_CHARACTER_ID' });
+    if (conn.switching || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+    conn.switching = true;
+    try {
+      await withAccountLock(account.id, async () => {
+        const cur = conn.player;
+        if (!cur || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+        if (cur.id === targetId) return sendError(ws, 'already playing that character', { code: 'ALREADY_ACTIVE' });
+
+        const target = typeof store.findAccountCharacter === 'function'
+          ? await loadCharacter(ws, () => store.findAccountCharacter(account.id, targetId))
+          : null;
+        if (target === undefined) return;
+        if (!target) return sendError(ws, 'character not found', { code: 'CHARACTER_NOT_FOUND' });
+        if ((target.status ?? 'active') !== 'active') {
+          return sendError(ws, 'character is archived; restore it before switching', { code: 'CHARACTER_ARCHIVED' });
+        }
+
+        const blockers = await checkCharacterBlockers(account.id, cur.id, 'switch');
+        if (blockers.length > 0) {
+          return sendError(ws, blockers[0].message, { code: 'SWITCH_BLOCKED', blockers });
+        }
+
+        // Pre-save current character before mutating live membership; abort cleanly on save failure.
+        try {
+          await saveAndFlush([cur]);
+        } catch (err) {
+          console.error('[game] in-session switch aborted on save failure:', err?.message ?? err);
+          return sendError(ws, 'Could not save your active character; switch cancelled.', { code: 'SWITCH_SAVE_FAILED' });
+        }
+        if (conn.player !== cur || conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+
+        let toSave = [cur];
+        try {
+          toSave = runtime.leave(cur);
+        } catch (err) {
+          console.error('[game] leave failed during in-session switch:', err);
+        }
+        players.delete(cur.id);
+        lastState.delete(cur);
+        conn.player = null;
+        if (toSave.length) {
+          try {
+            await saveAndFlush(toSave);
+          } catch (err) {
+            console.error('[game] in-session switch final save failed:', err?.message ?? err);
+            for (const q of toSave) {
+              if (q === cur) orphans.set(cur.id, cur);
+              else q.dirty = true;
+            }
+            if (!closing) {
+              broadcastState(true);
+              runtime.sync();
+            }
+            return sendError(ws, 'Could not finalize saving your previous character; switch cancelled.', { code: 'SWITCH_SAVE_FAILED' });
+          }
+        }
+        if (conn.replaced || ws.readyState !== ws.OPEN || closing) return;
+        if (typeof store.touchCharacterPlayed === 'function') {
+          try { await store.touchCharacterPlayed(account.id, target.id); } catch {}
+        }
+        const displayName = target.displayName || target.name || account.username;
+        admit(
+          conn,
+          { ...target, name: displayName },
+          { token: null, account: { id: account.id, username: account.username }, slot: target.slot ?? 1, switched: true },
+          { accountId: account.id },
+        );
+      });
+    } finally {
+      conn.switching = false;
     }
-    admit(conn, { ...row, name }, { token: null, account: { id: account.id, username: account.username } }, { accountId: account.id });
   }
 
   function admit(conn, row, welcome, identity) {
@@ -1058,7 +2150,7 @@ export function createGameServer(options = {}) {
     chatLog,
     hiscores,
     localAssets: Object.freeze({ enabled: localAssets.enabled, dir: localAssets.dir, reason: localAssets.reason }),
-    /** Public summary of an account's character, or null. */
+    /** Public summary of an account's primary active character, or null. */
     characterForAccount(accountId) {
       const row = store.findByAccount(accountId);
       if (row && typeof row.then === 'function') {
@@ -1066,7 +2158,22 @@ export function createGameServer(options = {}) {
       }
       return row ? { id: row.id, name: row.name } : null;
     },
+    /** All characters for an account (active + archived). */
+    charactersForAccount(accountId) {
+      return listRosterForAccount(accountId).then((rows) => rows.map(projectRosterEntry));
+    },
+    /** Runs a bounded expired-archive purge pass now (also runs periodically). */
+    purgeExpiredArchived(at = Date.now()) {
+      return runExpiredArchivePurge(at);
+    },
     async start() {
+      await runExpiredArchivePurge(Date.now());
+      lastArchivePurgeAt = Date.now();
+      if (typeof services.market?.settleDue === 'function') {
+        try { await services.market.settleDue(); } catch (err) {
+          console.error('[game] startup market settlement failed:', err?.message ?? err);
+        }
+      }
       await new Promise((resolve, reject) => {
         http.once('error', reject);
         http.listen(cfg.port, cfg.host, () => {
@@ -1079,6 +2186,14 @@ export function createGameServer(options = {}) {
       saveTimer = setInterval(() => {
         persist([...players.values()]);
         pruneAccountActionBuckets();
+        if (pendingAccountCleanups.size) {
+          for (const acctId of [...pendingAccountCleanups]) void cleanupDeletedAccount(acctId);
+        }
+        const nowTs = Date.now();
+        if (nowTs - lastArchivePurgeAt >= cfg.archivePurgeIntervalMs) {
+          lastArchivePurgeAt = nowTs;
+          void runExpiredArchivePurge(nowTs);
+        }
       }, cfg.saveIntervalMs);
       heartbeatTimer = setInterval(() => {
         for (const ws of wss.clients) {
@@ -1124,6 +2239,12 @@ export function createGameServer(options = {}) {
           http.close(() => resolve());
           http.closeAllConnections();
         });
+        await Promise.allSettled([
+          services.market?.flush?.(),
+          services.homes?.whenIdle?.(),
+          services.guildhall?.whenIdle?.(),
+          services.pvp?.flushDurable?.(),
+        ]);
         if (typeof store.flush === 'function') await store.flush();
         if (hiscores && typeof hiscores.close === 'function') {
           await hiscores.close();

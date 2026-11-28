@@ -10,7 +10,7 @@
 // Utility/WeaponBasics.cs. Only numeric facts and file *names* are recorded here;
 // all art is read in the browser from the player's own game files.
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { itemArt, LOOT_HEAP_SPRITE } from '../../client/gameplay/inventory/images.js';
 import { CLOTH_DYES, METAL_DYES } from '../../client/gameplay/inventory/dyes.js';
 import { maxEncumbrance } from '../../client/gameplay/inventory/weight.js';
@@ -481,14 +481,189 @@ function applyVariant(item, variant) {
  *   conjuredUntil  last personal game minute that summoned equipment can exist.
  * Items with any of these never merge into a stack unless the state is identical (books with the same id).
  */
-export const ITEM_EXTRAS = Object.freeze(['magic', 'bookId', 'letter', 'quest', 'owner', 'recipe', 'stolen', 'conjuredUntil', 'credit']);
+export const ITEM_EXTRAS = Object.freeze([
+  'magic', 'bookId', 'letter', 'quest', 'owner', 'recipe', 'stolen', 'conjuredUntil', 'credit', 'bound', 'crafted',
+]);
+export const TRANSFER_TYPES = Object.freeze(['trade', 'storage', 'market', 'auction', 'craft']);
 const MAX_EXTRA_BYTES = 4096;
 let bookLibrary = null; // set by install(ctx) from the operator's ARENA2 files
 
+function canonicalVal(v) {
+  if (v === null || v === undefined) return 'null';
+  if (typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(canonicalVal).join(',')}]`;
+  const keys = Object.keys(v).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalVal(v[k])}`).join(',')}}`;
+}
+
 export const hasExtras = (it) => ITEM_EXTRAS.some((k) => it?.[k] !== undefined);
-const extrasKey = (it) => JSON.stringify(ITEM_EXTRAS.map((k) => it?.[k] ?? null));
-/** True when two records may share a stack. */
-const sameStack = (a, b) => a.template === b.template && extrasKey(a) === extrasKey(b) && !a.magic && !a.quest && !b.magic && !b.quest;
+const extrasKey = (it) => canonicalVal(ITEM_EXTRAS.map((k) => it?.[k] ?? null));
+/** True when two records share equivalent trade-relevant attributes and may share a stack. */
+const sameStack = (a, b) =>
+  a.template === b.template
+  && (a.variant ?? 0) === (b.variant ?? 0)
+  && (a.condition ?? a.maxCondition ?? 0) === (b.condition ?? b.maxCondition ?? 0)
+  && (a.maxCondition ?? 0) === (b.maxCondition ?? 0)
+  && extrasKey(a) === extrasKey(b)
+  && !a.magic && !b.magic
+  && !a.quest && !b.quest
+  && !a.letter && !b.letter
+  && !a.stolen && !b.stolen
+  && !a.bound && !b.bound
+  && !a.conjuredUntil && !b.conjuredUntil;
+
+/** Deterministic fingerprint of an item's trade-relevant attributes (template, variant, condition, extras). */
+export function itemFingerprint(item) {
+  if (!item || typeof item !== 'object') return null;
+  if (item.template === 'gold') return 'gold';
+  const payload = canonicalVal({
+    template: item.template ?? null,
+    variant: item.variant ?? 0,
+    condition: item.condition ?? item.maxCondition ?? 0,
+    maxCondition: item.maxCondition ?? 0,
+    extras: ITEM_EXTRAS.map((k) => [k, item[k] ?? null]),
+  });
+  return createHash('sha256').update(payload).digest('hex').slice(0, 32);
+}
+
+/**
+ * Single authoritative item transfer eligibility policy across trade, storage, market, auction, and craft.
+ * Returns `{ ok: true }` or `{ ok: false, code, reason }`.
+ */
+export function checkItemEligibility(item, transferType, options = {}) {
+  if (!TRANSFER_TYPES.includes(transferType)) {
+    return { ok: false, code: 'UNKNOWN_TRANSFER_TYPE', reason: `Unknown transfer type "${transferType}".` };
+  }
+  if (!item || typeof item !== 'object') {
+    return { ok: false, code: 'INVALID_ITEM', reason: 'Invalid item.' };
+  }
+  if (item.template === 'gold') {
+    if (options.forbidGold) return { ok: false, code: 'GOLD_NOT_ALLOWED', reason: 'Gold cannot be used here.' };
+    return { ok: true };
+  }
+  const label = item.name || item.template || 'This item';
+  if (item.conjuredUntil && !options.allowConjured) {
+    return { ok: false, code: 'CONJURED_ITEM', reason: `${label} is conjured and cannot leave your pack.` };
+  }
+  if (item.equipped && !options.allowEquipped) {
+    return { ok: false, code: 'EQUIPPED_ITEM', reason: `Unequip ${label} first.` };
+  }
+  if (item.quest && !options.allowQuest) {
+    return { ok: false, code: 'QUEST_ITEM', reason: `${label} is a quest item and cannot be transferred.` };
+  }
+  if (transferType === 'craft') {
+    if (item.stolen && !options.allowStolen) {
+      return { ok: false, code: 'STOLEN_ITEM', reason: `${label} is stolen and cannot be used for crafting.` };
+    }
+    if (item.group === 'transport') {
+      return { ok: false, code: 'NON_TRANSFERABLE_ITEM', reason: `${label} cannot be used as a crafting input.` };
+    }
+    return { ok: true };
+  }
+  if (item.group === 'transport') {
+    return { ok: false, code: 'NON_TRANSFERABLE_ITEM', reason: `${label} cannot be transferred.` };
+  }
+  if (transferType === 'storage') {
+    if (options.shared) {
+      if (item.bound) return { ok: false, code: 'BOUND_ITEM', reason: `${label} is bound and cannot be placed in shared storage.` };
+      if (item.stolen && !options.allowStolen) {
+        return { ok: false, code: 'STOLEN_ITEM', reason: `${label} is stolen and cannot be placed in shared storage.` };
+      }
+    }
+    return { ok: true };
+  }
+  if (transferType === 'trade') {
+    if (item.bound) {
+      const accountBound = item.bound.scope === 'account';
+      if (!accountBound || !options.sameAccount) {
+        return { ok: false, code: 'BOUND_ITEM', reason: `${label} is bound and cannot be traded.` };
+      }
+    }
+    if (item.stolen && !options.allowStolen) {
+      return { ok: false, code: 'STOLEN_ITEM', reason: `${label} is stolen and cannot be traded.` };
+    }
+    return { ok: true };
+  }
+  // market & auction
+  if (item.bound) {
+    return { ok: false, code: 'BOUND_ITEM', reason: `${label} is bound and cannot be listed.` };
+  }
+  if (item.stolen && !options.allowStolen) {
+    return { ok: false, code: 'STOLEN_ITEM', reason: `${label} is stolen and cannot be listed on the market.` };
+  }
+  if (item.credit) {
+    return { ok: false, code: 'NON_TRADEABLE_ITEM', reason: `${label} cannot be listed on the market.` };
+  }
+  if (item.letter && !options.allowLetters) {
+    return { ok: false, code: 'NON_TRADEABLE_ITEM', reason: `${label} cannot be listed on the market.` };
+  }
+  if (transferType === 'auction') {
+    const qty = options.quantity != null ? int(options.quantity, 1) : int(item.quantity, 1);
+    if (item.stackable && qty > 1 && !options.allowStack) {
+      return { ok: false, code: 'AUCTION_SINGLE_ITEM_ONLY', reason: 'Auctions accept individual items only.' };
+    }
+    if (options.requireIntact && Number.isFinite(item.condition) && item.condition <= 0) {
+      return { ok: false, code: 'BROKEN_ITEM', reason: `${label} is broken and must be repaired before auctioning.` };
+    }
+  }
+  return { ok: true };
+}
+
+/** Asserts item transfer eligibility, throwing an Error with `.code` when ineligible. */
+export function assertItemEligible(item, transferType, options = {}) {
+  const res = checkItemEligibility(item, transferType, options);
+  if (!res.ok) {
+    const err = new Error(res.reason);
+    err.code = res.code;
+    throw err;
+  }
+  return item;
+}
+
+/** True when `source` can be merged into `target` preserving trade-relevant attribute equivalence and stack limits. */
+export function canMergeStacks(target, source) {
+  if (!target || !source || typeof target !== 'object' || typeof source !== 'object') return false;
+  if (!target.stackable || !source.stackable) return false;
+  if (!sameStack(target, source)) return false;
+  const tq = int(target.quantity, 0);
+  const sq = int(source.quantity, 0);
+  return tq >= 1 && sq >= 1 && tq + sq <= MAX_STACK;
+}
+
+/**
+ * Pure stack split helper:
+ * - Full-stack split (`quantity === record.quantity`) preserves the original `id` and all metadata (`remaining: null`).
+ * - Partial split preserves the original `id` on `remaining` and assigns a fresh `id` to `split`, cloning all metadata.
+ */
+export function splitStack(record, quantity) {
+  if (!record || typeof record !== 'object') throw new Error('Invalid item record.');
+  const qty = int(quantity, 0);
+  const total = int(record.quantity, 1);
+  if (qty < 1 || qty > total) throw new Error(`Invalid split quantity ${quantity} for stack of ${total}.`);
+  if (qty === total) {
+    const full = structuredClone(record);
+    delete full.equipped;
+    return { remaining: null, split: full };
+  }
+  if (!record.stackable) throw new Error(`${record.name || 'This item'} cannot be split.`);
+  const remaining = structuredClone(record);
+  remaining.quantity = total - qty;
+  const split = structuredClone(record);
+  delete split.equipped;
+  split.id = newId();
+  split.quantity = qty;
+  return { remaining, split };
+}
+
+/** Pure stack merge helper: combines two equivalent stackable records, preserving `target.id` and metadata. */
+export function mergeStacks(target, source) {
+  if (!canMergeStacks(target, source)) {
+    throw new Error('These item stacks cannot be merged.');
+  }
+  const merged = structuredClone(target);
+  merged.quantity = int(target.quantity, 1) + int(source.quantity, 1);
+  return merged;
+}
 
 function cleanExtra(k, v) {
   if (v === undefined || v === null) return undefined;
@@ -740,7 +915,8 @@ export function insertRecord(rpg, rec) {
     }
   }
   if (rpg.inventory.length >= MAX_ITEMS) throw new Error('Your pack cannot hold any more items.');
-  const it = { ...rec, id: rpg.inventory.some((i) => i.id === rec.id) ? newId() : rec.id };
+  const it = structuredClone(rec);
+  it.id = rpg.inventory.some((i) => i.id === rec.id) ? newId() : rec.id;
   delete it.equipped;
   rpg.inventory.push(it);
   return it;
@@ -773,10 +949,35 @@ export function removeItem(rpg, itemId, quantity = 1, opts) {
   if (it.equipped) unequip(rpg, { slot: it.equipped });
   if (it.quantity > quantity) {
     it.quantity -= quantity;
-    return { ...it, id: newId(), quantity };
+    const split = structuredClone(it);
+    delete split.equipped;
+    split.id = newId();
+    split.quantity = quantity;
+    return split;
   }
   rpg.inventory.splice(rpg.inventory.indexOf(it), 1);
-  return { ...it };
+  const full = structuredClone(it);
+  delete full.equipped;
+  return full;
+}
+
+/**
+ * Validates eligibility for `transferType` ('trade'|'storage'|'market'|'auction'|'craft') and removes
+ * `quantity` units from `rpg`, preserving original item identity on full-stack removal and assigning
+ * a fresh ID to partial splits while keeping the original ID on the remaining stack.
+ */
+export function takeForTransfer(rpg, itemId, quantity = 1, transferType = 'trade', options = {}) {
+  const qty = int(quantity, 0);
+  if (qty < 1) throw new Error('Invalid quantity.');
+  if (itemId === 'gold') {
+    assertItemEligible({ template: 'gold', quantity: qty }, transferType, options);
+    return removeItem(rpg, 'gold', qty, options);
+  }
+  const it = rpg.inventory.find((i) => i.id === itemId);
+  if (!it) throw new Error('You do not have that item.');
+  assertItemEligible(it, transferType, { ...options, quantity: qty });
+  if (it.quantity < qty) throw new Error(`You only have ${it.quantity} ${it.name}.`);
+  return removeItem(rpg, itemId, qty, options);
 }
 
 /** Use an item: potions apply their effect, gear toggles equipped. */
@@ -999,17 +1200,31 @@ export function install(ctx) {
     },
     addGold: (p, n) => services.giveItem(p, 'gold', n),
     takeGold: (p, n) => services.takeItem(p, 'gold', n),
-    /** Atomically move items/gold between two players. Validates both sides first. */
-    transferItem(from, to, itemId, quantity = 1) {
+    /** Atomically move items/gold between two players. Validates eligibility and both sides first. */
+    transferItem(from, to, itemId, quantity = 1, opts = {}) {
       const a = rpgOf(from);
       const b = rpgOf(to);
+      const sameAccount = from?.accountId != null && to?.accountId != null && String(from.accountId) === String(to.accountId);
       const rec = withRollback([a, b], () => {
-        const moved = removeItem(a, itemId, quantity);
+        const moved = takeForTransfer(a, itemId, quantity, opts.transferType ?? 'trade', { sameAccount, ...opts });
         insertRecord(b, moved);
         return moved;
       });
       changed(from, 'transfer');
       changed(to, 'transfer');
+      return rec;
+    },
+    TRANSFER_TYPES,
+    checkItemEligibility,
+    assertItemEligible,
+    itemFingerprint,
+    canMergeStacks,
+    splitStack,
+    mergeStacks,
+    takeForTransfer(p, itemId, quantity = 1, transferType = 'trade', opts = {}) {
+      const rpg = rpgOf(p);
+      const rec = withRollback([rpg], () => takeForTransfer(rpg, itemId, quantity, transferType, opts));
+      changed(p, transferType);
       return rec;
     },
     getEquippedWeapon(p) {

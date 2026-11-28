@@ -6,7 +6,7 @@ import { Identity, cleanDisplayName, nameProblem } from './lib/identity.js';
 import { selectArena2, readDroppedEntries } from './lib/files.js';
 import { discoverInstalledArena2, isLoopbackPage } from './lib/local-assets.js';
 import { createArena2Store, folderPermission, readDirectoryHandle } from './lib/arena2-store.js';
-import { Connection, CLOSE, describeClose } from './lib/net.js';
+import { Connection, CLOSE, describeClose, defaultUrl } from './lib/net.js';
 import { Predictor, SnapshotBuffer, InputSender, wrapAngle, clamp } from './lib/motion.js';
 import { indoorFloor, groundFor, offsetGround, layersHeightAt } from './lib/ground.js';
 import { Renderer } from './render/renderer.js';
@@ -23,6 +23,11 @@ import { movementMods, movementView, modeOfStance, syncSwimBreath } from './game
 import { peerCoverage } from './gameplay/magic/concealment.js';
 import { shouldSkipFallbackAvatar } from './gameplay/actors/peerHybrid.js';
 import { MODE_ACTIONS, MODE_LABELS } from './gameplay/api.js';
+import {
+  BUG_DRAFT_KEY, BUG_REPORT_URL, PATCH_NOTES_FEED_URL,
+  parseInitialPlace, parseLatestPatchNote, isPatchNoteUnseen, markPatchNoteSeen,
+  buildBugDraft, saveBugDraft, captureCanvasScreenshot, detectWebglRenderer,
+} from './lib/web-integration.js';
 
 const $ = (id) => document.getElementById(id);
 const ui = {
@@ -32,12 +37,22 @@ const ui = {
   drop: $('data-drop'), pick: $('data-pick'), dataStatus: $('data-status'), dataInput: $('data-input'),
   resume: $('data-resume'), forget: $('data-forget'), cacheBox: $('data-cache'), cacheField: $('data-cache-field'), cacheStatus: $('data-cache-status'),
   enter: $('enter-btn'), formError: $('form-error'),
+  whatsNew: $('whats-new'), whatsNewLink: $('whats-new-link'), whatsNewBadge: $('whats-new-badge'),
+  whatsNewDate: $('whats-new-date'), whatsNewTitle: $('whats-new-title'),
   nameField: $('name-field'), accountGate: $('account-gate'),
+  charSelector: $('char-selector'), charSlotCount: $('char-slot-count'), charSlots: $('char-slots'),
+  charCreateBox: $('char-create-box'), charCreateTitle: $('char-create-title'), charCreateName: $('char-create-name'),
+  charCreateSubmit: $('char-create-submit'), charCreateCancel: $('char-create-cancel'),
+  charArchiveBox: $('char-archive-box'), charArchiveTitle: $('char-archive-title'), charArchiveWarn: $('char-archive-warn'),
+  charArchiveBlockers: $('char-archive-blockers'), charArchiveConfirmWrap: $('char-archive-confirm-wrap'),
+  charArchiveLabel: $('char-archive-label'), charArchiveInput: $('char-archive-input'),
+  charArchiveSubmit: $('char-archive-submit'), charArchiveCancel: $('char-archive-cancel'),
+  charRosterNote: $('char-roster-note'),
   loadingTitle: $('loading-title'), steps: $('loading-steps'), loadingDetail: $('loading-detail'), loadingCancel: $('loading-cancel'),
   failTitle: $('failure-title'), failMsg: $('failure-message'), failHint: $('failure-hint'),
-  failRetry: $('failure-retry'), failFolder: $('failure-folder'), failBack: $('failure-back'),
+  failRetry: $('failure-retry'), failFolder: $('failure-folder'), failReport: $('failure-report'), failBack: $('failure-back'),
   town: $('hud-town'), conn: $('hud-conn'), heading: $('hud-heading'),
-  peopleBtn: $('hud-people-btn'), count: $('hud-count'), helpBtn: $('hud-help-btn'), leaveBtn: $('hud-leave-btn'),
+  peopleBtn: $('hud-people-btn'), count: $('hud-count'), helpBtn: $('hud-help-btn'), switchBtn: $('hud-switch-btn'), leaveBtn: $('hud-leave-btn'),
   roster: $('hud-roster'), rosterList: $('roster-list'), help: $('hud-help'),
   chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'),
   banner: $('hud-banner'), bannerText: $('hud-banner-text'), reconnect: $('hud-reconnect-btn'), bannerLeave: $('hud-banner-leave-btn'),
@@ -80,6 +95,12 @@ const S = {
   // 'off' when it does not (prototype/test servers) or the page was opened with ?guest=1.
   auth: 'checking',
   account: null, // {id, username} when signed in
+  roster: null, // { maxSlots, archiveWindowMs, activeCharacterId, characters }
+  rosterLoading: false,
+  selectedCharId: null,
+  switchOnJoin: false,
+  createSlot: null,
+  archiveTarget: null,
   greet: false,
   arrival: null,
   lastJourney: null,
@@ -161,11 +182,21 @@ function townReadyFor(data) {
   return S.town && S.townData === data;
 }
 
+function selectedActiveCharacter() {
+  const chars = S.roster?.characters ?? [];
+  const active = chars.filter((c) => c.status === 'active');
+  if (!active.length) return null;
+  return active.find((c) => c.id === S.selectedCharId)
+    ?? active.find((c) => c.lastSelected)
+    ?? active[0];
+}
+
 function refreshLanding() {
   const signedIn = !!S.account;
   const guestAllowed = S.auth === 'off';
-  // Signed-in players use their account's character; the name field is only for guests.
+  // Signed-in players pick from their character roster; the name field is only for guests.
   ui.nameField.hidden = signedIn || !guestAllowed;
+  if (ui.charSelector) ui.charSelector.hidden = !signedIn;
   const problem = signedIn ? null : nameProblem(ui.name.value);
   const nameOk = signedIn || (guestAllowed && !problem);
   if (!signedIn && ui.name.value && problem) ui.nameNote.textContent = problem;
@@ -178,10 +209,430 @@ function refreshLanding() {
   ui.accountGate.textContent = gate;
   ui.accountGate.hidden = !gate;
   ui.accountGate.dataset.state = signedIn ? 'signed-in' : S.auth;
-  ui.enter.disabled = !(nameOk && dataOk) || S.auth === 'checking';
-  const who = signedIn ? ` as ${S.account.username}` : '';
-  ui.enter.textContent = dataOk && townReadyFor(S.data) ? `Return to ${S.town.name || 'the world'}${who}` : `Enter the world${who}`;
+
+  const rosterChars = S.roster?.characters ?? [];
+  const activeChars = rosterChars.filter((c) => c.status === 'active');
+  const selected = signedIn ? selectedActiveCharacter() : null;
+  const allArchived = signedIn && S.roster && activeChars.length === 0 && rosterChars.length >= (S.roster.maxSlots ?? 3);
+  const hasArchivedOnly = signedIn && S.roster && activeChars.length === 0 && rosterChars.length > 0;
+  const needsSelection = signedIn && S.roster && (allArchived || hasArchivedOnly);
+
+  ui.enter.disabled = !(nameOk && dataOk) || S.auth === 'checking' || Boolean(needsSelection);
+  if (signedIn && selected) {
+    const isSwitch = Boolean(S.roster?.activeCharacterId && S.roster.activeCharacterId !== selected.id);
+    if (isSwitch) {
+      ui.enter.textContent = `Switch to ${selected.name}`;
+    } else if (selected.draft && !selected.created) {
+      ui.enter.textContent = `Continue creating ${selected.name}`;
+    } else {
+      ui.enter.textContent = `Resume ${selected.name}`;
+    }
+  } else if (signedIn && hasArchivedOnly) {
+    ui.enter.textContent = allArchived ? 'Restore an archived character to play' : 'Create or restore a character';
+  } else {
+    const who = signedIn ? ` as ${S.account.username}` : '';
+    ui.enter.textContent = dataOk && townReadyFor(S.data) ? `Return to ${S.town.name || 'the world'}${who}` : `Enter the world${who}`;
+  }
 }
+
+// ---------------------------------------------------------------- character roster selector
+
+function formatRelativeTime(ts) {
+  if (!ts || !Number.isFinite(Number(ts))) return 'Never';
+  const diffMs = Math.max(0, Date.now() - Number(ts));
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 14) return `${days}d ago`;
+  return new Date(Number(ts)).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function formatRestoreWindow(purgeAfter) {
+  if (!purgeAfter || !Number.isFinite(Number(purgeAfter))) return 'Restorable';
+  const remMs = Math.max(0, Number(purgeAfter) - Date.now());
+  const hrs = Math.ceil(remMs / 3_600_000);
+  if (hrs <= 24) return `${Math.max(1, hrs)}h left to restore`;
+  const days = Math.ceil(remMs / 86_400_000);
+  return `${days}d left to restore`;
+}
+
+function setRosterNote(text, { error = false } = {}) {
+  if (!ui.charRosterNote) return;
+  ui.charRosterNote.textContent = text || '';
+  ui.charRosterNote.classList.toggle('error', Boolean(error));
+  ui.charRosterNote.hidden = !text;
+}
+
+async function rosterRequest(path, body) {
+  const init = body === undefined
+    ? { method: 'GET', credentials: 'same-origin', headers: { Accept: 'application/json' } }
+    : {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body),
+      };
+  const res = await fetch(path, init);
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) {
+    const err = new Error(data?.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    err.code = data?.code;
+    err.blockers = data?.blockers;
+    throw err;
+  }
+  return data ?? {};
+}
+
+function closeRosterDrawers() {
+  S.createSlot = null;
+  S.archiveTarget = null;
+  if (ui.charCreateBox) ui.charCreateBox.hidden = true;
+  if (ui.charArchiveBox) ui.charArchiveBox.hidden = true;
+}
+
+function openCreateDrawer(slot) {
+  closeRosterDrawers();
+  S.createSlot = slot;
+  if (ui.charCreateTitle) ui.charCreateTitle.textContent = `Create character in Slot ${slot}`;
+  if (ui.charCreateName) {
+    ui.charCreateName.value = S.roster?.characters?.length === 0 && S.account?.username ? S.account.username : '';
+  }
+  if (ui.charCreateBox) ui.charCreateBox.hidden = false;
+  setRosterNote('');
+  ui.charCreateName?.focus();
+}
+
+function openArchiveDrawer(char) {
+  closeRosterDrawers();
+  S.archiveTarget = char;
+  const days = Math.max(1, Math.round((S.roster?.archiveWindowMs ?? 7 * 86_400_000) / 86_400_000));
+  if (ui.charArchiveTitle) ui.charArchiveTitle.textContent = `Archive ${char.name} (Slot ${char.slot})`;
+  if (ui.charArchiveWarn) {
+    ui.charArchiveWarn.textContent =
+      `Archiving hides ${char.name} from the world and Chronicles and retires active parties. `
+      + `Slot ${char.slot} and the name "${char.name}" remain reserved for ${days} days so you can restore before permanent purge.`;
+  }
+  const blockers = Array.isArray(char.blockers) ? char.blockers : [];
+  if (ui.charArchiveBlockers) {
+    ui.charArchiveBlockers.replaceChildren(...blockers.map((b) => {
+      const li = document.createElement('li');
+      li.textContent = b.message || String(b);
+      return li;
+    }));
+    ui.charArchiveBlockers.hidden = blockers.length === 0;
+  }
+  if (ui.charArchiveConfirmWrap) ui.charArchiveConfirmWrap.hidden = blockers.length > 0;
+  if (ui.charArchiveLabel) ui.charArchiveLabel.textContent = `Type "${char.name}" to confirm archiving`;
+  if (ui.charArchiveInput) {
+    ui.charArchiveInput.value = '';
+    ui.charArchiveInput.placeholder = char.name;
+  }
+  if (ui.charArchiveSubmit) ui.charArchiveSubmit.disabled = true;
+  if (ui.charArchiveBox) ui.charArchiveBox.hidden = false;
+  setRosterNote('');
+  if (!blockers.length) ui.charArchiveInput?.focus();
+}
+
+function syncHudSwitchButton() {
+  if (!ui.switchBtn) return;
+  const activeCount = (S.roster?.characters ?? []).filter((c) => c.status === 'active').length;
+  ui.switchBtn.hidden = !S.account || activeCount < 1;
+}
+
+function renderRosterSelector() {
+  if (!ui.charSlots || !ui.charSelector) return;
+  if (!S.account) {
+    ui.charSelector.hidden = true;
+    closeRosterDrawers();
+    syncHudSwitchButton();
+    refreshLanding();
+    return;
+  }
+  ui.charSelector.hidden = false;
+  const maxSlots = S.roster?.maxSlots ?? 3;
+  const chars = S.roster?.characters ?? [];
+  const bySlot = new Map(chars.map((c) => [c.slot, c]));
+  const selected = selectedActiveCharacter();
+  if (selected && S.selectedCharId !== selected.id) S.selectedCharId = selected.id;
+  if (ui.charSlotCount) {
+    ui.charSlotCount.textContent = S.rosterLoading && !S.roster
+      ? 'Loading roster…'
+      : `${chars.length} / ${maxSlots} slots`;
+  }
+
+  const cards = [];
+  for (let slot = 1; slot <= maxSlots; slot++) {
+    const c = bySlot.get(slot);
+    const card = document.createElement('article');
+    card.className = 'char-card';
+    card.setAttribute('role', 'listitem');
+    card.dataset.slot = String(slot);
+
+    if (!c) {
+      card.dataset.state = 'empty';
+      const tag = document.createElement('span');
+      tag.className = 'char-slot-tag';
+      tag.textContent = `Slot ${slot}`;
+      const label = document.createElement('p');
+      label.className = 'char-empty-label';
+      label.textContent = 'Empty slot';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = chars.length === 0 && slot === 1 ? 'btn btn-primary btn-small' : 'btn btn-small';
+      btn.textContent = 'Create character';
+      btn.addEventListener('click', () => openCreateDrawer(slot));
+      card.append(tag, label, btn);
+      cards.push(card);
+      continue;
+    }
+
+    const isArchived = c.status === 'archived';
+    const isSelected = !isArchived && selected?.id === c.id;
+    const isOnline = Boolean(c.online || S.roster?.activeCharacterId === c.id);
+    const otherOnline = Boolean(!isArchived && S.roster?.activeCharacterId && S.roster.activeCharacterId !== c.id);
+
+    card.dataset.state = isArchived ? 'archived' : 'active';
+    card.dataset.characterId = String(c.id);
+    card.dataset.selected = String(isSelected);
+
+    const top = document.createElement('div');
+    top.className = 'char-card-top';
+    const tag = document.createElement('span');
+    tag.className = 'char-slot-tag';
+    tag.textContent = `Slot ${slot}`;
+    const badge = document.createElement('span');
+    badge.className = 'char-badge';
+    if (isArchived) {
+      badge.dataset.kind = 'archived';
+      badge.textContent = 'Archived';
+    } else if (isOnline) {
+      badge.dataset.kind = 'online';
+      badge.textContent = 'Online';
+    } else if (c.draft && !c.created) {
+      badge.dataset.kind = 'draft';
+      badge.textContent = 'Draft';
+    } else {
+      badge.textContent = 'Active';
+    }
+    top.append(tag, badge);
+
+    const nameEl = document.createElement('h3');
+    nameEl.className = 'char-name';
+    nameEl.textContent = c.name;
+
+    const sub = document.createElement('p');
+    sub.className = 'char-sub';
+    sub.textContent = c.created
+      ? `Level ${c.level} ${c.race || 'Adventurer'} ${c.className || ''}`.trim()
+      : 'Unfinished — enter to create character';
+
+    const meta = document.createElement('div');
+    meta.className = 'char-meta';
+    const addMeta = (k, v) => {
+      const row = document.createElement('div');
+      row.className = 'char-meta-row';
+      const kl = document.createElement('span');
+      kl.className = 'char-meta-label';
+      kl.textContent = k;
+      const vl = document.createElement('span');
+      vl.className = 'char-meta-val';
+      vl.textContent = v;
+      row.append(kl, vl);
+      meta.append(row);
+    };
+    addMeta('Location', c.locationName || 'Iliac Bay');
+    addMeta(isArchived ? 'Window' : 'Last played', isArchived ? formatRestoreWindow(c.purgeAfter) : formatRelativeTime(c.lastPlayedAt));
+
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'char-card-actions';
+
+    if (isArchived) {
+      const restoreBtn = document.createElement('button');
+      restoreBtn.type = 'button';
+      restoreBtn.className = 'btn btn-primary btn-small';
+      restoreBtn.textContent = 'Restore';
+      restoreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void restoreCharacterSlot(c.id);
+      });
+      actionsRow.append(restoreBtn);
+    } else {
+      card.addEventListener('click', () => {
+        S.selectedCharId = c.id;
+        renderRosterSelector();
+      });
+      const resumeBtn = document.createElement('button');
+      resumeBtn.type = 'button';
+      resumeBtn.className = isSelected ? 'btn btn-primary btn-small' : 'btn btn-small';
+      resumeBtn.textContent = otherOnline ? 'Switch' : (c.draft && !c.created ? 'Continue' : 'Resume');
+      resumeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        S.selectedCharId = c.id;
+        S.switchOnJoin = otherOnline;
+        renderRosterSelector();
+        if (!S.data || S.data.problem) {
+          setRosterNote(`Selected ${c.name}. Choose your ARENA2 game folder below to enter.`);
+          ui.pick.focus();
+          return;
+        }
+        enter();
+      });
+      const archiveBtn = document.createElement('button');
+      archiveBtn.type = 'button';
+      archiveBtn.className = 'btn btn-small';
+      archiveBtn.textContent = 'Archive';
+      archiveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openArchiveDrawer(c);
+      });
+      actionsRow.append(resumeBtn, archiveBtn);
+    }
+
+    card.append(top, nameEl, sub, meta, actionsRow);
+    cards.push(card);
+  }
+
+  ui.charSlots.replaceChildren(...cards);
+  syncHudSwitchButton();
+  refreshLanding();
+}
+
+async function fetchRoster() {
+  if (!S.account) {
+    S.roster = null;
+    S.selectedCharId = null;
+    renderRosterSelector();
+    return null;
+  }
+  S.rosterLoading = true;
+  renderRosterSelector();
+  try {
+    const data = await rosterRequest('/api/characters');
+    if (!S.account) return null;
+    S.roster = data;
+    const active = (data.characters ?? []).filter((c) => c.status === 'active');
+    if (!active.some((c) => c.id === S.selectedCharId)) {
+      const preferred = active.find((c) => c.lastSelected) ?? active[0] ?? null;
+      S.selectedCharId = preferred ? preferred.id : null;
+    }
+    setRosterNote('');
+    return data;
+  } catch (err) {
+    setRosterNote(err.message || 'Could not load your character roster.', { error: true });
+    return null;
+  } finally {
+    S.rosterLoading = false;
+    renderRosterSelector();
+  }
+}
+
+async function startCharacterSlot() {
+  if (!S.account || S.createSlot == null) return;
+  const rawName = ui.charCreateName?.value ?? '';
+  const problem = nameProblem(rawName);
+  if (problem) {
+    setRosterNote(problem, { error: true });
+    ui.charCreateName?.focus();
+    return;
+  }
+  const clean = cleanDisplayName(rawName);
+  if (ui.charCreateSubmit) ui.charCreateSubmit.disabled = true;
+  try {
+    const res = await rosterRequest('/api/characters/start', { slot: S.createSlot, name: clean });
+    closeRosterDrawers();
+    await fetchRoster();
+    if (res.character?.id) {
+      S.selectedCharId = res.character.id;
+      S.switchOnJoin = Boolean(S.roster?.activeCharacterId && S.roster.activeCharacterId !== res.character.id);
+      renderRosterSelector();
+    }
+    setRosterNote(`Created ${res.character?.name || clean} in Slot ${res.character?.slot}.`);
+    if (S.data && !S.data.problem) {
+      enter();
+    }
+  } catch (err) {
+    setRosterNote(err.message || 'Could not create character.', { error: true });
+  } finally {
+    if (ui.charCreateSubmit) ui.charCreateSubmit.disabled = false;
+  }
+}
+
+async function archiveCharacterSlot() {
+  const target = S.archiveTarget;
+  if (!S.account || !target) return;
+  const confirmName = (ui.charArchiveInput?.value ?? '').trim();
+  if (confirmName !== target.name) {
+    setRosterNote(`Type "${target.name}" exactly to confirm archiving.`, { error: true });
+    return;
+  }
+  if (ui.charArchiveSubmit) ui.charArchiveSubmit.disabled = true;
+  try {
+    await rosterRequest('/api/characters/archive', { characterId: target.id, confirmName });
+    closeRosterDrawers();
+    await fetchRoster();
+    setRosterNote(`${target.name} was archived. You can restore them during the 7-day window.`);
+  } catch (err) {
+    if (Array.isArray(err.blockers) && err.blockers.length) {
+      target.blockers = err.blockers;
+      openArchiveDrawer(target);
+    }
+    setRosterNote(err.message || 'Could not archive character.', { error: true });
+  } finally {
+    if (ui.charArchiveSubmit) ui.charArchiveSubmit.disabled = (ui.charArchiveInput?.value ?? '').trim() !== target.name;
+  }
+}
+
+async function restoreCharacterSlot(characterId) {
+  if (!S.account) return;
+  try {
+    const res = await rosterRequest('/api/characters/restore', { characterId });
+    closeRosterDrawers();
+    await fetchRoster();
+    if (res.character?.id) S.selectedCharId = res.character.id;
+    renderRosterSelector();
+    setRosterNote(`Restored ${res.character?.name || 'character'} to Slot ${res.character?.slot}.`);
+  } catch (err) {
+    setRosterNote(err.message || 'Could not restore character.', { error: true });
+  }
+}
+
+ui.charCreateCancel?.addEventListener('click', () => { closeRosterDrawers(); setRosterNote(''); });
+ui.charCreateSubmit?.addEventListener('click', () => { void startCharacterSlot(); });
+ui.charCreateName?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); void startCharacterSlot(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeRosterDrawers(); }
+});
+ui.charArchiveCancel?.addEventListener('click', () => { closeRosterDrawers(); setRosterNote(''); });
+ui.charArchiveInput?.addEventListener('input', () => {
+  const target = S.archiveTarget;
+  if (ui.charArchiveSubmit) {
+    ui.charArchiveSubmit.disabled = !target || ui.charArchiveInput.value.trim() !== target.name;
+  }
+});
+ui.charArchiveInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !ui.charArchiveSubmit?.disabled) { e.preventDefault(); void archiveCharacterSlot(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeRosterDrawers(); }
+});
+ui.charArchiveSubmit?.addEventListener('click', () => { void archiveCharacterSlot(); });
+
+window.dfwRoster = {
+  refresh: () => fetchRoster(),
+  get state() { return S.roster; },
+  openCreate: (slot) => openCreateDrawer(slot),
+  openArchive: (id) => {
+    const c = (S.roster?.characters ?? []).find((r) => r.id === Number(id));
+    if (c) openArchiveDrawer(c);
+  },
+  select(id) {
+    S.selectedCharId = Number(id);
+    renderRosterSelector();
+  },
+};
 
 function describeData(sel) {
   if (sel.problem) {
@@ -472,7 +923,12 @@ ui.form.addEventListener('submit', (e) => {
   if (!S.account && S.auth !== 'off') { document.querySelector('#account-panel input, #account-panel button')?.focus(); return; }
   if (!S.data || S.data.problem) { ui.pick.focus(); return; }
   if (S.account) {
-    S.name = S.account.username;
+    const sel = selectedActiveCharacter();
+    S.name = sel?.name || S.account.username;
+    if (sel) {
+      S.selectedCharId = sel.id;
+      S.switchOnJoin = Boolean(S.roster?.activeCharacterId && S.roster.activeCharacterId !== sel.id);
+    }
   } else {
     const problem = nameProblem(ui.name.value);
     if (problem) { ui.nameNote.textContent = problem; ui.name.focus(); return; }
@@ -492,11 +948,24 @@ function setAccount(user) {
   if (guestEscape && !S.account) S.auth = 'off';
   api.account = S.account;
   api.emit('account', S.account);
-  // Signing out (or switching account) while in the world returns to the title screen.
+  const changedAccount = (prev?.id ?? null) !== (S.account?.id ?? null);
+  if (changedAccount) {
+    S.roster = null;
+    S.selectedCharId = null;
+    S.switchOnJoin = false;
+    closeRosterDrawers();
+    setRosterNote('');
+  }
+  // Signing out (or switching account) while in the world returns to the title screen and clears private state.
   if (S.screen !== 'landing' && prev && (!S.account || prev.id !== S.account.id)) {
     leave();
-    ui.formError.textContent = S.account ? 'You switched accounts. Enter the world again to play.' : 'You signed out.';
+    ui.formError.textContent = S.account ? 'You switched accounts. Choose a character to enter the world.' : 'You signed out.';
     ui.formError.hidden = false;
+  }
+  if (S.account && (changedAccount || !S.roster)) {
+    void fetchRoster();
+  } else {
+    renderRosterSelector();
   }
   refreshLanding();
 }
@@ -780,7 +1249,100 @@ ui.failFolder.addEventListener('click', () => {
   showScreen('landing');
   pickFolder();
 });
+ui.failReport?.addEventListener('click', () => {
+  openBugReport({
+    category: 'gameplay',
+    title: ui.failTitle.textContent || 'Game client error',
+    screenshot: false,
+    context: {
+      screen: 'failure',
+      errorTitle: ui.failTitle.textContent || '',
+      errorMessage: ui.failMsg.textContent || '',
+      errorHint: ui.failHint.textContent || '',
+      url: location.href,
+    },
+  });
+});
 ui.failBack.addEventListener('click', () => showScreen('landing'));
+
+// ---------------------------------------------------------------- website integration (patch notes & bug reports)
+
+function currentRegionName() {
+  const loc = api.location;
+  if (loc) {
+    const entry = api.travelWorld?.()?.catalog?.get?.(loc);
+    if (entry?.region) return entry.region;
+    const m = /^(?:town|interior|dungeon):([^/]+)\//.exec(loc);
+    if (m && !/^\d+$/.test(m[1])) return m[1];
+  }
+  return S.town?.source?.region ?? S.town?.region ?? '';
+}
+
+function createBugDraft(opts = {}) {
+  const inGame = S.screen === 'game';
+  const liveContext = {
+    screen: S.screen,
+    location: inGame ? currentPlace() : '',
+    locationId: api.location ?? '',
+    region: currentRegionName(),
+    panel: api.panel ?? '',
+    conn: api.connection ?? document.body.dataset.conn ?? '',
+    renderer: detectWebglRenderer(renderer),
+    url: location.href,
+  };
+  let screenshot = null;
+  if (opts.screenshot && typeof opts.screenshot === 'object') {
+    screenshot = opts.screenshot;
+  } else if (opts.screenshot !== false && opts.screenshot !== null && inGame) {
+    screenshot = captureCanvasScreenshot(ui.canvas);
+  }
+  return buildBugDraft({
+    ...opts,
+    context: { ...liveContext, ...(opts.context && typeof opts.context === 'object' ? opts.context : {}) },
+    screenshot,
+  });
+}
+
+function openBugReport(opts = {}) {
+  const draft = createBugDraft(opts);
+  const saved = saveBugDraft(draft);
+  window.open(BUG_REPORT_URL, '_blank', 'noopener');
+  return { draft: saved.draft ?? draft, ok: saved.ok, droppedScreenshot: saved.droppedScreenshot };
+}
+
+api.openBugReport = openBugReport;
+window.dfwBugDraft = {
+  key: BUG_DRAFT_KEY,
+  url: BUG_REPORT_URL,
+  create: createBugDraft,
+  save: saveBugDraft,
+  open: openBugReport,
+};
+
+async function loadWhatsNew() {
+  if (!ui.whatsNew || !ui.whatsNewLink || location.protocol === 'file:') return;
+  try {
+    const res = await fetch(PATCH_NOTES_FEED_URL, { headers: { Accept: 'application/json' }, cache: 'no-cache' });
+    if (!res.ok) return;
+    const entry = parseLatestPatchNote(await res.json());
+    if (!entry) return;
+    if (ui.whatsNewDate) {
+      ui.whatsNewDate.textContent = entry.date;
+      if (entry.date) ui.whatsNewDate.dateTime = entry.date;
+      ui.whatsNewDate.hidden = !entry.date;
+    }
+    if (ui.whatsNewTitle) ui.whatsNewTitle.textContent = entry.headline;
+    ui.whatsNewLink.href = entry.url;
+    if (ui.whatsNewBadge) ui.whatsNewBadge.hidden = !isPatchNoteUnseen(entry.id);
+    ui.whatsNewLink.addEventListener('click', () => {
+      markPatchNoteSeen(entry.id);
+      if (ui.whatsNewBadge) ui.whatsNewBadge.hidden = true;
+    });
+    ui.whatsNew.hidden = false;
+  } catch {
+    // Fail silently if patch notes feed is absent or unreachable.
+  }
+}
 
 // ---------------------------------------------------------------- networking
 
@@ -836,6 +1398,17 @@ async function join(op) {
   throw Object.assign(new Error('Could not join.'), { kind: 'unreachable' });
 }
 
+function accountWsUrl() {
+  const base = defaultUrl();
+  const params = new URLSearchParams();
+  if (Number.isSafeInteger(S.selectedCharId) && S.selectedCharId > 0) {
+    params.set('characterId', String(S.selectedCharId));
+  }
+  if (S.switchOnJoin) params.set('switch', '1');
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
 /**
  * Account join: the session cookie identifies the player, so no guest token is sent. The first
  * account join offers this browser's saved guest of the same name (claimToken) so the server can
@@ -843,15 +1416,20 @@ async function join(op) {
  */
 async function joinAccount(op) {
   setConn('connecting');
-  const name = S.account.username;
-  let claimToken = identity.storedToken(profileKeyOf(name));
+  const sel = selectedActiveCharacter();
+  if (sel && !S.selectedCharId) S.selectedCharId = sel.id;
+  const name = sel?.name || S.account.username;
+  const allowClaim = !S.roster || (S.roster.characters ?? []).length === 0;
+  let claimToken = allowClaim ? identity.storedToken(profileKeyOf(S.account.username)) : null;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const conn = new Connection();
+    const conn = new Connection(accountWsUrl());
     S.conn = conn;
     try {
       const welcome = await conn.connect({ name, account: true, claimToken });
       if (op !== S.op) { conn.close(); throw Object.assign(new Error('cancelled'), { kind: 'cancelled' }); }
-      if (claimToken) identity.writeToken(profileKeyOf(name), null); // now owned by the account
+      if (claimToken) identity.writeToken(profileKeyOf(S.account.username), null); // now owned by the account
+      S.selectedCharId = Number(welcome.id) || S.selectedCharId;
+      S.switchOnJoin = false;
       attach(conn, welcome);
       return welcome;
     } catch (err) {
@@ -861,6 +1439,7 @@ async function joinAccount(op) {
         // The upgrade is refused (401) when the session has expired.
         err.message = 'Could not reach the world. If you were signed out, sign in again.';
       }
+      if (err.kind === 'rejected') void fetchRoster();
       throw err;
     }
   }
@@ -941,7 +1520,8 @@ function onRpg(rpg) {
   if (S.greet) {
     S.greet = false;
     const returning = S.returning ?? statsOf(api.state)?.created === true;
-    if (S.account) addChat(null, returning ? `Welcome back, ${S.account.username}.` : `Welcome, ${S.account.username}. Your story starts here.`, { system: true });
+    const who = S.selfName || S.account?.username;
+    if (S.account) addChat(null, returning ? `Welcome back, ${who}.` : `Welcome, ${who}. Your story starts here.`, { system: true });
   }
   if (S.pendingPositions?.location === api.location) onState(S.pendingPositions.players, api.location);
 }
@@ -1013,8 +1593,9 @@ function reconnect() {
 ui.reconnect.addEventListener('click', () => { S.autoRetried = true; reconnect(); });
 ui.bannerLeave.addEventListener('click', () => leave());
 ui.leaveBtn.addEventListener('click', () => leave());
+ui.switchBtn?.addEventListener('click', () => leave({ switching: true }));
 
-function leave() {
+function leave({ switching = false } = {}) {
   S.op++;
   const conn = S.conn;
   S.conn = null;
@@ -1034,6 +1615,11 @@ function leave() {
   ui.chatLog.replaceChildren();
   setConn('idle');
   showScreen('landing');
+  if (S.account) {
+    void fetchRoster().then(() => {
+      if (switching) setRosterNote('Choose another character or create a new slot.');
+    });
+  }
   ui.enter.focus();
 }
 
@@ -1706,12 +2292,16 @@ function placeLabels(camera, now) {
 shell = createShell({ api, input, actions, settings });
 globalThis.dfwGame = api; // for console debugging and end-to-end checks
 
+const initialPlace = parseInitialPlace(location.search);
+if (initialPlace) api.setInitialPlace(initialPlace);
+
 ui.name.value = identity.lastName;
 showScreen('landing');
 setConn('idle');
 (ui.name.value ? ui.pick : ui.name).focus();
 requestAnimationFrame(frame);
 loadAccounts();
+loadWhatsNew();
 discoverInstalledData().then(restoreSavedData);
 
 // Gameplay features (client/gameplay/features.js manifest). Failures are isolated per feature.

@@ -12,7 +12,7 @@ import { parsePalette } from '../textures.js';
 import { WorldDataError } from '../errors.js';
 import { parseRmbFlats, layoutTownFlats, BLOCK_SIZE } from './rmbFlats.js';
 import { FlatArchive } from './flatTextures.js';
-import { readDaySky, skyBase, natureArchive as natureArchiveOf, skyFileName, SEASONS, DEFAULT_SKY_FRAME } from './sky.js';
+import { readClassicSky, skyBase, natureArchive as natureArchiveOf, skyFileName, SEASONS, DEFAULT_SKY_FRAME } from './sky.js';
 import { readWoodsHeightmap, buildSurroundings, mapPixelOf, hash2 } from './terrain.js';
 import { applyClimate } from '../town.js';
 
@@ -164,7 +164,9 @@ export async function loadScenery(files, town, options = {}) {
   const skyF = index.get(skyName);
   if (skyF) {
     try {
-      sky = { ...(await readDaySky(reader(skyF), skyF.size, options.skyFrame ?? DEFAULT_SKY_FRAME, skyName)), index: skyIndex, file: skyName };
+      // Every hour of the day sky and the night ridge line (client/render/sky-dome.js picks the frame).
+      const open = (name) => { const f = index.get(name); return f ? { size: f.size, read: reader(f) } : null; };
+      sky = await readClassicSky(open, skyIndex, options.skyFrame ?? DEFAULT_SKY_FRAME);
     } catch (err) {
       if (!(err instanceof WorldDataError)) throw err;
       warnings.push(`${err.message}; the default sky is kept.`);

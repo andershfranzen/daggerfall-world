@@ -321,6 +321,21 @@ export function createGameplayApi(host = {}) {
     account: null,
     modalOpen: false,
     panel: null,
+    /** Deep-linked place id from `?place=<id>` (e.g. from /map/), consumed by the Travel Map. */
+    initialPlace: null,
+    setInitialPlace(place) {
+      const next = typeof place === 'string' && place.trim() ? place.trim().slice(0, 200) : null;
+      api.initialPlace = next;
+      if (next) api.emit('initialPlace', next);
+      return next;
+    },
+    consumeInitialPlace() {
+      const current = api.initialPlace;
+      api.initialPlace = null;
+      return current;
+    },
+    /** Installed by main.js: opens /report-bug/?from=game with live diagnostics in localStorage. */
+    openBugReport: null,
     /** Set to true by a sprite/actor feature once it draws peers itself; the shell then hides its cube avatars. */
     spritesActive: false,
     /** Optional collision hook a feature may install: (x0,z0,x1,z1) => {x,z}. */
@@ -500,8 +515,12 @@ export function createGameplayApi(host = {}) {
 
   /** Accept a new RPG message; emits 'state', and 'location' when it changes. Returns {location changed?}. */
   api._receiveRpg = (msg) => {
+    const prevSelfId = api.selfId;
     api.state = mergeRpg(api.state, msg);
     if (api.state.selfId) api.selfId = String(api.state.selfId);
+    if (prevSelfId !== null && api.selfId !== null && prevSelfId !== api.selfId) {
+      api.emit('characterChange', { selfId: api.selfId, previousSelfId: prevSelfId });
+    }
     const loc = locationOf(api.state) ?? api.location ?? DEFAULT_LOCATION;
     const previous = api.location;
     const changed = previous !== null && loc !== previous;
@@ -519,12 +538,15 @@ export function createGameplayApi(host = {}) {
   };
 
   api._reset = () => {
+    const hadSelf = api.selfId !== null;
     api.state = null;
     api.location = null;
     api.selfId = null;
     externalTarget = false;
     target = null;
     sceneSeq++;
+    api.emit('disconnect');
+    if (hadSelf) api.emit('characterChange', { selfId: null, previousSelfId: null });
   };
 
   return api;

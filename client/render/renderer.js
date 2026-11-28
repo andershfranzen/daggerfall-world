@@ -26,9 +26,26 @@
 //                          (sailing: a "Your Ship" deck without its sea-level ground tiles). setTown resets it.
 //   skyFrame               optional rotation (mat4) from the sky's frame into the scene's frame: a heeling
 //                          deck tilts the horizon. `skyInvViewProj` is the inverse view-projection sky passes use.
+//   skyState               the outdoor sky's moment (client/render/sky-dome.js skyStateFor): undefined shows a
+//                          clear late morning, null keeps the plain gradient (interiors, dungeons, underwater).
+//   drawSkyDome(pano)      draw the outdoor sky; a scenery pass hands in its classic panorama textures.
+//   shade                  [r, g, b] darkness multiplied over the finished frame (night, weather, dungeons). The
+//                          outdoor sky is added back afterwards, so the moons and stars keep their own light.
+//   skyTone                {horizon, zenith, frame} the classic sky's own colours for the moment, written when a
+//                          panorama is drawn; the light model fogs the world with them (atmosphere/light.js).
 
 import { DISTANCE_FOG, OUTDOOR_FAR, PIXEL_COVERAGE, fogDistances } from './visibility.js';
+import {
+  DEFAULT_GRAPHICS, QUALITY_PRESETS, LIGHTING_PRESETS, RETRO_PRESETS,
+  normalizeGraphicsOptions, applyQualityPreset, applyLightingPreset,
+  loadGraphicsOptions, saveGraphicsOptions, needsOffscreenPass, computeViewport,
+} from './graphics-options.js';
+import { DOME_VS, DOME_FS, DEFAULT_SKY_STATE, skyColors } from './sky-dome.js';
 import * as M from '../lib/mat.js';
+
+export { DEFAULT_GRAPHICS, QUALITY_PRESETS, LIGHTING_PRESETS, RETRO_PRESETS };
+
+const isPow2 = (n) => n > 0 && (n & (n - 1)) === 0;
 
 const WORLD_VS = `
 attribute vec3 a_pos;
@@ -68,6 +85,12 @@ uniform vec3 u_lightDir;
 uniform float u_shade;
 uniform float u_coverage;
 uniform vec3 u_fogColor;
+uniform float u_ambient;
+uniform float u_shadowStrength;
+uniform vec3 u_dynLightPos;
+uniform vec3 u_dynLightColor;
+uniform float u_dynLightRadius;
+uniform float u_dynLightIntensity;
 ${DISTANCE_FOG}
 ${PIXEL_COVERAGE}
 void main() {
@@ -83,10 +106,133 @@ void main() {
   if (dot(n, toEye) < 0.0) n = -n; // geometry is two-sided
   float ndl = max(dot(n, u_lightDir), 0.0);
   float sky = 0.5 + 0.5 * n.y;
-  float light = mix(1.0, 0.42 + 0.38 * ndl + 0.2 * sky, u_shade);
-  vec3 c = base * light;
+  float ambientFloor = (0.42 * u_ambient);
+  float direct = u_shadowStrength * ndl + 0.2 * sky * u_ambient;
+  float shaded = max(0.08, ambientFloor + direct);
+  vec3 lit = vec3(mix(1.0, shaded, u_shade));
+  if (u_dynLightRadius > 0.01 && u_dynLightIntensity > 0.001) {
+    vec3 toLight = u_dynLightPos - v_wpos;
+    float ld = length(toLight);
+    if (ld < u_dynLightRadius) {
+      float att = 1.0 - (ld / u_dynLightRadius);
+      att = att * att;
+      vec3 ldir = ld > 0.001 ? toLight / ld : vec3(0.0, 1.0, 0.0);
+      float lnd = 0.45 + 0.55 * max(dot(n, ldir), 0.0);
+      lit += u_dynLightColor * (att * lnd * u_dynLightIntensity);
+    }
+  }
+  vec3 c = base * lit;
   float d = length(toEye);
   gl_FragColor = vec4(mix(c, u_fogColor, fogAmount(d)), 1.0);
+}`;
+
+const POST_VS = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+
+const POST_FS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 v_uv;
+uniform sampler2D u_tex;
+uniform vec2 u_texSize;
+uniform float u_paletteMode;
+uniform float u_dither;
+uniform float u_scanlines;
+uniform float u_bloom;
+uniform float u_vignette;
+uniform float u_fxaa;
+uniform vec3 u_unshade; // the frame's shade while a retro palette is on, else 1: the palette is applied to the lit scene
+
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+float bayer4(vec2 p) {
+  vec2 q = mod(floor(p), 4.0);
+  float x = q.x;
+  float y = q.y;
+  float low = 2.0 * mod(x + y, 2.0) + mod(y, 2.0);
+  vec2 h = floor(q / 2.0);
+  float high = 2.0 * mod(h.x + h.y, 2.0) + mod(h.y, 2.0);
+  return (4.0 * low + high + 0.5) / 16.0 - 0.5;
+}
+
+vec3 sampleScene(vec2 uv) {
+  vec3 c = texture2D(u_tex, uv).rgb;
+  if (u_fxaa > 0.5) {
+    vec2 px = 1.0 / max(u_texSize, vec2(1.0));
+    vec3 cN = texture2D(u_tex, uv + vec2(0.0, -px.y)).rgb;
+    vec3 cS = texture2D(u_tex, uv + vec2(0.0, px.y)).rgb;
+    vec3 cW = texture2D(u_tex, uv + vec2(-px.x, 0.0)).rgb;
+    vec3 cE = texture2D(u_tex, uv + vec2(px.x, 0.0)).rgb;
+    float lC = luma(c);
+    float lMin = min(lC, min(min(luma(cN), luma(cS)), min(luma(cW), luma(cE))));
+    float lMax = max(lC, max(max(luma(cN), luma(cS)), max(luma(cW), luma(cE))));
+    float edge = lMax - lMin;
+    if (edge > max(0.05, lMax * 0.12)) {
+      vec3 avg = 0.25 * (cN + cS + cW + cE);
+      c = mix(c, avg, clamp(edge * 1.4, 0.0, 0.55));
+    }
+  }
+  if (u_bloom > 0.005) {
+    vec2 px = 2.0 / max(u_texSize, vec2(1.0));
+    vec3 b = vec3(0.0);
+    b += max(texture2D(u_tex, uv + vec2(px.x, px.y)).rgb - 0.72, 0.0);
+    b += max(texture2D(u_tex, uv + vec2(-px.x, px.y)).rgb - 0.72, 0.0);
+    b += max(texture2D(u_tex, uv + vec2(px.x, -px.y)).rgb - 0.72, 0.0);
+    b += max(texture2D(u_tex, uv + vec2(-px.x, -px.y)).rgb - 0.72, 0.0);
+    c += b * (0.28 * u_bloom);
+  }
+  return c;
+}
+
+void main() {
+  vec3 c = sampleScene(v_uv);
+  if (u_vignette > 0.005) {
+    vec2 d = v_uv * 2.0 - 1.0;
+    float vig = 1.0 - dot(d, d) * (0.35 * u_vignette);
+    c *= clamp(vig, 0.25, 1.0);
+  }
+  vec2 pix = v_uv * u_texSize;
+  float dith = u_dither > 0.5 ? bayer4(pix) : 0.0;
+  // The night shade is already in the frame. A retro palette would crush a darkened scene to a few black
+  // steps, so the ground (alpha 1; the outdoor sky writes 0 and is not shaded) is lifted back to its lit
+  // colours for the palette and darkened again after it, as when the shade was laid over the finished picture.
+  float ground = texture2D(u_tex, v_uv).a;
+  vec3 sh = mix(vec3(1.0), u_unshade, ground);
+  c /= sh;
+  // The sky's long gradients get the finer ramp a 256-colour scene palette keeps for them.
+  vec3 skyRamp = floor(clamp(c + dith / 40.0, 0.0, 1.0) * 31.0 + 0.5) / 31.0;
+  if (u_paletteMode > 2.5) {
+    // Daggerfall warm VGA palette: 12-level earth-biased quantization + slight shadow crush
+    vec3 warm = c * vec3(1.02, 0.99, 0.94);
+    warm = clamp(warm + dith / 14.0, 0.0, 1.0);
+    c = mix(skyRamp, floor(warm * 11.0 + 0.5) / 11.0, ground);
+  } else if (u_paletteMode > 1.5) {
+    // 6-bit VGA DAC posterization (64 levels/channel)
+    vec3 q = clamp(c + dith / 48.0, 0.0, 1.0);
+    c = floor(q * 31.0 + 0.5) / 31.0;
+  } else if (u_paletteMode > 0.5) {
+    // Classic 256-color VGA palette (6x6x6 RGB cube + 24-step neutral greyscale ramp)
+    vec3 dithered = clamp(c + dith / 5.5, 0.0, 1.0);
+    vec3 cube = floor(dithered * 5.0 + 0.5) / 5.0;
+    float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+    float g = floor(clamp(luma(c) + dith / 22.0, 0.0, 1.0) * 23.0 + 0.5) / 23.0;
+    vec3 grey = vec3(g);
+    c = mix(skyRamp, sat < 0.065 ? grey : cube, ground);
+  }
+  c *= sh;
+  if (u_scanlines > 0.005) {
+    float scan = 1.0 - u_scanlines * step(0.5, fract(pix.y * 0.5));
+    c *= scan;
+  }
+  gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
 
 const SKY_VS = `
@@ -116,6 +262,11 @@ void main() {
   c += vec3(1.0, 0.78, 0.5) * (pow(sun, 24.0) * 0.35 + pow(sun, 600.0) * 0.8);
   gl_FragColor = vec4(c, 1.0);
 }`;
+
+const FILL_FS = `
+precision mediump float;
+uniform vec3 u_color;
+void main() { gl_FragColor = vec4(u_color, 1.0); }`;
 
 export const PALETTE = {
   zenith: [0.20, 0.30, 0.48],
@@ -210,12 +361,21 @@ export class Renderer {
     this.invViewProj = new Float32Array(16);
     this.tmp = new Float32Array(16);
     this.eye = [0, 1.6, 0];
-    this.fov = 70 * Math.PI / 180;
+    this.graphics = loadGraphicsOptions();
+    this.fov = (this.graphics.fov * Math.PI) / 180;
     this.far = 600;
     this.fogScale = 1;
     this.fogOverride = null;
-    this.fogRange = fogDistances(this.far, 1, false);
+    this.fogRange = fogDistances(this.far, 1, false, this.graphics.outdoorViewDistance);
     this.width = 1; this.height = 1;
+    this.viewport = computeViewport(1, 1, 1, this.graphics);
+    this.framebuffer = null;
+    this.dynamicLight = { pos: [0, 0, 0], color: [1, 0.78, 0.52], radius: 0, intensity: 0 };
+    this._perf = { lastAt: 0, frameMs: 16.6, avgFrameMs: 16.6, fps: 60, drawCalls: 0, samples: 0 };
+    this.fbo = null;
+    this.isWebGL2 = false;
+    this.anisoExt = null;
+    this.maxAniso = 1;
     this.camera = null;
     this.forward = [0, 0, -1];
     this.passes = [];
@@ -230,6 +390,15 @@ export class Renderer {
     this.primaryVertexLimit = null;
     this.skyFrame = null;
     this.skyInvViewProj = this.invViewProj;
+    this.skyState = undefined;
+    this.skyTone = null;
+    this.shade = null;
+    this.shadeInGl = true; // the atmosphere feature hands its night shade to `shade` instead of a CSS layer
+    this.frameId = 0;
+    this._skyPano = null;
+    this._skyPanoFrame = -9;
+    this._skyDrawH = 1;
+    this._skyEpoch = typeof performance !== 'undefined' ? performance.now() : Date.now();
     this.model = new Float32Array(16);
     const sun = [0.45, 0.75, 0.35];
     const l = Math.hypot(...sun);
@@ -255,21 +424,179 @@ export class Renderer {
   }
 
   init() {
-    const opts = { antialias: true, alpha: false, depth: true, powerPreference: 'high-performance' };
-    const gl = this.canvas.getContext('webgl2', opts) || this.canvas.getContext('webgl', opts);
+    const opts = { antialias: this.graphics?.antialias !== false, alpha: false, depth: true, powerPreference: 'high-performance' };
+    const gl2 = this.canvas.getContext('webgl2', opts);
+    const gl = gl2 || this.canvas.getContext('webgl', opts);
     if (!gl) throw new Error('WebGL is not available in this browser.');
     this.gl = gl;
+    this.isWebGL2 = !!gl2;
+    this.anisoExt = gl.getExtension('EXT_texture_filter_anisotropic')
+      || gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
+      || gl.getExtension('MOZ_EXT_texture_filter_anisotropic');
+    this.maxAniso = this.anisoExt ? gl.getParameter(this.anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 1 : 1;
     this.world = program(gl, WORLD_VS, WORLD_FS, ['a_pos', 'a_col', 'a_nrm', 'a_uv']);
     this.sky = program(gl, SKY_VS, SKY_FS, ['a_pos']);
+    this.fill = program(gl, SKY_VS, FILL_FS, ['a_pos']);
+    try {
+      this.dome = program(gl, DOME_VS, DOME_FS, ['a_pos']);
+    } catch (err) {
+      this.dome = null; // the plain gradient still draws
+      console.error('Sky shader unavailable', err);
+    }
+    this.post = program(gl, POST_VS, POST_FS, ['a_pos']);
     this.skyBuf = this.buffer(new Float32Array([-1, -1, 3, -1, -1, 3]));
     const c = cube();
     this.cube = { pos: this.buffer(c.pos), nrm: this.buffer(c.nrm), count: c.pos.length / 3 };
     this.white = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.white);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    this.fbo = null;
     this.mesh = null;
     this.gpu = new Map();
     this.contextVersion++;
+    this._syncCanvasStyle();
+  }
+
+  getGraphicsOptions() {
+    return { ...this.graphics };
+  }
+
+  setGraphicsOptions(patch, { persist = true } = {}) {
+    const prevFilter = this.graphics.textureFiltering;
+    const next = normalizeGraphicsOptions({ ...this.graphics, ...(patch || {}) });
+    this.graphics = persist ? saveGraphicsOptions(next) : next;
+    this.fov = (this.graphics.fov * Math.PI) / 180;
+    this._syncCanvasStyle();
+    if (!this.lost && this.gl && prevFilter !== this.graphics.textureFiltering) {
+      this._reapplyAllTextureFilters();
+    }
+    if (!this.lost && this.gl && this.fbo) {
+      this._updateFboFilter();
+    }
+    return this.getGraphicsOptions();
+  }
+
+  applyGraphicsPreset(presetName, opts) {
+    return this.setGraphicsOptions(applyQualityPreset(this.graphics, presetName), opts);
+  }
+
+  applyLightingPreset(presetName, opts) {
+    return this.setGraphicsOptions(applyLightingPreset(this.graphics, presetName), opts);
+  }
+
+  resetGraphicsOptions(opts) {
+    return this.setGraphicsOptions({ ...DEFAULT_GRAPHICS }, opts);
+  }
+
+  setDynamicLight({ pos, color, radius = 0, intensity = 0 } = {}) {
+    this.dynamicLight = {
+      pos: Array.isArray(pos) && pos.length >= 3 ? [Number(pos[0]) || 0, Number(pos[1]) || 0, Number(pos[2]) || 0] : this.dynamicLight.pos,
+      color: Array.isArray(color) && color.length >= 3 ? [Number(color[0]) || 1, Number(color[1]) || 0.8, Number(color[2]) || 0.55] : [1.0, 0.78, 0.52],
+      radius: Math.max(0, Number(radius) || 0),
+      intensity: Math.max(0, Number(intensity) || 0),
+    };
+  }
+
+  perfStats() {
+    return {
+      fps: Math.round(this._perf.fps),
+      frameMs: Number(this._perf.frameMs.toFixed(2)),
+      avgFrameMs: Number(this._perf.avgFrameMs.toFixed(2)),
+      fbWidth: this.viewport?.fbW ?? this.canvas.width,
+      fbHeight: this.viewport?.fbH ?? this.canvas.height,
+      canvasWidth: this.canvas.width,
+      canvasHeight: this.canvas.height,
+      retroMode: this.graphics.retroMode,
+      drawCalls: this._perf.drawCalls,
+      gpu: this.gpuStats(),
+    };
+  }
+
+  _syncCanvasStyle() {
+    if (!this.canvas?.style) return;
+    const pixelated = this.graphics.retroMode !== 'off' && this.graphics.retroNearest;
+    this.canvas.style.imageRendering = pixelated ? 'pixelated' : '';
+    if (this.canvas.dataset) {
+      this.canvas.dataset.retroMode = this.graphics.retroMode;
+      this.canvas.dataset.retroPalette = this.graphics.retroPalette;
+    }
+  }
+
+  _applyTextureFilter(tex, width, height) {
+    const gl = this.gl;
+    if (!gl || !tex) return;
+    const mode = this.graphics.textureFiltering;
+    const canMip = this.isWebGL2 || (isPow2(width) && isPow2(height));
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if (mode === 'trilinear' && canMip) {
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      if (this.anisoExt && this.maxAniso > 1) {
+        gl.texParameterf(gl.TEXTURE_2D, this.anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, this.maxAniso));
+      }
+    } else if (mode === 'bilinear' || (mode === 'trilinear' && !canMip)) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      if (this.anisoExt) gl.texParameterf(gl.TEXTURE_2D, this.anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, 1);
+    } else {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      if (this.anisoExt) gl.texParameterf(gl.TEXTURE_2D, this.anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, 1);
+    }
+  }
+
+  _reapplyAllTextureFilters() {
+    for (const g of this.gpu.values()) {
+      if (g?.tex) this._applyTextureFilter(g.tex, g.texWidth || 0, g.texHeight || 0);
+    }
+  }
+
+  _updateFboFilter() {
+    if (!this.fbo?.colorTex || !this.gl) return;
+    const gl = this.gl;
+    const nearest = this.graphics.retroMode !== 'off' ? this.graphics.retroNearest : false;
+    const filter = nearest ? gl.NEAREST : gl.LINEAR;
+    gl.bindTexture(gl.TEXTURE_2D, this.fbo.colorTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  }
+
+  _ensureFbo(w, h) {
+    const gl = this.gl;
+    if (this.fbo && this.fbo.width === w && this.fbo.height === h) {
+      this._updateFboFilter();
+      return this.fbo;
+    }
+    if (this.fbo) {
+      gl.deleteFramebuffer(this.fbo.fb);
+      gl.deleteTexture(this.fbo.colorTex);
+      gl.deleteRenderbuffer(this.fbo.depthRb);
+      this.fbo = null;
+    }
+    const fb = gl.createFramebuffer();
+    const colorTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, colorTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const depthRb = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colorTex, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRb);
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!ok) {
+      gl.deleteFramebuffer(fb);
+      gl.deleteTexture(colorTex);
+      gl.deleteRenderbuffer(depthRb);
+      return null;
+    }
+    this.fbo = { fb, colorTex, depthRb, width: w, height: h };
+    this._updateFboFilter();
+    return this.fbo;
   }
 
   /** Register a draw pass that runs after the world with depth testing intact. */
@@ -343,10 +670,11 @@ export class Renderer {
           gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
           const px = atlas.pixels instanceof Uint8Array ? atlas.pixels : new Uint8Array(atlas.pixels.buffer, atlas.pixels.byteOffset, atlas.pixels.byteLength);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, atlas.width, atlas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          mesh.texWidth = atlas.width;
+          mesh.texHeight = atlas.height;
+          this._applyTextureFilter(mesh.tex, atlas.width, atlas.height);
           mesh.bytes += count * 8 + atlas.width * atlas.height * 4;
           yield;
         }
@@ -448,6 +776,9 @@ export class Renderer {
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
       const px = a.pixels instanceof Uint8Array ? a.pixels : new Uint8Array(a.pixels.buffer, a.pixels.byteOffset, a.pixels.byteLength);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, a.width, a.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      mesh.texWidth = a.width;
+      mesh.texHeight = a.height;
+      this._applyTextureFilter(mesh.tex, a.width, a.height);
       mesh.bytes = mesh.count * (mesh.col ? 32 : 20) + a.width * a.height * 4;
     }
     // A closed gate draws its alternate UVs; keep that pose with the new atlas.
@@ -576,22 +907,31 @@ export class Renderer {
 
   resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
-    const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w;
-      this.canvas.height = h;
+    const vp = computeViewport(this.canvas.clientWidth || this.canvas.width || 1, this.canvas.clientHeight || this.canvas.height || 1, dpr, this.graphics);
+    this.viewport = vp;
+    if (this.canvas.width !== vp.canvasW || this.canvas.height !== vp.canvasH) {
+      this.canvas.width = vp.canvasW;
+      this.canvas.height = vp.canvasH;
     }
-    this.width = this.canvas.clientWidth;
-    this.height = this.canvas.clientHeight;
+    this.width = this.canvas.clientWidth || vp.canvasW;
+    this.height = this.canvas.clientHeight || vp.canvasH;
   }
 
   /** camera: {x, y, z, yaw, pitch}; avatars: [{ parts: [{ model, color }] }] */
   render(camera, avatars = []) {
     if (this.lost) return;
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const gl = this.gl;
+    const g = this.graphics;
     this.resize();
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+
+    const useOffscreen = needsOffscreenPass(g);
+    const activeFbo = useOffscreen ? this._ensureFbo(this.viewport.fbW, this.viewport.fbH) : null;
+    this.framebuffer = activeFbo ? activeFbo.fb : null;
+    const drawW = activeFbo ? activeFbo.width : this.canvas.width;
+    const drawH = activeFbo ? activeFbo.height : this.canvas.height;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, activeFbo ? activeFbo.fb : null);
+    gl.viewport(0, 0, drawW, drawH);
 
     const cp = Math.cos(camera.pitch);
     const eye = [camera.x, camera.y, camera.z];
@@ -600,8 +940,12 @@ export class Renderer {
     this.camera = camera;
     this.forward = fwd;
     // fogOverride: [start, end] metres set by the atmosphere feature (dungeon light radius, underwater).
-    this.fogRange = this.fogOverride ? [Math.min(this.fogOverride[0], this.far * 0.98), Math.min(this.fogOverride[1], this.far * 0.98)] : fogDistances(this.far, this.fogScale, this.outdoors);
-    M.perspective(this.proj, this.fov, this.canvas.width / this.canvas.height, 0.1, this.far);
+    const viewDist = this.outdoors ? g.outdoorViewDistance : this.far;
+    const farDist = this.outdoors ? Math.max(this.far, g.outdoorViewDistance + 400) : this.far;
+    this.fogRange = this.fogOverride
+      ? [Math.min(this.fogOverride[0], farDist * 0.98), Math.min(this.fogOverride[1], farDist * 0.98)]
+      : fogDistances(farDist, this.fogScale, this.outdoors, viewDist);
+    M.perspective(this.proj, this.fov, this.viewport.aspect, 0.1, farDist);
     M.lookAt(this.view, eye, [eye[0] + fwd[0], eye[1] + fwd[1], eye[2] + fwd[2]], [0, 1, 0]);
     M.multiply(this.viewProj, this.proj, this.view);
     M.invert(this.invViewProj, this.viewProj);
@@ -610,22 +954,35 @@ export class Renderer {
       M.invert(this.skyInvViewProj, M.multiply(this.tmp, this.viewProj, this.skyFrame));
     } else this.skyInvViewProj = this.invViewProj;
 
+    let drawCalls = 0;
     gl.clearColor(...PALETTE.horizon, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.disable(gl.CULL_FACE);
 
-    // Sky
+    // Sky. Outdoors it is the atmospheric dome; a scenery pass that holds the classic panorama draws the dome
+    // again with it (after the world, where nothing was drawn), so this first one is skipped while that runs.
+    this.frameId++;
+    this._skyDrawH = drawH;
+    this._skyDomeFrame = -9;
+    const panoRuns = this._skyPanoFrame === this.frameId - 1;
+    const domeBase = this.domeActive() && g.skyStyle !== 'classic';
     gl.depthMask(false);
     gl.disable(gl.DEPTH_TEST);
-    gl.useProgram(this.sky.p);
-    gl.uniformMatrix4fv(this.sky.u.u_invVp, false, this.skyInvViewProj);
-    gl.uniform3fv(this.sky.u.u_zenith, PALETTE.zenith);
-    gl.uniform3fv(this.sky.u.u_horizon, PALETTE.horizon);
-    gl.uniform3fv(this.sky.u.u_ground, PALETTE.ground);
-    gl.uniform3fv(this.sky.u.u_sunDir, this.sunDir);
-    this.bindAttr(0, this.skyBuf, 2);
-    for (let i = 1; i < 4; i++) gl.disableVertexAttribArray(i);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (domeBase) {
+      if (!panoRuns) { this.drawSkyDome(null); drawCalls++; }
+      else this._skyDomeFrame = this.frameId;
+    } else if (!(panoRuns && this.domeActive())) {
+      gl.useProgram(this.sky.p);
+      gl.uniformMatrix4fv(this.sky.u.u_invVp, false, this.skyInvViewProj);
+      gl.uniform3fv(this.sky.u.u_zenith, PALETTE.zenith);
+      gl.uniform3fv(this.sky.u.u_horizon, PALETTE.horizon);
+      gl.uniform3fv(this.sky.u.u_ground, PALETTE.ground);
+      gl.uniform3fv(this.sky.u.u_sunDir, this.sunDir);
+      this.bindAttr(0, this.skyBuf, 2);
+      for (let i = 1; i < 4; i++) gl.disableVertexAttribArray(i);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      drawCalls++;
+    }
 
     // World
     gl.depthMask(true);
@@ -638,6 +995,15 @@ export class Renderer {
     gl.uniform3fv(w.u.u_fogColor, PALETTE.horizon);
     gl.uniform2fv(w.u.u_fog, this.fogRange);
     gl.uniform1i(w.u.u_tex, 0);
+    gl.uniform1f(w.u.u_ambient, g.ambientLight);
+    gl.uniform1f(w.u.u_shadowStrength, g.dynamicShadows ? 0.38 : 0.16);
+    const dl = this.dynamicLight;
+    const dynRadius = g.dynamicLights ? dl.radius * g.spellLightBoost : 0;
+    const dynIntensity = g.dynamicLights ? dl.intensity * (0.75 + 0.25 * g.spellLightBoost) : 0;
+    gl.uniform3fv(w.u.u_dynLightPos, dl.pos);
+    gl.uniform3fv(w.u.u_dynLightColor, dl.color);
+    gl.uniform1f(w.u.u_dynLightRadius, dynRadius);
+    gl.uniform1f(w.u.u_dynLightIntensity, dynIntensity);
     gl.activeTexture(gl.TEXTURE0);
 
     gl.uniform3f(w.u.u_tint, 1, 1, 1);
@@ -646,12 +1012,14 @@ export class Renderer {
     if (this.mesh) {
       this.updateCityGates(this.town, this.mesh);
       this.drawMesh(this.mesh, this.primaryOffset, null, this.primaryVertexLimit);
+      drawCalls++;
     }
     for (const l of this.layers) {
-      const g = this.gpu.get(l.mesh);
-      if (g) {
-        this.updateCityGates(l.mesh, g);
-        this.drawMesh(g, l.offset);
+      const gmesh = this.gpu.get(l.mesh);
+      if (gmesh) {
+        this.updateCityGates(l.mesh, gmesh);
+        this.drawMesh(gmesh, l.offset);
+        drawCalls++;
       }
     }
 
@@ -672,6 +1040,7 @@ export class Renderer {
           gl.uniformMatrix4fv(w.u.u_model, false, part.model);
           gl.uniform3fv(w.u.u_tint, part.color);
           gl.drawArrays(gl.TRIANGLES, 0, this.cube.count);
+          drawCalls++;
         }
       }
     }
@@ -686,6 +1055,149 @@ export class Renderer {
         }
       }
     }
+
+    // The night and weather shade over everything drawn, then the sky's own light added back where the sky shows.
+    drawCalls += this._shadeFrame();
+
+    // Fullscreen retro / post-processing blit to screen backbuffer
+    if (activeFbo) {
+      this.framebuffer = null;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      const { x, y, w: dw, h: dh } = this.viewport.dst;
+      gl.viewport(x, y, dw, dh);
+      gl.disable(gl.DEPTH_TEST);
+      gl.depthMask(false);
+      gl.disable(gl.BLEND);
+      const post = this.post;
+      gl.useProgram(post.p);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, activeFbo.colorTex);
+      gl.uniform1i(post.u.u_tex, 0);
+      gl.uniform2f(post.u.u_texSize, activeFbo.width, activeFbo.height);
+      const palMap = { off: 0, vga256: 1, posterize6: 2, daggerfall: 3 };
+      gl.uniform1f(post.u.u_paletteMode, palMap[g.retroPalette] ?? 0);
+      gl.uniform1f(post.u.u_dither, g.retroDither === 'bayer4' ? 1 : 0);
+      gl.uniform1f(post.u.u_scanlines, g.retroMode !== 'off' || g.retroScanlines > 0 ? g.retroScanlines : 0);
+      gl.uniform1f(post.u.u_bloom, g.postProcessing ? g.bloom : 0);
+      gl.uniform1f(post.u.u_vignette, g.postProcessing ? g.vignette : 0);
+      gl.uniform1f(post.u.u_fxaa, g.postProcessing && g.antialias && g.retroMode === 'off' ? 1 : 0);
+      const quantized = (palMap[g.retroPalette] ?? 0) > 0 || g.retroDither === 'bayer4';
+      const sh = quantized && this.shade ? this.shade.map((v) => Math.min(1, Math.max(0.06, v))) : [1, 1, 1];
+      gl.uniform3f(post.u.u_unshade, sh[0], sh[1], sh[2]);
+      this.bindAttr(0, this.skyBuf, 2);
+      for (let i = 1; i < 4; i++) gl.disableVertexAttribArray(i);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      drawCalls++;
+      gl.depthMask(true);
+      gl.enable(gl.DEPTH_TEST);
+    }
+
+    const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const frameMs = Math.max(0.05, t1 - t0);
+    const dt = this._perf.lastAt > 0 ? Math.max(1, t1 - this._perf.lastAt) : 16.6;
+    this._perf.lastAt = t1;
+    this._perf.frameMs = frameMs;
+    this._perf.avgFrameMs = this._perf.samples === 0 ? frameMs : this._perf.avgFrameMs * 0.9 + frameMs * 0.1;
+    this._perf.fps = this._perf.samples === 0 ? Math.min(240, 1000 / dt) : this._perf.fps * 0.9 + Math.min(240, 1000 / dt) * 0.1;
+    this._perf.drawCalls = drawCalls;
+    this._perf.samples++;
+  }
+
+  /** Whether the outdoor sky is the dome (outdoors, shader built, and not held to the plain gradient). */
+  domeActive() {
+    return !!this.dome && this.outdoors === true && this.skyState !== null;
+  }
+
+  /**
+   * Draw the outdoor sky over the whole view with the current GL depth and blend state.
+   * @param {{texA:WebGLTexture, texB:WebGLTexture, texN:WebGLTexture|null, blend:number, top:number[], mid:number[], horizon:number[]}|null} pano
+   *   the classic panorama for the moment (two day frames, how far between them, the night ridge image, and
+   *   the frames' blended top-row and fog colours), or null for the procedural horizon
+   * @param {number[]|null} scale output multiplier (the shade pass adds the sky back with 1 - shade)
+   */
+  drawSkyDome(pano = null, scale = null) {
+    const gl = this.gl, p = this.dome;
+    if (!p) return false;
+    const st = this.skyState ?? DEFAULT_SKY_STATE;
+    const g = this.graphics;
+    const colors = skyColors(st, pano);
+    if (scale === null) {
+      this._skyDomeFrame = this.frameId;
+      this._skyPano = pano;
+      if (pano) {
+        this._skyPanoFrame = this.frameId;
+        this.skyTone = { horizon: colors.fog, zenith: colors.low, frame: this.frameId };
+      }
+    }
+    const u = p.u;
+    gl.useProgram(p.p);
+    gl.uniformMatrix4fv(u.u_invVp, false, this.skyInvViewProj);
+    gl.uniform1f(u.u_time, ((typeof performance !== 'undefined' ? performance.now() : Date.now()) - this._skyEpoch) / 1000);
+    gl.uniform3fv(u.u_horizon, PALETTE.horizon);
+    gl.uniform3fv(u.u_ground, PALETTE.ground);
+    gl.uniform3fv(u.u_shade, this.shade ?? [1, 1, 1]);
+    gl.uniform3fv(u.u_outScale, scale ?? [1, 1, 1]);
+    gl.uniform3fv(u.u_skyLow, colors.low);
+    gl.uniform3fv(u.u_skyTop, colors.top);
+    gl.uniform3fv(u.u_cloudLit, colors.cloudLit);
+    gl.uniform3fv(u.u_cloudDark, colors.cloudDark);
+    gl.uniform3fv(u.u_sunDir, st.sunDir);
+    gl.uniform4f(u.u_sun, st.day, 0, st.warmth, st.stars);
+    gl.uniform4f(u.u_cloud, st.cloud.cover, st.cloud.grey, st.cloud.deck, st.cloud.mist);
+    gl.uniform4f(u.u_flash, st.flashDir[0], st.flashDir[1], st.flashDir[2], st.flash);
+    const { masser, secunda } = st.moons;
+    gl.uniform4f(u.u_moonA, masser.dir[0], masser.dir[1], masser.dir[2], masser.phase);
+    gl.uniform4f(u.u_moonB, secunda.dir[0], secunda.dir[1], secunda.dir[2], secunda.phase);
+    gl.uniform4f(u.u_pano, pano ? (g.skyStyle === 'classic' ? 2 : 1) : 0, pano?.blend ?? 0, st.night, pano?.texN ? 1 : 0);
+    // No ridges at sea: a ship's sky frame means open water all round.
+    gl.uniform4f(u.u_view, 1 / Math.tan(this.fov / 2), this.fov / Math.max(1, this._skyDrawH), (st.minuteOfDay / 1440) * Math.PI * 2, this.skyFrame ? 0 : 0.085);
+    const tex = [pano?.texA, pano?.texB, pano?.texN];
+    for (let i = 2; i >= 0; i--) {
+      gl.activeTexture(gl.TEXTURE0 + i);
+      gl.bindTexture(gl.TEXTURE_2D, tex[i] ?? this.white);
+    }
+    gl.uniform1i(u.u_texA, 0);
+    gl.uniform1i(u.u_texB, 1);
+    gl.uniform1i(u.u_texN, 2);
+    this.bindAttr(0, this.skyBuf, 2);
+    for (let i = 1; i < 4; i++) gl.disableVertexAttribArray(i);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return true;
+  }
+
+  /** Multiply `shade` over the frame, then add the outdoor sky back (it is drawn in its final colours). */
+  _shadeFrame() {
+    const s = this.shade;
+    if (!s || (s[0] > 0.996 && s[1] > 0.996 && s[2] > 0.996)) return 0;
+    const gl = this.gl;
+    let calls = 1;
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.DST_COLOR, gl.ZERO);
+    gl.useProgram(this.fill.p);
+    gl.uniform3f(this.fill.u.u_color, Math.min(1, Math.max(0, s[0])), Math.min(1, Math.max(0, s[1])), Math.min(1, Math.max(0, s[2])));
+    this.bindAttr(0, this.skyBuf, 2);
+    for (let i = 1; i < 4; i++) gl.disableVertexAttribArray(i);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (this._skyDomeFrame === this.frameId && this.dome) {
+      // Only where the depth buffer still holds its cleared 1.0: the sky itself.
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      this.drawSkyDome(this._skyPanoFrame === this.frameId ? this._skyPano : null, [1 - s[0], 1 - s[1], 1 - s[2]].map((v) => Math.min(1, Math.max(0, v))));
+      gl.depthFunc(gl.LESS);
+      calls++;
+    }
+    gl.disable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ZERO);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    return calls;
   }
 
   bindAttr(loc, buf, size) {
@@ -697,6 +1209,20 @@ export class Renderer {
 
   /** World point to CSS pixel coordinates (after the last render). */
   project(x, y, z) {
+    const vp = this.viewport;
+    if (vp?.retro && vp.dst && this.canvas.width > 0 && this.canvas.height > 0) {
+      const sx = this.width / this.canvas.width;
+      const sy = this.height / this.canvas.height;
+      const localW = vp.dst.w * sx;
+      const localH = vp.dst.h * sy;
+      const p = M.projectToScreen(this.viewProj, x, y, z, localW, localH);
+      if (!p) return null;
+      return {
+        ...p,
+        x: p.x + vp.dst.x * sx,
+        y: p.y + (this.canvas.height - vp.dst.y - vp.dst.h) * sy,
+      };
+    }
     return M.projectToScreen(this.viewProj, x, y, z, this.width, this.height);
   }
 }

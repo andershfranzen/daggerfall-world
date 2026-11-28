@@ -1,8 +1,24 @@
-// Party & trade screen (panel `party`, key O) and party/region/global chat channels.
-// Server rules: server/rpg/social.js. All state comes from `{kind:'social', social}` events;
-// every button sends one server action and the panel re-renders from the server's reply.
+// Social screen (panel `party`, key O):
+//   - Fellowship & Travel: party roster, location sharing (off/coarse/exact), map pings,
+//     travel-to-leader quotes, expiring group travel ready-checks, two-sided trade, travellers roll, chat.
+//   - Friends & Blocks: account-scoped friends, exact-name & peer requests, privacy toggles,
+//     directed blocks, and moderator report submission.
+//   - Letters: account mailbox with inbox, sent, reply threading, unread badge, cursor pagination,
+//     plain-text rendering, per-viewer delete, and letter evidence reporting.
 import { getItemArtSource, itemIcon } from './inventory/icons.js';
-import { CHAT_HELP_SUMMARY, describeOffer, draftFrom, draftMatches, draftToArgs, parseChatInput, tradeableItems } from './social/model.js';
+import {
+  CHAT_HELP_SUMMARY,
+  describeFriendPresence,
+  describeMemberLocation,
+  describeOffer,
+  draftFrom,
+  draftMatches,
+  draftToArgs,
+  formatRelativeTime,
+  parseChatInput,
+  resetPrivateUiState,
+  tradeableItems,
+} from './social/model.js';
 
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -30,6 +46,22 @@ const CHANNEL_LABEL = {
   global: 'Global',
 };
 
+const QUICK_DESTINATIONS = Object.freeze([
+  { id: '', label: 'Follow Party Leader' },
+  { id: 'town:Daggerfall/Gothway Garden', label: 'Gothway Garden (Daggerfall)' },
+  { id: 'town:Daggerfall/Daggerfall', label: 'City of Daggerfall' },
+  { id: 'town:Wayrest/Wayrest', label: 'City of Wayrest' },
+  { id: 'town:Sentinel/Sentinel', label: 'City of Sentinel' },
+]);
+
+const REPORT_CATEGORIES = Object.freeze([
+  ['harassment', 'Harassment'],
+  ['spam', 'Spam / Flooding'],
+  ['impersonation', 'Impersonation'],
+  ['abuse', 'Abuse / Threats'],
+  ['other', 'Other'],
+]);
+
 function loadStyles() {
   if (typeof document === 'undefined' || document.querySelector('link[data-feature="social"]')) return;
   const link = document.createElement('link');
@@ -43,7 +75,9 @@ export function install(api) {
   loadStyles();
   getItemArtSource(api);
   const ui = {
+    tab: 'fellowship', // 'fellowship' | 'friends' | 'letters'
     social: null,
+    lastSelfId: null,
     selectedId: null,
     draft: null, // {tradeId, revision, items: Map, gold}
     channel: 'region',
@@ -51,18 +85,49 @@ export function install(api) {
     compose: '',
     scope: 'all', // 'all' | 'region' | 'near'
     search: '',
-    recentChat: [], // last 20 dispatches {channel, name, toName, text, self, region}
+    recentChat: [],
     status: '',
     synced: false,
+    // Friends & Blocks UI state
+    friendFilter: 'all', // 'all' | 'online'
+    addFriendName: '',
+    addBlockName: '',
+    friendsExtra: [],
+    friendsNextCursor: null,
+    privacyDraft: null,
+    // Letters / Mailbox UI state
+    mailFolder: 'inbox', // 'inbox' | 'sent'
+    mailExtra: { inbox: [], sent: [] },
+    mailNextCursor: { inbox: null, sent: null },
+    activeThread: null, // thread object from server
+    mailReply: '',
+    composeMail: null, // { toAccount, toName, subject, body }
+    // Party Coordination UI state
+    pingLabel: 'Rally Point',
+    pingNote: '',
+    travelDest: '',
+    travelSpeed: 'reckless',
+    travelLodging: 'camp',
+    travelShip: false,
+    travelQuote: null,
+    // Moderation Report drawer state
+    reportDraft: null, // { targetId, targetAccount, targetName, evidenceType, evidenceId, evidenceExcerpt, category, reason }
   };
   let container = null;
+  let mailReqSeq = 0;
 
   const character = () => api.state?.character ?? null;
+  const selfPlayerId = () => {
+    const v = api.selfId ?? api.state?.selfId;
+    const n = Number(v);
+    return Number.isSafeInteger(n) ? n : null;
+  };
   const rerender = () => {
     if (container?.isConnected) render(container);
     else if (api.panel === 'party') api.refreshPanel?.('party');
   };
   api.on('assets', rerender);
+
   const act = (verb, args) => {
     try {
       api.act(verb, args);
@@ -76,39 +141,126 @@ export function install(api) {
     if (live) live.textContent = text;
   };
 
+  function syncPrivacyDraft() {
+    const c = ui.social?.contacts;
+    if (!c) { ui.privacyDraft = null; return; }
+    if (!ui.privacyDraft) {
+      ui.privacyDraft = {
+        publicLabel: c.publicLabel || '',
+        allowRequests: c.settings?.allowRequests ?? 'everyone',
+        showPresence: c.settings?.showPresence ?? 'friends',
+        showLastActive: c.settings?.showLastActive !== false,
+        allowLetters: c.settings?.allowLetters !== false,
+      };
+    }
+  }
+
   // ---------------------------------------------------------------- server events
   api.on('event', (ev) => {
     if (!ev) return;
     if (ev.kind === 'social') {
-      if (ev.social) ui.social = ev.social;
+      if (ev.social) {
+        ui.social = ev.social;
+        ui.friendsNextCursor = ev.social.contacts?.nextCursor ?? null;
+        ui.mailNextCursor.inbox = ev.social.mail?.inboxNextCursor ?? null;
+        ui.mailNextCursor.sent = ev.social.mail?.sentNextCursor ?? null;
+        if (!ui.privacyDraft && ev.social.contacts) syncPrivacyDraft();
+      }
+      if (ev.friendsPage) {
+        const baseIds = new Set((ui.social?.contacts?.friends ?? []).map((f) => f.accountKey));
+        for (const f of ev.friendsPage.friends ?? []) {
+          if (!baseIds.has(f.accountKey) && !ui.friendsExtra.some((x) => x.accountKey === f.accountKey)) {
+            ui.friendsExtra.push(f);
+          }
+        }
+        ui.friendsNextCursor = ev.friendsPage.nextCursor ?? null;
+      }
+      if (ev.mailPage) {
+        const folder = ev.mailPage.folder === 'sent' ? 'sent' : 'inbox';
+        const baseIds = new Set((ui.social?.mail?.[folder] ?? []).map((m) => m.id));
+        const list = ui.mailExtra[folder];
+        for (const item of ev.mailPage.items ?? []) {
+          if (!baseIds.has(item.id) && !list.some((x) => x.id === item.id)) list.push(item);
+        }
+        ui.mailNextCursor[folder] = ev.mailPage.nextCursor ?? null;
+      }
+      if (ev.mailThread) {
+        ui.activeThread = ev.mailThread;
+      }
+      if (ev.mailSent) {
+        if (ui.composeMail) ui.composeMail = null;
+        if (ui.activeThread && ev.mailSent.threadId === ui.activeThread.threadId) {
+          act('mail.thread', { threadId: ui.activeThread.threadId, markRead: true });
+        }
+      }
+      if (ev.mailReceived) {
+        if (ui.activeThread && ev.mailReceived.threadId === ui.activeThread.threadId) {
+          act('mail.thread', { threadId: ui.activeThread.threadId, markRead: false });
+        }
+        if (api.panel !== 'party') {
+          api.message(`New letter from ${ev.mailReceived.fromLabel}. Press O → Letters.`);
+        }
+      }
+      if (ev.mailDeleted && ui.activeThread) {
+        ui.activeThread.messages = ui.activeThread.messages.filter((m) => m.id !== ev.mailDeleted.letterId);
+        if (!ui.activeThread.messages.length) ui.activeThread = null;
+      }
+      if (ev.partyTravelQuote) {
+        ui.travelQuote = ev.partyTravelQuote;
+      }
+      if (ev.reportSubmitted) {
+        ui.reportDraft = null;
+      }
       syncDraft();
       if (ev.text) {
         ev.silent = true;
         api.message(ev.text);
         say(ev.text);
       }
-      if ((ev.invite || ev.tradeRequest) && api.panel !== 'party') api.message('Press O to open Party & Trade.');
+      if ((ev.invite || ev.tradeRequest || ev.friendRequest) && api.panel !== 'party') {
+        api.message('Press O to open Social.');
+      }
       rerender();
     } else if (ev.kind === 'chat' && ev.channel) {
       chatLine(ev);
       if (container?.isConnected) renderRecentFeed();
     }
   });
+
   api.on('state', () => {
+    const sid = api.state?.selfId ?? null;
+    if (sid != null && ui.lastSelfId != null && String(sid) !== String(ui.lastSelfId)) {
+      // Clear all private UI state on character/account switch before syncing next character.
+      resetPrivateUiState(ui);
+      ui.privacyDraft = null;
+      ui.synced = false;
+    }
+    if (sid != null) ui.lastSelfId = sid;
     if (!ui.synced && api.state) {
       ui.synced = true;
       act('social.sync');
     }
   });
+
   api.on('screen', (s) => {
-    if (s !== 'game') { ui.synced = false; ui.recentChat.length = 0; }
+    if (s !== 'game') {
+      ui.synced = false;
+      ui.lastSelfId = null;
+      ui.privacyDraft = null;
+      resetPrivateUiState(ui);
+    }
   });
+
   api.on('panel', (p) => {
     if (p?.id === 'party' && p.open) act('social.sync');
   });
+
   api.on('panelDetail', (d) => {
-    if (d?.id === 'party' && d.detail?.targetId != null) {
-      ui.selectedId = Number(d.detail.targetId);
+    if (d?.id === 'party' && d.detail) {
+      if (d.detail.targetId != null) ui.selectedId = Number(d.detail.targetId);
+      if (d.detail.tab && ['fellowship', 'friends', 'letters'].includes(d.detail.tab)) {
+        ui.tab = d.detail.tab;
+      }
       rerender();
     }
   });
@@ -220,7 +372,6 @@ export function install(api) {
   }
 
   // ---------------------------------------------------------------- rendering
-
   function renderRecentFeed() {
     const feed = container?.querySelector('.soc-feed');
     if (!feed) return;
@@ -250,23 +401,47 @@ export function install(api) {
         el('p', { class: 'soc-empty', text: 'Consulting the herald’s rolls for travellers in the Iliac Bay…' })));
       return;
     }
-    const invites = invitesView(s);
-    const trade = tradeView(s);
-    const leftCol = el('div', { class: 'soc-col soc-col-left' },
-      partyView(s),
-      !s.trade ? satchelView(s) : null,
+
+    const pendingReq = s.contacts?.incoming?.length ?? 0;
+    const unreadMail = s.mail?.unreadCount ?? 0;
+    const hasProposal = Boolean(s.party?.travelProposal);
+
+    const tabs = el('nav', { class: 'soc-tabs', role: 'tablist', 'aria-label': 'Social sections' },
+      tabButton('fellowship', 'Fellowship & Travel', hasProposal ? 'Ready Check' : null, hasProposal),
+      tabButton('friends', 'Friends & Blocks', pendingReq > 0 ? String(pendingReq) : null, pendingReq > 0),
+      tabButton('letters', 'Letters', unreadMail > 0 ? String(unreadMail) : null, unreadMail > 0),
     );
-    const rightCol = el('div', { class: 'soc-col soc-col-right' },
-      peopleView(s),
-      composeView(s),
-    );
-    root.replaceChildren(...[
-      live,
-      invites,
-      trade,
-      el('div', { class: 'soc-grid' }, leftCol, rightCol),
-    ].filter(Boolean));
-    renderRecentFeed();
+
+    const reportBox = ui.reportDraft ? reportDrawerView() : null;
+
+    let body;
+    if (ui.tab === 'friends') {
+      body = friendsTabView(s);
+    } else if (ui.tab === 'letters') {
+      body = lettersTabView(s);
+    } else {
+      body = fellowshipTabView(s);
+    }
+
+    root.replaceChildren(...[tabs, live, reportBox, body].filter(Boolean));
+    if (ui.tab === 'fellowship') renderRecentFeed();
+  }
+
+  function tabButton(id, label, badgeText, highlight) {
+    const active = ui.tab === id;
+    return el('button', {
+      type: 'button',
+      role: 'tab',
+      class: `soc-tab-btn${active ? ' is-active' : ''}`,
+      'aria-selected': String(active),
+      'data-soc-tab': id,
+      onclick: () => {
+        ui.tab = id;
+        rerender();
+      },
+    },
+      el('span', { text: label }),
+      badgeText ? el('span', { class: `soc-tab-badge${highlight ? ' is-alert' : ''}`, text: badgeText }) : null);
   }
 
   function section(title, cls, badge, ...kids) {
@@ -276,6 +451,89 @@ export function install(api) {
         el('h3', { class: 'soc-h', id, text: title }),
         badge ? el('span', { class: 'soc-head-badge', text: badge }) : null),
       ...kids);
+  }
+
+  // ---------------------------------------------------------------- Fellowship & Travel tab
+  function fellowshipTabView(s) {
+    const invites = invitesView(s);
+    const trade = tradeView(s);
+    const readyBanner = readyCheckBannerView(s);
+    const leftCol = el('div', { class: 'soc-col soc-col-left' },
+      partyView(s),
+      s.party ? partyCoordinationView(s) : null,
+      !s.trade ? satchelView(s) : null,
+    );
+    const rightCol = el('div', { class: 'soc-col soc-col-right' },
+      peopleView(s),
+      composeView(s),
+    );
+    return el('div', { class: 'soc-tab-panel', 'data-panel': 'fellowship' },
+      invites,
+      readyBanner,
+      trade,
+      el('div', { class: 'soc-grid' }, leftCol, rightCol));
+  }
+
+  function readyCheckBannerView(s) {
+    const p = s.party;
+    const proposal = p?.travelProposal;
+    if (!p || !proposal) return null;
+    const selfId = selfPlayerId();
+    const me = proposal.participants.find((x) => Number(x.id) === selfId);
+    const canCancel = Number(proposal.proposerId) === selfId || Number(p.leaderId) === selfId;
+    const secsLeft = Number.isFinite(proposal.remainingMs)
+      ? Math.max(0, Math.ceil(proposal.remainingMs / 1000))
+      : Math.max(0, Math.ceil((proposal.expiresAt - Date.now()) / 1000));
+    return section(
+      `Group Travel Ready Check — ${proposal.destinationName} (${proposal.destinationRegion})`,
+      'invites',
+      `Rev #${proposal.revision} · ${secsLeft}s left`,
+      proposal.notice ? el('p', { class: 'soc-warn-note', text: proposal.notice }) : null,
+      el('ul', { class: 'soc-list soc-ready-list' }, proposal.participants.map((part) => {
+        const fareText = part.alreadyThere
+          ? 'Already at destination'
+          : part.eligible
+            ? `${part.cost} gp · ${part.days}d (${part.transport})`
+            : `Ineligible: ${part.reason}`;
+        return el('li', { class: `soc-row soc-ready-row${part.confirmed ? ' is-ready' : ''}${!part.eligible ? ' is-blocked' : ''}` },
+          el('span', { class: 'soc-slot-main' },
+            el('span', { class: 'soc-slot-name', text: `${part.name}${Number(part.id) === selfId ? ' (you)' : ''}` }),
+            el('span', { class: 'soc-meta', text: fareText })),
+          el('span', { class: `soc-seal-state${part.confirmed ? ' soc-ok' : ''}`, text: part.confirmed ? 'Ready' : 'Pending' }));
+      })),
+      el('div', { class: 'soc-foot-actions' },
+        me && !me.confirmed
+          ? el('button', {
+            type: 'button',
+            class: 'btn btn-small btn-primary',
+            disabled: me.eligible ? null : true,
+            title: me.eligible ? `Confirm ${me.cost} gp journey` : me.reason,
+            onclick: () => act('party.travelRespond', {
+              proposalId: proposal.id,
+              revision: proposal.revision,
+              response: 'ready',
+              expectCost: me.cost,
+            }),
+          }, me.alreadyThere ? 'Confirm Ready' : `Confirm Ready (${me.cost} gp)`)
+          : null,
+        me
+          ? el('button', {
+            type: 'button', class: 'btn btn-small',
+            onclick: () => act('party.travelRespond', { proposalId: proposal.id, revision: proposal.revision, response: 'opt_out' }),
+          }, 'Opt Out')
+          : null,
+        me
+          ? el('button', {
+            type: 'button', class: 'btn btn-small btn-danger',
+            onclick: () => act('party.travelRespond', { proposalId: proposal.id, revision: proposal.revision, response: 'decline' }),
+          }, 'Decline')
+          : null,
+        canCancel
+          ? el('button', {
+            type: 'button', class: 'btn btn-small',
+            onclick: () => act('party.travelCancel', { proposalId: proposal.id }),
+          }, 'Cancel')
+          : null));
   }
 
   function invitesView(s) {
@@ -315,19 +573,20 @@ export function install(api) {
       return section('Fellowship', 'party', `1 / ${maxSlots}`,
         el('ul', { class: 'soc-slots' }, slots),
         pending,
-        el('p', { class: 'soc-note', text: 'Invite travellers from the roll to share dungeon delves, split kills, and speak over Party chat (/p).' }));
+        el('p', { class: 'soc-note', text: 'Invite travellers from the roll to share dungeon delves, coordinate map pings, and travel together.' }));
     }
 
-    const self = api.state?.selfId;
-    const lead = p.leaderId === self;
+    const self = selfPlayerId();
+    const lead = Number(p.leaderId) === self;
     const rows = p.members.map((m) => {
-      const me = m.id === self;
-      const isLeader = m.id === p.leaderId;
+      const me = Number(m.id) === self;
+      const isLeader = Number(m.id) === Number(p.leaderId);
+      const locLine = describeMemberLocation(m);
       return el('li', { class: `soc-slot${me ? ' soc-slot-self' : ''}${m.online ? '' : ' soc-offline'}` },
         el('span', { class: `soc-lamp${m.online ? ' soc-lamp-on' : ''}`, 'aria-hidden': 'true' }),
         el('span', { class: 'soc-slot-main' },
           el('span', { class: 'soc-slot-name' }, m.name, me ? ' (you)' : ''),
-          el('span', { class: 'soc-meta', text: m.online ? (m.location || 'Online') : 'Offline' })),
+          el('span', { class: 'soc-meta', text: locLine })),
         isLeader ? el('span', { class: 'soc-badge soc-badge-gold', text: 'Leader' }) : null,
         lead && !me
           ? el('span', { class: 'soc-actions' },
@@ -344,11 +603,138 @@ export function install(api) {
     const pending = s.outgoing?.length
       ? el('p', { class: 'soc-pending-note', text: `Summons sent to: ${s.outgoing.map((o) => o.toName).join(', ')}.` })
       : null;
+
+    const shareMode = p.myLocationSharing ?? 'coarse';
+    const shareBar = el('div', { class: 'soc-share-bar' },
+      el('span', { class: 'soc-share-label', text: 'Share Location:' }),
+      el('div', { class: 'soc-scopes', role: 'group', 'aria-label': 'Party location sharing mode' },
+        [
+          ['off', 'Hidden'],
+          ['coarse', 'Coarse'],
+          ['exact', 'Exact Pins'],
+        ].map(([mode, label]) => el('button', {
+          type: 'button',
+          class: 'soc-scope-btn',
+          'aria-pressed': String(shareMode === mode),
+          onclick: () => act('party.locationShare', { mode }),
+        }, label))));
+
     return section('Fellowship', 'party', `${p.members.length} / ${p.max}`,
+      shareBar,
       el('ul', { class: 'soc-slots' }, rows),
       pending,
       el('div', { class: 'soc-foot-actions' },
         el('button', { type: 'button', class: 'btn btn-small btn-danger', 'data-focus-key': 'leave', onclick: () => act('party.leave') }, 'Leave Fellowship')));
+  }
+
+  function partyCoordinationView(s) {
+    const p = s.party;
+    if (!p) return null;
+    const selfId = api.state?.selfId;
+    const proposal = p.travelProposal;
+    const pings = p.pings ?? [];
+
+    const pingForm = el('form', {
+      class: 'soc-inline-form',
+      onsubmit: (e) => {
+        e.preventDefault();
+        act('party.ping', { label: ui.pingLabel, note: ui.pingNote });
+        ui.pingNote = '';
+      },
+    },
+      el('input', {
+        type: 'text', class: 'soc-input-sm', value: ui.pingLabel, maxlength: '48', placeholder: 'Pin label…',
+        'aria-label': 'Map ping label',
+        oninput: (e) => (ui.pingLabel = e.target.value),
+        onkeydown: (e) => e.stopPropagation(),
+      }),
+      el('input', {
+        type: 'text', class: 'soc-input-grow', value: ui.pingNote, maxlength: '120', placeholder: 'Optional note for party…',
+        'aria-label': 'Map ping note',
+        oninput: (e) => (ui.pingNote = e.target.value),
+        onkeydown: (e) => e.stopPropagation(),
+      }),
+      el('button', { type: 'submit', class: 'btn btn-small btn-primary' }, 'Drop Ping'));
+
+    const pingList = pings.length
+      ? el('ul', { class: 'soc-list soc-ping-list' }, pings.slice(-4).reverse().map((pg) => {
+        const coords = pg.exact && Number.isFinite(pg.exact.x)
+          ? ` (${Math.round(pg.exact.x)}, ${Math.round(pg.exact.z)})`
+          : pg.exact && Number.isFinite(pg.exact.mapX)
+            ? ` [Map ${pg.exact.mapX},${pg.exact.mapY}]`
+            : '';
+        return el('li', { class: 'soc-row soc-ping-row' },
+          el('span', { class: 'soc-seal', 'aria-hidden': 'true', text: '◈' }),
+          el('span', { class: 'soc-slot-main' },
+            el('strong', { class: 'soc-slot-name', text: `${pg.label} · ${pg.fromName}` }),
+            el('span', { class: 'soc-meta', text: `${pg.landmark || pg.region}${coords}${pg.note ? ` — ${pg.note}` : ''}` })));
+      }))
+      : el('p', { class: 'soc-note', text: 'No active map pings. Drop a rally pin to mark your current landmark or coordinates.' });
+
+    let travelBlock = null;
+    if (!proposal) {
+      const destSelect = el('select', {
+        class: 'soc-select',
+        'aria-label': 'Group travel destination',
+        onchange: (e) => { ui.travelDest = e.target.value; rerender(); },
+      }, QUICK_DESTINATIONS.map((d) => el('option', {
+        value: d.id,
+        selected: ui.travelDest === d.id ? true : null,
+        text: d.id === '' && p.leaderDestination ? `Leader: ${p.leaderDestination.name} (${p.leaderDestination.region})` : d.label,
+      })));
+
+      const optsRow = el('div', { class: 'soc-travel-opts' },
+        el('select', {
+          class: 'soc-select-sm',
+          'aria-label': 'Travel pace',
+          onchange: (e) => { ui.travelSpeed = e.target.value; },
+        },
+          el('option', { value: 'reckless', selected: ui.travelSpeed === 'reckless' ? true : null, text: 'Reckless' }),
+          el('option', { value: 'cautious', selected: ui.travelSpeed === 'cautious' ? true : null, text: 'Cautious' })),
+        el('select', {
+          class: 'soc-select-sm',
+          'aria-label': 'Travel lodging',
+          onchange: (e) => { ui.travelLodging = e.target.value; },
+        },
+          el('option', { value: 'camp', selected: ui.travelLodging === 'camp' ? true : null, text: 'Camp' }),
+          el('option', { value: 'inn', selected: ui.travelLodging === 'inn' ? true : null, text: 'Inns' })),
+        el('label', { class: 'soc-check' },
+          el('input', {
+            type: 'checkbox',
+            checked: ui.travelShip ? true : null,
+            onchange: (e) => { ui.travelShip = e.target.checked; },
+          }),
+          ' Ship'));
+
+      const travelArgs = () => ({
+        ...(ui.travelDest ? { to: ui.travelDest } : {}),
+        options: { speed: ui.travelSpeed, lodging: ui.travelLodging, ship: ui.travelShip },
+      });
+
+      const quoteBox = ui.travelQuote
+        ? el('div', { class: 'soc-quote-box' },
+          el('p', { class: 'soc-pending-note', text: `Quote to ${ui.travelQuote.destinationName}: ${ui.travelQuote.mine.alreadyThere ? 'Already there' : ui.travelQuote.mine.eligible ? `${ui.travelQuote.mine.cost} gp · ${ui.travelQuote.mine.days}d` : ui.travelQuote.mine.reason}` }),
+          el('ul', { class: 'soc-list' }, (ui.travelQuote.members ?? []).map((m) =>
+            el('li', { class: 'soc-row' },
+              el('span', { class: 'soc-name', text: m.name }),
+              el('span', { class: 'soc-meta', text: m.alreadyThere ? 'Here' : m.eligible ? `${m.cost} gp · ${m.days}d` : m.reason })))))
+        : null;
+
+      travelBlock = el('div', { class: 'soc-travel-box' },
+        el('h4', { class: 'soc-h4', text: 'Group Travel & Ready Check' }),
+        destSelect,
+        optsRow,
+        el('div', { class: 'soc-foot-actions' },
+          el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('party.travelQuote', travelArgs()) }, 'Get Travel Quote'),
+          el('button', { type: 'button', class: 'btn btn-small btn-primary', onclick: () => act('party.travelPropose', travelArgs()) }, 'Start Ready Check')),
+        quoteBox);
+    }
+
+    return section('Party Map Pings & Group Travel', 'coord', proposal ? 'Ready Check Active' : `${pings.length} pin${pings.length === 1 ? '' : 's'}`,
+      el('h4', { class: 'soc-h4', text: 'Map Pings' }),
+      pingForm,
+      pingList,
+      travelBlock);
   }
 
   function satchelView(s) {
@@ -379,7 +765,7 @@ export function install(api) {
   }
 
   function peopleView(s) {
-    const lead = !s.party || s.party.leaderId === api.state?.selfId;
+    const lead = !s.party || Number(s.party.leaderId) === selfPlayerId();
     const full = s.party && s.party.members.length >= s.party.max;
     const busy = Boolean(s.trade);
     const all = s.players ?? [];
@@ -400,7 +786,7 @@ export function install(api) {
       return section('Travellers Abroad', 'people', '0 online',
         el('div', { class: 'soc-quiet' },
           el('p', { class: 'soc-quiet-title', text: 'The roads of the Iliac Bay are quiet.' }),
-          el('p', { class: 'soc-note', text: `No other adventurers are currently online. When travellers enter ${s.region || 'the realm'}, you can hail them, form a fellowship, or barter goods here.` })));
+          el('p', { class: 'soc-note', text: `No other adventurers are currently online. When travellers enter ${s.region || 'the realm'}, you can hail them, form a fellowship, add friends, or barter goods here.` })));
     }
 
     const q = ui.search.trim().toLowerCase();
@@ -434,7 +820,7 @@ export function install(api) {
               el('span', { class: `soc-lamp ${o.inTradeRange ? 'soc-lamp-near' : o.sameLocation ? 'soc-lamp-on' : 'soc-lamp-far'}`, 'aria-hidden': 'true' }),
               el('span', { class: 'soc-pick-text' },
                 el('span', { class: 'soc-name', text: o.name }),
-                el('span', { class: 'soc-meta', text: locText }))),
+                el('span', { class: 'soc-meta', text: `${locText}${o.isFriend ? ' · Friend' : ''}${o.blockedByMe ? ' · Blocked' : ''}` }))),
             el('span', { class: 'soc-actions' },
               el('button', {
                 type: 'button', class: 'btn btn-small', title: `Whisper ${o.name}`,
@@ -446,12 +832,471 @@ export function install(api) {
                   container?.querySelector('#soc-chat-text')?.focus();
                 },
               }, 'Whisper'),
+              !o.isFriend && !o.blockedByMe
+                ? el('button', {
+                  type: 'button', class: 'btn btn-small', title: `Send friend request to ${o.name}`,
+                  onclick: () => act('friends.request', { targetId: o.id }),
+                }, 'Friend')
+                : null,
               el('button', { type: 'button', class: 'btn btn-small', disabled: inviteBlock ? true : null, title: inviteBlock, 'data-focus-key': `invite-${o.id}`, 'aria-label': `Invite ${o.name} to your party${inviteBlock ? ` (${inviteBlock})` : ''}`, onclick: () => act('party.invite', { targetId: o.id }) }, o.partyMember ? 'Allied' : outgoing ? 'Sent' : 'Invite'),
-              el('button', { type: 'button', class: `btn btn-small${!tradeBlock ? ' btn-primary' : ''}`, disabled: tradeBlock ? true : null, title: tradeBlock, 'data-focus-key': `trade-${o.id}`, 'aria-label': `Trade with ${o.name}${tradeBlock ? ` (${tradeBlock})` : ''}`, onclick: () => act('trade.request', { targetId: o.id }) }, 'Trade')));
+              el('button', { type: 'button', class: `btn btn-small${!tradeBlock ? ' btn-primary' : ''}`, disabled: tradeBlock ? true : null, title: tradeBlock, 'data-focus-key': `trade-${o.id}`, 'aria-label': `Trade with ${o.name}${tradeBlock ? ` (${tradeBlock})` : ''}`, onclick: () => act('trade.request', { targetId: o.id }) }, 'Trade'),
+              !o.blockedByMe
+                ? el('button', { type: 'button', class: 'btn btn-small btn-danger', title: `Block ${o.name}`, onclick: () => act('social.block', { targetId: o.id }) }, 'Block')
+                : null,
+              el('button', {
+                type: 'button', class: 'btn btn-small', title: `Report ${o.name}`,
+                onclick: () => openReport({ targetId: o.id, targetName: o.name, evidenceType: 'interaction' }),
+              }, 'Report')));
         }))
         : el('p', { class: 'soc-note', text: 'No travellers match that filter.' }));
   }
 
+  // ---------------------------------------------------------------- Friends & Blocks tab
+  function friendsTabView(s) {
+    const c = s.contacts ?? { friends: [], incoming: [], outgoing: [], blocks: [], settings: {}, totalFriends: 0, onlineFriends: 0 };
+    syncPrivacyDraft();
+
+    const baseFriends = c.friends ?? [];
+    const seen = new Set(baseFriends.map((f) => f.accountKey));
+    const combinedFriends = [...baseFriends, ...ui.friendsExtra.filter((f) => !seen.has(f.accountKey))];
+    const shownFriends = ui.friendFilter === 'online' ? combinedFriends.filter((f) => f.online) : combinedFriends;
+
+    const addForm = el('form', {
+      class: 'soc-inline-form',
+      onsubmit: (e) => {
+        e.preventDefault();
+        const name = ui.addFriendName.trim();
+        if (!name) return;
+        act('friends.request', { name });
+        ui.addFriendName = '';
+      },
+    },
+      el('input', {
+        type: 'text', class: 'soc-input-grow', value: ui.addFriendName, maxlength: '32',
+        placeholder: 'Exact character or account label…', 'aria-label': 'Add friend by exact name',
+        oninput: (e) => (ui.addFriendName = e.target.value),
+        onkeydown: (e) => e.stopPropagation(),
+      }),
+      el('button', { type: 'submit', class: 'btn btn-small btn-primary' }, 'Send Friend Request'));
+
+    const incomingBox = c.incoming?.length
+      ? el('div', { class: 'soc-subblock' },
+        el('h4', { class: 'soc-h4', text: `Incoming Requests (${c.incoming.length})` }),
+        el('ul', { class: 'soc-list' }, c.incoming.map((req) =>
+          el('li', { class: 'soc-row soc-invite-row' },
+            el('span', { class: 'soc-seal', 'aria-hidden': 'true', text: '✦' }),
+            el('span', { class: 'soc-slot-main' },
+              el('strong', { class: 'soc-slot-name', text: req.publicLabel }),
+              el('span', { class: 'soc-meta', text: req.fromCharacterName ? `Sent as ${req.fromCharacterName}` : 'Account friend request' })),
+            el('span', { class: 'soc-actions' },
+              el('button', { type: 'button', class: 'btn btn-small btn-primary', onclick: () => act('friends.accept', { accountKey: req.accountKey }) }, 'Accept'),
+              el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('friends.decline', { accountKey: req.accountKey }) }, 'Decline'),
+              el('button', { type: 'button', class: 'btn btn-small btn-danger', onclick: () => act('social.block', { accountKey: req.accountKey }) }, 'Block'))))))
+      : null;
+
+    const outgoingBox = c.outgoing?.length
+      ? el('div', { class: 'soc-subblock' },
+        el('h4', { class: 'soc-h4', text: `Pending Sent (${c.outgoing.length})` }),
+        el('ul', { class: 'soc-list' }, c.outgoing.map((req) =>
+          el('li', { class: 'soc-row' },
+            el('span', { class: 'soc-name', text: req.publicLabel }),
+            el('span', { class: 'soc-actions' },
+              el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('friends.decline', { accountKey: req.accountKey }) }, 'Withdraw'))))))
+      : null;
+
+    const filterRow = el('div', { class: 'soc-scopes', role: 'group', 'aria-label': 'Filter friends' },
+      [
+        ['all', `All (${c.totalFriends ?? combinedFriends.length})`],
+        ['online', `Online (${c.onlineFriends ?? combinedFriends.filter((f) => f.online).length})`],
+      ].map(([id, label]) => el('button', {
+        type: 'button', class: 'soc-scope-btn', 'aria-pressed': String(ui.friendFilter === id),
+        onclick: () => { ui.friendFilter = id; rerender(); },
+      }, label)));
+
+    const friendsList = shownFriends.length
+      ? el('ul', { class: 'soc-list soc-friends-list' }, shownFriends.map((f) =>
+        el('li', { class: `soc-row soc-friend-row${f.online ? '' : ' soc-offline'}` },
+          el('span', { class: `soc-lamp${f.online ? ' soc-lamp-on' : ''}`, 'aria-hidden': 'true' }),
+          el('span', { class: 'soc-slot-main' },
+            el('strong', { class: 'soc-slot-name', text: f.publicLabel }),
+            el('span', { class: 'soc-meta', text: describeFriendPresence(f) })),
+          el('span', { class: 'soc-actions' },
+            el('button', {
+              type: 'button', class: 'btn btn-small btn-primary',
+              onclick: () => {
+                ui.tab = 'letters';
+                ui.composeMail = { toAccount: f.accountKey, toName: f.publicLabel, subject: '', body: '' };
+                rerender();
+              },
+            }, 'Letter'),
+            f.online && f.characterName
+              ? el('button', {
+                type: 'button', class: 'btn btn-small',
+                onclick: () => {
+                  ui.tab = 'fellowship';
+                  ui.channel = 'whisper';
+                  ui.whisperTarget = f.characterName;
+                  rerender();
+                },
+              }, 'Whisper')
+              : null,
+            el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('friends.remove', { accountKey: f.accountKey }) }, 'Remove'),
+            el('button', { type: 'button', class: 'btn btn-small btn-danger', onclick: () => act('social.block', { accountKey: f.accountKey }) }, 'Block'),
+            el('button', {
+              type: 'button', class: 'btn btn-small',
+              onclick: () => openReport({ targetAccount: f.accountKey, targetName: f.publicLabel, evidenceType: 'interaction' }),
+            }, 'Report')))))
+      : el('p', { class: 'soc-note', text: 'No friends listed yet. Send a request by exact name or from the Travellers roll.' });
+
+    const loadMoreFriends = ui.friendsNextCursor
+      ? el('button', {
+        type: 'button', class: 'btn btn-small',
+        onclick: () => act('friends.list', { cursor: ui.friendsNextCursor, filter: ui.friendFilter }),
+      }, 'Load More Friends')
+      : null;
+
+    const friendsSec = section('Account Friends', 'friends', `${c.onlineFriends ?? 0} online / ${c.totalFriends ?? 0} total`,
+      addForm,
+      incomingBox,
+      outgoingBox,
+      filterRow,
+      friendsList,
+      loadMoreFriends);
+
+    // Privacy settings & Directed Blocks column
+    const pd = ui.privacyDraft ?? {
+      publicLabel: c.publicLabel ?? '',
+      allowRequests: 'everyone',
+      showPresence: 'friends',
+      showLastActive: true,
+      allowLetters: true,
+    };
+
+    const privacyForm = el('form', {
+      class: 'soc-privacy-form',
+      onsubmit: (e) => {
+        e.preventDefault();
+        act('friends.settings', {
+          publicLabel: pd.publicLabel,
+          allowRequests: pd.allowRequests,
+          showPresence: pd.showPresence,
+          showLastActive: pd.showLastActive,
+          allowLetters: pd.allowLetters,
+        });
+      },
+    },
+      el('label', { class: 'soc-field' },
+        el('span', { class: 'soc-field-label', text: 'Public Identity Label' }),
+        el('input', {
+          type: 'text', class: 'soc-input-grow', maxlength: '32', value: pd.publicLabel,
+          oninput: (e) => (pd.publicLabel = e.target.value),
+          onkeydown: (e) => e.stopPropagation(),
+        })),
+      el('label', { class: 'soc-field' },
+        el('span', { class: 'soc-field-label', text: 'Friend Requests' }),
+        el('select', {
+          class: 'soc-select',
+          onchange: (e) => (pd.allowRequests = e.target.value),
+        },
+          el('option', { value: 'everyone', selected: pd.allowRequests === 'everyone' ? true : null, text: 'Accept from everyone' }),
+          el('option', { value: 'none', selected: pd.allowRequests === 'none' ? true : null, text: 'No new requests' }))),
+      el('label', { class: 'soc-field' },
+        el('span', { class: 'soc-field-label', text: 'Online Presence' }),
+        el('select', {
+          class: 'soc-select',
+          onchange: (e) => (pd.showPresence = e.target.value),
+        },
+          el('option', { value: 'friends', selected: pd.showPresence === 'friends' ? true : null, text: 'Visible to friends' }),
+          el('option', { value: 'hidden', selected: pd.showPresence === 'hidden' ? true : null, text: 'Appear offline to all' }))),
+      el('label', { class: 'soc-check' },
+        el('input', {
+          type: 'checkbox', checked: pd.showLastActive ? true : null,
+          onchange: (e) => (pd.showLastActive = e.target.checked),
+        }),
+        ' Share last-active timestamp with friends'),
+      el('label', { class: 'soc-check' },
+        el('input', {
+          type: 'checkbox', checked: pd.allowLetters ? true : null,
+          onchange: (e) => (pd.allowLetters = e.target.checked),
+        }),
+        ' Allow letters from accepted friends'),
+      el('div', { class: 'soc-foot-actions' },
+        el('button', { type: 'submit', class: 'btn btn-small btn-primary' }, 'Save Privacy Settings')));
+
+    const privacySec = section('Privacy & Presence', 'privacy', 'Account-wide', privacyForm);
+
+    const blockForm = el('form', {
+      class: 'soc-inline-form',
+      onsubmit: (e) => {
+        e.preventDefault();
+        const name = ui.addBlockName.trim();
+        if (!name) return;
+        act('social.block', { name });
+        ui.addBlockName = '';
+      },
+    },
+      el('input', {
+        type: 'text', class: 'soc-input-grow', value: ui.addBlockName, maxlength: '32',
+        placeholder: 'Exact name to block…', 'aria-label': 'Block player by exact name',
+        oninput: (e) => (ui.addBlockName = e.target.value),
+        onkeydown: (e) => e.stopPropagation(),
+      }),
+      el('button', { type: 'submit', class: 'btn btn-small btn-danger' }, 'Block'));
+
+    const blockList = c.blocks?.length
+      ? el('ul', { class: 'soc-list' }, c.blocks.map((b) =>
+        el('li', { class: 'soc-row' },
+          el('span', { class: 'soc-slot-main' },
+            el('strong', { class: 'soc-slot-name', text: b.publicLabel }),
+            el('span', { class: 'soc-meta', text: `Blocked ${formatRelativeTime(b.blockedAt)}` })),
+          el('span', { class: 'soc-actions' },
+            el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('social.unblock', { accountKey: b.accountKey }) }, 'Unblock')))))
+      : el('p', { class: 'soc-note', text: 'No accounts blocked. Directed blocks take effect immediately on friend requests, letters, whispers, trade, party, visits, and duels without alerting the blocked account.' });
+
+    const blocksSec = section('Directed Blocks', 'blocks', `${c.blocks?.length ?? 0} blocked`, blockForm, blockList);
+
+    return el('div', { class: 'soc-tab-panel', 'data-panel': 'friends' },
+      el('div', { class: 'soc-grid' },
+        el('div', { class: 'soc-col soc-col-left' }, friendsSec),
+        el('div', { class: 'soc-col soc-col-right' }, privacySec, blocksSec)));
+  }
+
+  // ---------------------------------------------------------------- Letters / Mailbox tab
+  function lettersTabView(s) {
+    const mail = s.mail ?? { unreadCount: 0, inbox: [], sent: [], inboxTotal: 0, sentTotal: 0 };
+    const friends = s.contacts?.friends ?? [];
+    const folder = ui.mailFolder;
+    const baseItems = folder === 'sent' ? (mail.sent ?? []) : (mail.inbox ?? []);
+    const seen = new Set(baseItems.map((m) => m.id));
+    const items = [...baseItems, ...(ui.mailExtra[folder] ?? []).filter((m) => !seen.has(m.id))];
+    const nextCursor = ui.mailNextCursor[folder];
+
+    const toolbar = el('div', { class: 'soc-people-tools' },
+      el('div', { class: 'soc-scopes', role: 'group', 'aria-label': 'Mailbox folder' },
+        el('button', {
+          type: 'button', class: 'soc-scope-btn', 'aria-pressed': String(folder === 'inbox'),
+          onclick: () => { ui.mailFolder = 'inbox'; rerender(); },
+        }, `Inbox${mail.unreadCount ? ` (${mail.unreadCount})` : ''}`),
+        el('button', {
+          type: 'button', class: 'soc-scope-btn', 'aria-pressed': String(folder === 'sent'),
+          onclick: () => { ui.mailFolder = 'sent'; rerender(); },
+        }, `Sent (${mail.sentTotal ?? mail.sent?.length ?? 0})`)),
+      el('button', {
+        type: 'button', class: 'btn btn-small btn-primary',
+        onclick: () => {
+          ui.composeMail = ui.composeMail
+            ? null
+            : { toAccount: friends[0]?.accountKey ?? '', toName: friends[0]?.publicLabel ?? '', subject: '', body: '' };
+          rerender();
+        },
+      }, ui.composeMail ? 'Close Composer' : 'Compose Letter'));
+
+    const composeForm = ui.composeMail
+      ? el('form', {
+        class: 'soc-mail-compose',
+        onsubmit: (e) => {
+          e.preventDefault();
+          const cm = ui.composeMail;
+          if (!cm.body.trim()) { say('Write a letter message first.'); return; }
+          act('mail.send', {
+            ...(cm.toAccount ? { toAccount: cm.toAccount } : { toName: cm.toName }),
+            subject: cm.subject,
+            body: cm.body,
+            requestId: `ltr_${Date.now()}_${++mailReqSeq}`,
+          });
+        },
+      },
+        el('h4', { class: 'soc-h4', text: 'New Plain-Text Letter (Friends Only)' }),
+        friends.length
+          ? el('select', {
+            class: 'soc-select',
+            'aria-label': 'Letter recipient',
+            onchange: (e) => {
+              ui.composeMail.toAccount = e.target.value;
+              const match = friends.find((f) => f.accountKey === e.target.value);
+              ui.composeMail.toName = match?.publicLabel ?? '';
+            },
+          }, friends.map((f) => el('option', {
+            value: f.accountKey,
+            selected: ui.composeMail.toAccount === f.accountKey ? true : null,
+            text: `${f.publicLabel}${f.online ? ' (Online)' : ' (Offline delivery)'}`,
+          })))
+          : el('input', {
+            type: 'text', class: 'soc-input-grow', value: ui.composeMail.toName, placeholder: 'Accepted friend name…',
+            oninput: (e) => { ui.composeMail.toName = e.target.value; ui.composeMail.toAccount = ''; },
+            onkeydown: (e) => e.stopPropagation(),
+          }),
+        el('input', {
+          type: 'text', class: 'soc-input-grow', maxlength: '80', value: ui.composeMail.subject,
+          placeholder: 'Subject (optional, max 80 chars)…', 'aria-label': 'Letter subject',
+          oninput: (e) => (ui.composeMail.subject = e.target.value),
+          onkeydown: (e) => e.stopPropagation(),
+        }),
+        el('textarea', {
+          class: 'soc-textarea', rows: '4', maxlength: '800', value: ui.composeMail.body,
+          placeholder: 'Write your plain-text letter (max 800 characters)…', 'aria-label': 'Letter body',
+          oninput: (e) => (ui.composeMail.body = e.target.value),
+          onkeydown: (e) => e.stopPropagation(),
+        }),
+        el('div', { class: 'soc-foot-actions' },
+          el('button', { type: 'submit', class: 'btn btn-small btn-primary' }, 'Seal & Send Letter'),
+          el('button', { type: 'button', class: 'btn btn-small', onclick: () => { ui.composeMail = null; rerender(); } }, 'Cancel')))
+      : null;
+
+    const listEl = items.length
+      ? el('ul', { class: 'soc-list soc-mail-list' }, items.map((m) => {
+        const active = ui.activeThread?.threadId === m.threadId;
+        const who = folder === 'sent'
+          ? `To ${m.toLabel}${m.toCharName && m.toCharName !== m.toLabel ? ` (${m.toCharName})` : ''}`
+          : `From ${m.fromLabel}${m.fromCharName && m.fromCharName !== m.fromLabel ? ` (${m.fromCharName})` : ''}`;
+        return el('li', { class: `soc-row soc-mail-row${m.unread ? ' is-unread' : ''}${active ? ' soc-selected' : ''}` },
+          el('button', {
+            type: 'button', class: 'soc-pick',
+            onclick: () => act('mail.thread', { threadId: m.threadId, markRead: true }),
+          },
+            el('span', { class: `soc-lamp${m.unread ? ' soc-lamp-near' : ''}`, 'aria-hidden': 'true' }),
+            el('span', { class: 'soc-pick-text' },
+              el('span', { class: 'soc-name', text: m.subject }),
+              el('span', { class: 'soc-meta', text: `${who} · ${formatRelativeTime(m.createdAt)}` }))),
+          el('span', { class: 'soc-actions' },
+            el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('mail.thread', { threadId: m.threadId, markRead: true }) }, 'Read'),
+            el('button', { type: 'button', class: 'btn btn-small btn-danger', onclick: () => act('mail.delete', { letterId: m.id }) }, 'Delete')));
+      }))
+      : el('p', { class: 'soc-note', text: folder === 'inbox' ? 'Your account mailbox is empty. Letters from accepted friends arrive here even while you are offline.' : 'You have not sent any letters yet.' });
+
+    const loadMoreBtn = nextCursor
+      ? el('button', {
+        type: 'button', class: 'btn btn-small',
+        onclick: () => act('mail.list', { folder, cursor: nextCursor }),
+      }, 'Load Older Letters')
+      : null;
+
+    const listSec = section('Account Mailbox', 'mail', `${mail.unreadCount ?? 0} unread`,
+      toolbar,
+      composeForm,
+      listEl,
+      loadMoreBtn);
+
+    const threadSec = threadView();
+
+    return el('div', { class: 'soc-tab-panel', 'data-panel': 'letters' },
+      el('div', { class: 'soc-grid' },
+        el('div', { class: 'soc-col soc-col-left' }, listSec),
+        el('div', { class: 'soc-col soc-col-right' }, threadSec)));
+  }
+
+  function threadView() {
+    const th = ui.activeThread;
+    if (!th) {
+      return section('Letter Thread', 'thread', 'Plain text',
+        el('div', { class: 'soc-quiet' },
+          el('p', { class: 'soc-quiet-title', text: 'Select a letter to read its thread.' }),
+          el('p', { class: 'soc-note', text: 'Letters are delivered per account, survive server restarts and character switches, and render strictly as plain text.' })));
+    }
+    const lastMsg = th.messages[th.messages.length - 1];
+    const replyForm = th.canReply && lastMsg
+      ? el('form', {
+        class: 'soc-reply-form',
+        onsubmit: (e) => {
+          e.preventDefault();
+          const body = ui.mailReply.trim();
+          if (!body) return;
+          act('mail.send', {
+            replyToId: lastMsg.id,
+            body,
+            requestId: `rep_${Date.now()}_${++mailReqSeq}`,
+          });
+          ui.mailReply = '';
+        },
+      },
+        el('textarea', {
+          class: 'soc-textarea', rows: '3', maxlength: '800', value: ui.mailReply,
+          placeholder: `Reply to ${th.otherLabel}…`, 'aria-label': 'Reply text',
+          oninput: (e) => (ui.mailReply = e.target.value),
+          onkeydown: (e) => e.stopPropagation(),
+        }),
+        el('div', { class: 'soc-foot-actions' },
+          el('button', { type: 'submit', class: 'btn btn-small btn-primary' }, 'Send Reply')))
+      : el('p', { class: 'soc-note', text: 'Replies are only available while you are accepted friends.' });
+
+    return section(th.subject, 'thread', `${th.messages.length} letter${th.messages.length === 1 ? '' : 's'}`,
+      el('ul', { class: 'soc-thread-list' }, th.messages.map((m) =>
+        el('li', { class: `soc-letter-card${m.direction === 'sent' ? ' is-sent' : ''}` },
+          el('header', { class: 'soc-letter-meta' },
+            el('strong', { text: `${m.fromLabel}${m.fromCharName && m.fromCharName !== m.fromLabel ? ` (${m.fromCharName})` : ''}` }),
+            el('span', { class: 'soc-meta', text: `${formatRelativeTime(m.createdAt)}${m.readAt ? ' · Read' : m.direction === 'inbox' ? ' · Unread' : ''}` })),
+          el('p', { class: 'soc-letter-body', text: m.body }),
+          el('div', { class: 'soc-letter-actions' },
+            m.direction === 'inbox' && !m.readAt
+              ? el('button', { type: 'button', class: 'btn btn-small', onclick: () => act('mail.read', { letterId: m.id }) }, 'Mark Read')
+              : null,
+            el('button', {
+              type: 'button', class: 'btn btn-small',
+              onclick: () => openReport({
+                targetAccount: m.direction === 'inbox' ? m.fromAccount : m.toAccount,
+                targetName: m.direction === 'inbox' ? m.fromLabel : m.toLabel,
+                evidenceType: 'letter',
+                evidenceId: m.id,
+                evidenceExcerpt: `${m.subject}: ${m.body.slice(0, 120)}`,
+              }),
+            }, 'Report'),
+            el('button', { type: 'button', class: 'btn btn-small btn-danger', onclick: () => act('mail.delete', { letterId: m.id }) }, 'Delete'))))),
+      replyForm);
+  }
+
+  // ---------------------------------------------------------------- Moderation report drawer
+  function openReport(draft) {
+    ui.reportDraft = {
+      targetId: draft.targetId ?? null,
+      targetAccount: draft.targetAccount ?? null,
+      targetName: draft.targetName ?? 'Traveller',
+      evidenceType: draft.evidenceType ?? 'interaction',
+      evidenceId: draft.evidenceId ?? null,
+      evidenceExcerpt: draft.evidenceExcerpt ?? '',
+      category: 'harassment',
+      reason: '',
+    };
+    rerender();
+  }
+
+  function reportDrawerView() {
+    const rd = ui.reportDraft;
+    return section(`Report ${rd.targetName}`, 'report', `Evidence: ${rd.evidenceType}`,
+      rd.evidenceExcerpt ? el('p', { class: 'soc-pending-note', text: `Selected record: ${rd.evidenceExcerpt}` }) : null,
+      el('form', {
+        class: 'soc-privacy-form',
+        onsubmit: (e) => {
+          e.preventDefault();
+          act('social.report', {
+            ...(rd.targetId != null ? { targetId: rd.targetId } : {}),
+            ...(rd.targetAccount ? { targetAccount: rd.targetAccount } : {}),
+            ...(rd.targetName ? { targetName: rd.targetName } : {}),
+            category: rd.category,
+            reason: rd.reason,
+            evidenceType: rd.evidenceType,
+            ...(rd.evidenceId ? { evidenceId: rd.evidenceId } : {}),
+            ...(rd.evidenceExcerpt ? { evidenceExcerpt: rd.evidenceExcerpt } : {}),
+          });
+        },
+      },
+        el('label', { class: 'soc-field' },
+          el('span', { class: 'soc-field-label', text: 'Category' }),
+          el('select', {
+            class: 'soc-select',
+            onchange: (e) => (rd.category = e.target.value),
+          }, REPORT_CATEGORIES.map(([v, label]) => el('option', { value: v, selected: rd.category === v ? true : null, text: label })))),
+        el('textarea', {
+          class: 'soc-textarea', rows: '2', maxlength: '300', value: rd.reason,
+          placeholder: 'Describe what happened for moderator review…', 'aria-label': 'Report reason',
+          oninput: (e) => (rd.reason = e.target.value),
+          onkeydown: (e) => e.stopPropagation(),
+        }),
+        el('div', { class: 'soc-foot-actions' },
+          el('button', { type: 'submit', class: 'btn btn-small btn-danger' }, 'Submit Report'),
+          el('button', { type: 'button', class: 'btn btn-small', onclick: () => { ui.reportDraft = null; rerender(); } }, 'Cancel'))));
+  }
+
+  // ---------------------------------------------------------------- Trade & Herald
   function tradeView(s) {
     const t = s.trade;
     if (!t) return null;
@@ -621,6 +1466,6 @@ export function install(api) {
         ...['/yell', '/p', '/r', '/g', '/w', '/me'].map((c) => el('kbd', { text: c }))));
   }
 
-  api.registerPanel('party', 'Party & Trade', render);
+  api.registerPanel('party', 'Party, Friends & Letters', render);
   return { ui };
 }

@@ -120,9 +120,27 @@ export function install(api) {
     flashOn: true,
     pulsePhase: 0,
     autoRegion: false,
+    pendingFocusEntry: null,
     sceneSeen: false,
     cam: { zoom: 1, cx: 0.5, cy: 0.5 },
   };
+
+  /** Apply deep-linked `?place=<id>` once the world catalog is loaded, then clear it. */
+  function applyInitialPlace(w = S.worldValue) {
+    if (!w?.catalog) return false;
+    const placeId = typeof api.initialPlace === 'string' ? api.initialPlace.trim() : '';
+    if (!placeId) return false;
+    const entry = w.catalog.get(placeId);
+    if (!entry) return false;
+    S.selected = entry;
+    S.region = entry.regionIndex;
+    S.mapIndex = Math.max(0, regionMapFor(entry.regionIndex, entry.x, entry.y));
+    S.autoRegion = true;
+    S.pendingFocusEntry = entry;
+    if (typeof api.consumeInitialPlace === 'function') api.consumeInitialPlace();
+    else api.initialPlace = null;
+    return true;
+  }
 
   // ------------------------------------------------------------------ data
 
@@ -145,7 +163,7 @@ export function install(api) {
       const index = S.index;
       S.world = readWorld(index, browserWorldData(api.files)).then(
         (w) => {
-          if (index === S.index) { S.worldValue = w; refresh(); }
+          if (index === S.index) { S.worldValue = w; applyInitialPlace(w); refresh(); }
           return w;
         },
         (err) => {
@@ -1508,7 +1526,12 @@ export function install(api) {
       }
       status.textContent = S.status;
       if (w) {
+        applyInitialPlace(w);
         if (S.selected) S.selected = w.catalog.get(S.selected.id);
+        if (S.pendingFocusEntry && S.selected?.id === S.pendingFocusEntry.id) {
+          focusMapPoint(S.pendingFocusEntry, 2.2);
+          S.pendingFocusEntry = null;
+        }
         if (!S.selected && S.region == null && !S.autoRegion) {
           if (h && REGION_NAMES[h.regionIndex]) {
             S.autoRegion = true;
@@ -1544,5 +1567,5 @@ export function install(api) {
     return root;
   }
 
-  return { sceneLocationId, get state() { return S; } };
+  return { sceneLocationId, applyInitialPlace, get state() { return S; } };
 }

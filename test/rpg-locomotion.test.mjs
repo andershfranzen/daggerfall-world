@@ -271,7 +271,7 @@ test('[stage 5] swimmers cannot rise through a ceiling', () => {
   assert.ok(b.y > -4 && b.y + LOCO.height <= -1 + 0.05);
 });
 
-const arena2 = localArena2();
+const arena2 = process.env.ARENA2_DIR || localArena2();
 test('[asset] the Daggerfall general store partition is solid at the floor seam and open at the doorway', { skip: !arena2 && 'local ARENA2 unavailable' }, async () => {
   const data = await openWorldData(await arena2Files(arena2));
   const w = worldFromTown(await loadInterior(data, 'interior:Daggerfall/Daggerfall/5,1/11'));

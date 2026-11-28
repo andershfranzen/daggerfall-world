@@ -3,16 +3,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { groupPanels, useLabel, PANEL_GROUPS } from '../client/gameplay/shell.js';
+import { groupPanels, menuLayout, categoryFor, useLabel, PANEL_GROUPS } from '../client/gameplay/shell.js';
 
 const ids = (list) => list.map((p) => p.id);
 
 test('menu pages are grouped You · World · People · System, unknown pages follow their neighbour', () => {
-  const registered = ['character', 'inventory', 'spellbook', 'journal', 'map', 'wilderness', 'party', 'interaction',
+  const registered = ['character', 'inventory', 'spellbook', 'journal', 'map', 'wilderness', 'party', 'guilds', 'interaction',
     'dialogue', 'settings', 'places', 'automap', 'townServices', 'rest', 'audio'].map((id) => ({ id }));
   const out = groupPanels(registered);
   assert.deepEqual(ids(out), ['character', 'inventory', 'spellbook', 'journal', 'map', 'wilderness', 'places', 'automap',
-    'rest', 'party', 'interaction', 'dialogue', 'townServices', 'settings', 'audio']);
+    'rest', 'party', 'guilds', 'interaction', 'dialogue', 'townServices', 'settings', 'audio']);
   assert.deepEqual(out.filter((p) => p.groupStart).map((p) => [p.id, p.group]),
     [['character', 'You'], ['map', 'World'], ['party', 'People'], ['settings', 'System']]);
   // A page no group lists stays next to the page registered before it.
@@ -21,6 +21,38 @@ test('menu pages are grouped You · World · People · System, unknown pages fol
   assert.equal(extra[2].group, 'World');
   assert.equal(extra[2].groupStart, false);
   assert.equal(PANEL_GROUPS.length, 4);
+});
+
+test('menuLayout places Guilds under Social alongside Party and Town Services, never Maps', () => {
+  const layout = menuLayout(['character', 'map', 'party', 'guilds', 'townServices', 'settings', 'help'].map((id) => ({ id })));
+  const social = layout.categories.find((c) => c.id === 'social');
+  assert.ok(social);
+  assert.deepEqual(ids(social.pages), ['party', 'guilds', 'townServices']);
+  assert.equal(categoryFor(layout, 'guilds')?.id, 'social');
+  assert.notEqual(categoryFor(layout, 'guilds')?.id, 'maps');
+  assert.equal(categoryFor(layout, 'help')?.id, 'system');
+});
+
+test('menuLayout preserves the 7-tab shell contract across all Wave 1 & Wave 2 panels', () => {
+  const all = [
+    'character', 'professions', 'health', 'law', 'property', 'homes',
+    'inventory', 'spellbook', 'journal', 'notebook', 'admiralty',
+    'map', 'automap', 'wilderness', 'places', 'sailing', 'seaChart',
+    'party', 'guilds', 'townServices',
+    'settings', 'audio', 'graphics', 'rest', 'help',
+    'shop', 'interaction', 'dialogue', 'alchemy', 'spellmaker', 'shipyard', 'passage', 'spellchoice',
+    'market', 'crafting-station', 'pvp', 'coopWorld',
+  ].map((id) => ({ id }));
+  const layout = menuLayout(all);
+  assert.equal(layout.categories.length, 7);
+  assert.deepEqual(layout.categories.map((c) => c.id), ['character', 'inventory', 'magic', 'journal', 'maps', 'social', 'system']);
+  assert.equal(categoryFor(layout, 'professions')?.id, 'character');
+  assert.equal(categoryFor(layout, 'homes')?.id, 'character');
+  assert.equal(categoryFor(layout, 'graphics')?.id, 'system');
+  for (const ctxId of ['market', 'crafting-station', 'pvp', 'coopWorld']) {
+    assert.equal(categoryFor(layout, ctxId), null, `${ctxId} must be contextual, not a menu tab`);
+    assert.ok(layout.contextual.some((p) => p.id === ctxId), `${ctxId} appears in contextual panels`);
+  }
 });
 
 test('the Use button names the action for the target', () => {

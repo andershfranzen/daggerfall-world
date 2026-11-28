@@ -36,7 +36,7 @@ import { SceneryPass } from './scenery/pass.js';
 import { locationOf } from './api.js';
 import { sceneLocationId } from './travel.js';
 import { lookFor, lookOf, sameLook, reskinMesh, skyIndexFor, sceneClimate, hasWinterSwap } from '../world/exterior/season.js';
-import { readDaySky, skyFileName, DEFAULT_SKY_FRAME } from '../world/scenery/sky.js';
+import { readClassicSky, skyFileName, DEFAULT_SKY_FRAME } from '../world/scenery/sky.js';
 import { readBlob } from '../world/bsa.js';
 import { WEATHER_PERIOD_HOURS, regionOf } from './atmosphere/calendar.js';
 
@@ -58,9 +58,13 @@ const SKY_CACHE = 4;
 /** Read one SKYnn.DAT day sky from the player's files (the frame the scene builders use). */
 export async function readSkyFrom(files, index) {
   const name = skyFileName(index);
-  const f = files.find((x) => String(x.name ?? '').split('/').pop().toUpperCase() === name);
-  if (!f) throw new Error(`${name} is not in the selected folder.`);
-  return { ...(await readDaySky((a, n) => readBlob(f, a, n), f.size, DEFAULT_SKY_FRAME, name)), index, file: name };
+  const open = (wanted) => {
+    const f = files.find((x) => String(x.name ?? '').split('/').pop().toUpperCase() === wanted);
+    return f ? { size: f.size, read: (a, n) => readBlob(f, a, n) } : null;
+  };
+  if (!open(name)) throw new Error(`${name} is not in the selected folder.`);
+  // Every frame of the day and the night ridge line; the sky pass picks the hour (client/render/sky-dome.js).
+  return readClassicSky(open, index, DEFAULT_SKY_FRAME);
 }
 
 /** Fetch one descriptor: the JSON, null for 404 (no site on the pixel), or throw a readable error. */

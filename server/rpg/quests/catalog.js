@@ -16,8 +16,9 @@ import { analyseQuest } from './engine.js';
 import { GROUP_BY_PREFIX } from './tables.js';
 import { CORRECTIONS } from './corrections.js';
 import { SPECIAL_QUESTS } from '../special/quests.js';
+import { resolveQuestPacks } from './packs.js';
 
-const NAME_RE = /^[A-Z0-9$_]{1,8}$/;
+const NAME_RE = /^[A-Z0-9$_]{1,12}$/;
 
 /** Classic temple quest filename prefix, QuestList membership letter and FACTION.TXT deity id. */
 export const DEITY_PREFIX = Object.freeze({
@@ -82,9 +83,11 @@ function findFile(dir, base, ext) {
  * @param {string|null} opts.dataPath      ARENA2 directory
  * @param {string|null} [opts.scriptsDir]  directory of *.txt quest scripts
  * @param {string|null} [opts.questList]   QuestList table file (optional)
+ * @param {Array} [opts.packs]             versioned quest pack dirs or descriptors (quests/packs.js)
+ * @param {string|null} [opts.packsDir]    directory containing versioned quest pack subdirectories
  * @param {(msg:string)=>void} [opts.warn]
  */
-export function loadCatalog({ dataPath = null, scriptsDir = null, questList = null, warn = () => {}, artifact = null } = {}) {
+export function loadCatalog({ dataPath = null, scriptsDir = null, questList = null, packs = null, packsDir = null, warn = () => {}, artifact = null } = {}) {
   const quests = new Map();
   const failures = [];
   let list = null;
@@ -99,6 +102,7 @@ export function loadCatalog({ dataPath = null, scriptsDir = null, questList = nu
 
   const scriptTitles = new Map();
   const scripts = new Map();
+  const scriptMeta = new Map(); // questName -> { source, packId?, packVersion?, packHash? }
   if (scriptsDir) {
     for (const f of listDir(scriptsDir)) {
       if (!/\.txt$/i.test(f)) continue;
@@ -107,11 +111,41 @@ export function loadCatalog({ dataPath = null, scriptsDir = null, questList = nu
       try {
         const text = readFileSync(join(scriptsDir, f), 'latin1');
         scripts.set(name, text);
+        scriptMeta.set(name, { source: 'script' });
         const m = text.match(/^\s*DisplayName:\s*(.+)$/im);
         if (m) scriptTitles.set(name, m[1].trim());
       } catch (err) {
         failures.push({ name, source: 'script', error: err.message });
       }
+    }
+  }
+
+  // Versioned quest packs override legacy scriptsDir & classic ARENA2 in deterministic load order.
+  const hasPacks = (Array.isArray(packs) && packs.length > 0) || !!packsDir;
+  const resolvedPacks = hasPacks ? resolveQuestPacks(packs ?? [], { packsDir }) : null;
+  if (resolvedPacks) {
+    for (const w of resolvedPacks.warnings) warn(w);
+    for (const e of resolvedPacks.errors) warn(`quest pack ${e.packId}: ${e.errors.join('; ')}`);
+    for (const c of resolvedPacks.conflicts) warn(c.message);
+    for (const ql of resolvedPacks.questLists) {
+      try {
+        const parsed = parseQuestList(ql.text);
+        if (!list) list = new Map();
+        for (const [k, v] of parsed.entries()) list.set(k, v);
+      } catch (err) {
+        warn(`quest pack ${ql.packId} quest list: ${err.message}`);
+      }
+    }
+    for (const [name, entry] of resolvedPacks.scripts.entries()) {
+      scripts.set(name, entry.text);
+      scriptMeta.set(name, {
+        source: `pack:${entry.packId}`,
+        packId: entry.packId,
+        packVersion: entry.version,
+        packHash: entry.hash,
+      });
+      const m = entry.text.match(/^\s*DisplayName:\s*(.+)$/im);
+      if (m) scriptTitles.set(name, m[1].trim());
     }
   }
 
@@ -126,9 +160,17 @@ export function loadCatalog({ dataPath = null, scriptsDir = null, questList = nu
       if (qrcPath) messages = readQrc(readFileSync(qrcPath));
       let def;
       let source;
+      let packInfo = null;
       if (scripts.has(name)) {
-        def = parseQuest(scripts.get(name), { name, messages: messages ?? undefined });
-        source = 'script';
+        const sm = scriptMeta.get(name);
+        // Pack scripts carry their own QRC section so custom/updated pack text takes precedence when QRC is absent or pack-authored.
+        const useClassicQrc = sm?.packId ? null : messages;
+        def = parseQuest(scripts.get(name), { name, messages: useClassicQrc ?? undefined });
+        if (sm?.packId && messages && def.messages.size === 0) {
+          def = parseQuest(scripts.get(name), { name, messages });
+        }
+        source = sm?.source ?? 'script';
+        if (sm?.packId) packInfo = { packId: sm.packId, packVersion: sm.packVersion, packHash: sm.packHash };
       } else {
         if (!messages) throw new Error('classic QRC text file is missing');
         const qbn = readQbn(readFileSync(findFile(dataPath, name, '.QBN')));
@@ -161,15 +203,24 @@ export function loadCatalog({ dataPath = null, scriptsDir = null, questList = nu
       if (def.corrections) analysis.approximations.push(...def.corrections.map((c) => `correction: ${c}`));
       if (!def.messages.has(1000)) analysis.unsupported.push('no offer text (message 1000)');
       // An operator quest list is the whole offer pool, as in Daggerfall Unity (lines starting with '-' are disabled).
-      if (list && !list.has(name)) analysis.unsupported.push('not in the operator quest list');
+      if (list && !list.has(name) && !packInfo) analysis.unsupported.push('not in the operator quest list');
       if (!meta.group) analysis.unsupported.push('not a guild or social quest (main quest, cures and special quests are started by the story, not offered)');
       analysis.offerable = analysis.unsupported.length === 0;
-      quests.set(name, { name, source, def, meta, analysis, textSource: qrcPath ? 'classic' : 'script' });
+      quests.set(name, {
+        name, source, def, meta, analysis,
+        textSource: packInfo ? `pack:${packInfo.packId}` : qrcPath ? 'classic' : 'script',
+        ...(packInfo ?? {}),
+      });
     } catch (err) {
-      failures.push({ name, source: scripts.has(name) ? 'script' : 'classic', error: err.message });
+      failures.push({ name, source: scripts.has(name) ? (scriptMeta.get(name)?.source ?? 'script') : 'classic', error: err.message });
     }
   }
-  return { quests, failures, listSource: list ? listPath : 'file names', scriptsDir, dataPath };
+  return {
+    quests, failures,
+    listSource: list ? (listPath || 'quest-packs') : 'file names',
+    scriptsDir, dataPath,
+    packs: resolvedPacks,
+  };
 }
 
 /** Summary used by the operator report and `quest.catalog`. */
@@ -185,8 +236,16 @@ export function catalogReport(cat) {
   }
   return {
     total: rows.length,
-    offerable: offerable.map((r) => ({ name: r.name, group: r.meta.group, source: r.source })),
+    offerable: offerable.map((r) => ({ name: r.name, group: r.meta.group, source: r.source, ...(r.packId ? { packId: r.packId, packVersion: r.packVersion } : {}) })),
     failures: cat.failures,
     topBlockers: [...reasons].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([reason, quests]) => ({ reason, quests })),
+    ...(cat.packs ? {
+      packs: {
+        loadOrder: cat.packs.loadOrder,
+        overlaps: cat.packs.overlaps,
+        conflicts: cat.packs.conflicts,
+        errors: cat.packs.errors,
+      },
+    } : {}),
   };
 }
