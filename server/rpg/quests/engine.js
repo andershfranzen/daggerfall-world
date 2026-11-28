@@ -164,6 +164,7 @@ export function createInstance(def, { uid, seed, giver, host, now, source }) {
     startedAt: now,
     giver: giver ? {
       id: giver.id, name: giver.name, location: giver.location, faction: giver.faction ?? null,
+      ...(giver.factionName ? { factionName: giver.factionName } : {}),
       ...(giver.building?.name ? { buildingName: giver.building.name } : {}),
     } : null,
     rng: seed >>> 0,
@@ -301,6 +302,11 @@ export function updateQuest(def, inst, host, now) {
   // Clicks that no task consumed do not linger.
   for (const p of Object.values(inst.people)) p.clicked = false;
   for (const it of Object.values(inst.items)) it.clicked = false;
+  if (inst.status === 'active' && !inst.endTicks && !inst.prompt && Array.isArray(inst.promptQueue) && inst.promptQueue.length) {
+    inst.prompt = inst.promptQueue.shift();
+    if (!inst.promptQueue.length) delete inst.promptQueue;
+    host.prompt(inst, inst.prompt.id);
+  }
   return true;
 }
 
@@ -540,8 +546,15 @@ function perform(run, a, st, t) {
       return done();
     case 'prompt': {
       const id = messageId(g.id);
-      inst.prompt = { id, yes: g.yes, no: g.no };
-      host.prompt(inst, id);
+      const next = { id, yes: g.yes, no: g.no };
+      if (inst.prompt) {
+        if (inst.prompt.id !== id && !(inst.promptQueue ?? []).some((q) => q.id === id)) {
+          (inst.promptQueue ??= []).push(next);
+        }
+      } else {
+        inst.prompt = next;
+        host.prompt(inst, id);
+      }
       return done();
     }
     case 'givePcNothing':

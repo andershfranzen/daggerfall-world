@@ -113,7 +113,8 @@ test('offer → accept → active entry with giver, place, deadline and log; don
   h.api._receiveRpg(rpg({ v: 1, active: [inst()], done: [{ uid: 'Q0-1-z', name: 'Q0', title: 'Earlier work', result: 'success', endedAt: 6100000, giver: 'Old Giver', log: ['I was paid.'] }], offer: null }));
   const t = h.text();
   assert.match(t, /Current work \(1\)/);
-  assert.match(t, /From Test Giver, Gothway Garden · classic Q1/);
+  assert.match(t, /From Test Giver, Gothway Garden/);
+  assert.match(t, /\(Script: Q1\)/);
   assert.match(t, /Due by /);
   assert.match(t, /I agreed to find a lost ring\./);
   assert.match(t, /Finished \(1\)/);
@@ -127,10 +128,10 @@ test('the journal shows the saved building and town, including when the player i
   const giver = { id: 'npc:t:1', name: 'Peryrick Kinghart', location: 'interior:Daggerfall/Gothway Garden/2,1/15', buildingName: 'The Superior General Store' };
   h.api._receiveRpg(rpg({ v: 1, active: [inst({ giver })], done: [] }));
   h.open();
-  assert.match(h.text(), /From Peryrick Kinghart, The Superior General Store, Gothway Garden · classic Q1/);
+  assert.match(h.text(), /From Peryrick Kinghart, The Superior General Store, Gothway Garden/);
   const { buildingName, ...legacyGiver } = giver;
   h.api._receiveRpg(rpg({ v: 1, active: [inst({ giver: legacyGiver })], done: [] }));
-  assert.match(h.text(), /From Peryrick Kinghart, Building, Gothway Garden · classic Q1/);
+  assert.match(h.text(), /From Peryrick Kinghart, Building, Gothway Garden/);
   const portGiver = { ...giver, location: 'interior:Daggerfall/Copperfield Manor/0,0/2', buildingName: 'The Silver Bird', townName: 'Port of Daggerfall' };
   h.api._receiveRpg(rpg({ v: 1, active: [inst({ giver: portGiver })], done: [] }));
   assert.match(h.text(), /The Silver Bird, Port of Daggerfall/);
@@ -221,4 +222,66 @@ test('escort faces: people travelling with the player are listed on their quest'
   assert.match(h.text(), /Travelling with you: Test Giver, Test Betrothed/);
   h.api._receiveRpg(rpg({ v: 1, active: [inst()], done: [], offer: null }));
   assert.doesNotMatch(h.text(), /Travelling with you/);
+});
+
+test('prompts are never duplicated in the feed, persisted messages render across reloads, and background/internal timers stay clean', async () => {
+  const { soonestQuestDeadline, restWarningsFor } = await import('../client/gameplay/quickslots.js');
+  const h = harness();
+  const tut = inst({
+    uid: '_TUTOR__-1', name: '_TUTOR__', title: 'Tutorial', giver: null, log: [],
+    prompt: { id: 1010, text: 'Do you want to use this tutorial?' },
+    messages: [{ id: 1012, text: 'Lesson 1: Move with WASD.', at: 6187886 }],
+    clocks: { 's.03': { total: 6, endAt: 6187891, running: true, done: false } },
+  });
+  const bg = inst({ uid: 'S0000977-2', name: 'S0000977', title: 'Curse of Daggerfall', background: true, giver: null, log: [], clocks: {} });
+  const brisPre = inst({
+    uid: '_BRISIEN-3', name: '_BRISIEN', title: 'Lady Brisienna', giver: null, log: [],
+    items: { 'i.00': { name: 'letter', held: false, handedOver: false } },
+    clocks: { 's.00': { total: 14400, endAt: 6202285, running: true, done: false } },
+  });
+  const brisPost = inst({
+    ...brisPre,
+    items: { 'i.00': { name: 'letter', held: true, handedOver: false } },
+    clocks: { 's.01': { total: 43200, endAt: 6231085, running: true, done: false } },
+  });
+  assert.equal(questDeadline(tut), null, 'tutorial pacing clock is not a due date');
+  assert.equal(questDeadline(bg), null, 'background quest has no due date');
+  assert.equal(questDeadline(brisPre), null, 'Brisienna courier delay before letter arrives is not a player deadline');
+  assert.equal(questDeadline(brisPost), 6231085, 'Brisienna meeting deadline shows once the letter arrives');
+
+  // Personal quest clock matches server playerMinutes (worldMinutes + personalMinutes).
+  const personalDue = soonestQuestDeadline({
+    atmosphere: { personalMinutes: 1440 * 10 },
+    quests: { active: [tut, bg, brisPre, brisPost] },
+  }, 6200000);
+  assert.equal(personalDue.title, 'Lady Brisienna');
+  assert.equal(personalDue.remaining, 6231085 - (6200000 + 1440 * 10));
+
+  // Vertical floor separation stops upper-floor monsters from triggering "Enemies are nearby".
+  const upperRat = { id: 'm1', kind: 'monster', dead: false, hp: 10, x: 1, z: 1, y: 19 };
+  assert.equal(restWarningsFor({ character: { location: 'dungeon:test' }, entities: [upperRat] }, { x: 0, z: 0, y: 1.6 }).length, 0);
+  const sameFloorRat = { id: 'm2', kind: 'monster', dead: false, hp: 10, x: 1, z: 1, y: 0 };
+  assert.equal(restWarningsFor({ character: { location: 'dungeon:test' }, entities: [sameFloorRat] }, { x: 0, z: 0, y: 1.6 }).length, 1);
+
+  h.api._receiveRpg(rpg({ v: 1, active: [tut, bg], done: [] }));
+  h.api.emit('event', { kind: 'questPrompt', uid: tut.uid, title: tut.title, text: tut.prompt.text });
+  h.api.emit('event', { kind: 'questAccepted', uid: bg.uid, title: bg.title, text: '', background: true });
+  h.open();
+  const text = h.text();
+  assert.equal(text.split('Do you want to use this tutorial?').length - 1, 1, 'prompt appears once, never duplicated in feed');
+  assert.match(text, /Lesson 1: Move with WASD\./, 'persisted quest message renders inside the quest card');
+  assert.doesNotMatch(text, /No journal entry yet/, 'persisted message replaces empty-log placeholder');
+  assert.doesNotMatch(text, /Curse of Daggerfall/, 'silent background quest is hidden from Current work');
+  assert.equal(h.notes.some((n) => n.includes('Curse of Daggerfall')), false, 'background quest does not toast');
+});
+
+test('opening quest events wait until leaving the loading/creation screen', () => {
+  const h = harness();
+  h.api.screen = 'loading';
+  h.api._receiveRpg(rpg({ v: 1, active: [inst({ uid: 't1', prompt: { id: 1010, text: 'Ready?' } })], done: [] }));
+  h.api.emit('event', { kind: 'questMessage', uid: 't1', title: 'Tutorial', text: 'Welcome to Privateer’s Hold.' });
+  assert.equal(h.notes.length, 0, 'toasts wait while loading screen is active');
+  h.api.screen = 'game';
+  h.api.emit('screen', 'game');
+  assert.ok(h.notes.some((n) => n.includes('Welcome to Privateer')), 'queued toast flushes once game screen is visible');
 });

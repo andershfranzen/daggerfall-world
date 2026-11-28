@@ -769,3 +769,29 @@ test('authored dungeon monsters respawn while the dungeon stays occupied, waitin
   assert.equal(living.length, 1, 'monster respawned while dungeon occupied');
   assert.notEqual(living[0].id, first.id);
 });
+
+test('post-revive grace de-aggros monsters and shields freshly revived players until it expires or they attack', () => {
+  const w = world({ seed: 9, combatOptions: { resurrectMs: 1000, spawnInterval: 9999 } });
+  const a = w.join(1, 'Aldora', 0, 0);
+  const rat = w.handle.spawnMonster(DEFAULT_LOCATION, RAT, 1, 0);
+  rat._targetId = a.id;
+  w.S.hurtPlayerBy(a, 9999, rat);
+  assert.equal(a.rpg.defeated, true);
+  w.tick(1.5);
+  assert.equal(a.rpg.defeated, undefined, 'player revived');
+  assert.ok(a.rpg.character.health >= 12, 'minimum safe revive health applied');
+  assert.equal(rat._targetId, null, 'monster de-aggroed on revive');
+
+  const hpAfterRevive = a.rpg.character.health;
+  // Monster melee damage is blocked during revive grace and monster will not re-target.
+  assert.equal(w.S.hurtPlayerBy(a, 5, rat), 0);
+  assert.equal(a.rpg.character.health, hpAfterRevive);
+  w.tick(1.0);
+  assert.equal(rat._targetId, null, 'monster stays off player during revive grace');
+
+  // After grace expires (8 s), monster damage applies again.
+  w.tick(8.5);
+  const hpBeforeHit = a.rpg.character.health;
+  assert.ok(w.S.hurtPlayerBy(a, 2, rat) > 0);
+  assert.equal(a.rpg.character.health, hpBeforeHit - 2);
+});

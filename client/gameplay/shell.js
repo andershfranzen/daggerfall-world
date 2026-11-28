@@ -921,9 +921,16 @@ export function createShell({ api, input, actions, settings }) {
     ui.target.hidden = false;
   }
 
-  function toast(text, { kind = 'info', ttl = 5000, event } = {}) {
+  function toast(text, { kind = 'info', ttl = 5000, event, onclick } = {}) {
     const icons = Array.isArray(event?.artItems) ? event.artItems.slice(0, 4).map((item) => itemIcon(api, item)) : [];
-    const li = h('li', { class: `toast toast-${kind}` }, icons, text);
+    const attrs = { class: `toast toast-${kind}${onclick ? ' toast-action' : ''}` };
+    if (typeof onclick === 'function') {
+      attrs.role = 'button';
+      attrs.tabindex = '0';
+      attrs.onclick = () => { li.remove(); onclick(); };
+      attrs.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); li.remove(); onclick(); } };
+    }
+    const li = h('li', attrs, icons, text);
     ui.toasts.append(li);
     while (ui.toasts.children.length > 4) ui.toasts.firstElementChild.remove();
     setTimeout(() => { li.classList.add('toast-out'); setTimeout(() => li.remove(), 400); }, ttl);

@@ -890,6 +890,10 @@ export function install(ctx, options = {}) {
     ctx.emit('defeat', { player: p, entity: by ?? null });
   }
 
+  const REVIVE_GRACE_MS = 8_000;
+  const reviveGraceUntil = new Map();
+  const inReviveGrace = (p) => !!p && ctx.now() < (reviveGraceUntil.get(p.id) ?? 0);
+
   function resurrect(p, { inPlace = false, fraction = cfg.resurrectFraction } = {}) {
     ctx.dirty(p);
     if (typeof S.revivePlayer === 'function') S.revivePlayer(p, fraction);
@@ -900,9 +904,20 @@ export function install(ctx, options = {}) {
         if (Number.isFinite(c.maxFatigue)) c.fatigue = Math.max(c.fatigue ?? 0, Math.floor(c.maxFatigue * fraction));
       }
     }
+    const c = characterOf(p);
+    if (c && !inPlace && fraction >= 0.1 && Number.isFinite(c.maxHealth) && c.maxHealth > 0) {
+      c.health = Math.max(c.health ?? 0, Math.min(c.maxHealth, 12));
+    }
     delete p.rpg.defeated;
     resurrectAt.delete(p.id);
     downedAt.delete(p.id);
+    reviveGraceUntil.set(p.id, ctx.now() + REVIVE_GRACE_MS);
+    for (const e of ctx.entities.values()) {
+      if (e?._m && e._targetId === p.id) {
+        e._targetId = null;
+        e._pursuit = null;
+      }
+    }
     if (!inPlace) {
       const location = locationOf(p);
       if (S.interiors?.isInstance?.(location)) {
@@ -937,6 +952,7 @@ export function install(ctx, options = {}) {
   /** `cause` (spell, trap, ...) sends the injured player a private `hurt`; monster blows report through monsterAttack. */
   function hurtPlayer(p, amount, source, onApplied, cause = null) {
     if (!(amount > 0) || isDefeated(p)) return;
+    if (source?.kind === 'monster' && inReviveGrace(p)) return 0;
     let pvpIntercept = null;
     if (typeof S.pvp?.onPlayerDamage === 'function') {
       pvpIntercept = S.pvp.onPlayerDamage(p, amount, source, cause ?? 'melee');
@@ -1015,8 +1031,8 @@ export function install(ctx, options = {}) {
   }
 
   function validTarget(e, p) {
-    // A player still on their loading screen (server/game.js `arriving`) cannot be seen or attacked yet.
-    return !!p && !p.arriving && canHarmMonster(p, e) && (e.lawSuspect == null || e.lawSuspect === p.id)
+    // A player still on their loading screen (server/game.js `arriving`) or in post-revive grace cannot be targeted.
+    return !!p && !p.arriving && !inReviveGrace(p) && canHarmMonster(p, e) && (e.lawSuspect == null || e.lawSuspect === p.id)
       && ctx.players.get(p.id) === p && locationOf(p) === e.location && characterOf(p) && !isDefeated(p);
   }
 
@@ -1777,6 +1793,7 @@ export function install(ctx, options = {}) {
     if (args.direction != null && !Object.hasOwn(SWINGS, args.direction)) throw new Error('Unknown swing direction.');
     if (args.targetId != null && typeof args.targetId !== 'string' && typeof args.targetId !== 'number') throw new Error('Invalid target.');
     const now = ctx.now();
+    reviveGraceUntil.delete(p.id);
     if (now < (nextSwing.get(p.id) ?? 0)) throw new Error('You are still recovering from your last attack.');
 
     let weaponItem = null;

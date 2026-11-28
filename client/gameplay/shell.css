@@ -215,9 +215,28 @@ body[data-readied] #hud-ready-btn { color: var(--sh-accent); }
   text-align: center;
   animation: sh-toast-in 160ms steps(3) both;
 }
+.toast-action { pointer-events: auto; cursor: pointer; border-left: 3px solid var(--sh-accent); }
+.toast-action:hover { filter: brightness(1.12); }
 .toast-error { color: #f3c3bb; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), inset 3px 0 0 var(--sh-danger); }
 .toast-out { opacity: 0; transition: opacity 360ms steps(4); }
 @keyframes sh-toast-in { from { opacity: 0; translate: 0 -6px; } }
+
+#hud-bar [data-badge], .menu-tab[data-badge] { position: relative; }
+#hud-bar [data-badge]::after, .menu-tab[data-badge]::after {
+  content: attr(data-badge);
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 1.15em;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--sh-accent, #6fb6ff);
+  color: #08101a;
+  font: 700 0.68rem/1.35 var(--font-ui, system-ui, sans-serif);
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
 
 /* ------------------------------------------------------------------ menu dialog */
 /* One column: a top bar of seven section tabs, an optional sub-tab strip for the section's pages,

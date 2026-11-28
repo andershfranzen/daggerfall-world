@@ -57,39 +57,97 @@ export function questGiversHere(state, at = null) {
     .sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0));
 }
 
+/** True when a quest instance is a silent background script with nothing player-facing to show yet. */
+export function isHiddenBackgroundQuest(inst) {
+  return !!(inst?.background && !inst.log?.length && !inst.prompt);
+}
+
 /** The running deadline (classic minutes) of a quest instance, or null. */
 export function questDeadline(inst) {
+  if (!inst || inst.name === '_TUTOR__' || inst.background) return null;
+  const brisienPreLetter = inst.name === '_BRISIEN' && !inst.items?.['i.00']?.held && !inst.items?.['i.00']?.handedOver;
   let end = null;
-  for (const c of Object.values(inst?.clocks ?? {})) {
+  for (const [key, c] of Object.entries(inst?.clocks ?? {})) {
+    if (brisienPreLetter && key === 's.00') continue;
     if (c && c.running && !c.done && Number.isFinite(c.endAt)) end = end === null ? c.endAt : Math.min(end, c.endAt);
   }
   return end;
 }
 
 export function install(api) {
-  const ui = { feed: [], report: null, busy: false, showReport: false, open: new Set(), owner: null };
+  const ui = {
+    feed: [], promptText: new Map(), pending: [], unread: 0,
+    report: null, busy: false, showReport: false, open: new Set(), owner: null, greetedPrompt: false,
+  };
   let container = null;
 
   const connection = () => api.connection ?? globalThis.document?.body?.dataset?.conn ?? 'online';
   const current = () => journalState(api.state, { screen: api.screen ?? 'game', connection: connection() });
-  const rerender = () => { if (container?.isConnected) render(container); };
-  const push = (title, text, tone = 'say') => {
+  const isBlocked = () => (api.screen && api.screen !== 'game')
+    || globalThis.document?.getElementById?.('cinematic')?.dataset?.on === 'true';
+  const rerender = () => { if (container?.isConnected) render(container); syncBadge(); };
+  const push = (title, text, tone = 'say', uid = null) => {
     if (!text) return;
-    ui.feed.unshift({ title, text, tone, at: Date.now() });
+    ui.feed.unshift({ title, text, tone, uid, at: Date.now() });
     ui.feed.length = Math.min(ui.feed.length, MAX_FEED);
   };
   // The feed and support report are this session's notes; they never carry over to another
   // character or account on the same page.
-  const resetSession = () => { ui.feed = []; ui.report = null; ui.showReport = false; ui.open.clear(); ui.busy = false; };
+  const resetSession = () => {
+    ui.feed = [];
+    ui.promptText.clear();
+    ui.pending = [];
+    ui.unread = 0;
+    ui.report = null;
+    ui.showReport = false;
+    ui.open.clear();
+    ui.busy = false;
+    ui.greetedPrompt = false;
+    syncBadge();
+  };
   const show = () => {
     if (api.panel !== 'journal') api.openPanel('journal');
     else rerender();
   };
-  const act = (verb, args) => {
+  const syncBadge = () => {
+    const doc = globalThis.document;
+    if (!doc?.querySelector) return;
+    const js = current();
+    const prompts = js.kind === 'ready' ? js.quests.active.filter((i) => i.prompt).length : 0;
+    const count = prompts + (api.panel === 'journal' && !isBlocked() ? 0 : ui.unread);
+    const badge = count > 0 ? String(Math.min(9, count)) : null;
+    for (const sel of ['#hud-bar [data-panel="journal"]', '#menu-cat-journal']) {
+      const btn = doc.querySelector(sel);
+      if (!btn) continue;
+      if (badge) btn.setAttribute('data-badge', badge);
+      else btn.removeAttribute?.('data-badge');
+    }
+  };
+  const deliverOrQueue = (fn, { priority = false } = {}) => {
+    if (isBlocked()) {
+      if (priority) ui.pending.unshift(fn);
+      else ui.pending.push(fn);
+    } else fn();
+  };
+  const flushPending = () => {
+    if (isBlocked() || !ui.pending.length) return;
+    const list = ui.pending.splice(0, ui.pending.length);
+    for (const fn of list) fn();
+    syncBadge();
+  };
+  const act = (verb, args, { refocus = false } = {}) => {
     ui.busy = true;
     rerender();
     const r = api.act(verb, args);
-    const done = () => { ui.busy = false; rerender(); };
+    const done = () => {
+      ui.busy = false;
+      rerender();
+      if (refocus && container?.isConnected) {
+        const nextBtn = container.querySelector?.('.qj-prompt button, .qj-offer button');
+        if (nextBtn?.focus) nextBtn.focus();
+        else container.querySelector?.('.qj-root')?.focus?.();
+      }
+    };
     if (r && typeof r.then === 'function') r.then(done, done);
     else done();
   };
@@ -99,10 +157,28 @@ export function install(api) {
     if (!s || (owner && ui.owner && owner !== ui.owner)) resetSession();
     if (owner) ui.owner = owner;
     else if (!s) ui.owner = null;
+    const active = Array.isArray(s?.character?.quests?.active) ? s.character.quests.active : [];
+    for (const uid of [...ui.promptText.keys()]) {
+      const inst = active.find((i) => i.uid === uid);
+      if (!inst?.prompt) ui.promptText.delete(uid);
+    }
+    if (!ui.greetedPrompt && active.length) {
+      ui.greetedPrompt = true;
+      const waiting = active.find((i) => i.prompt);
+      if (waiting && api.panel !== 'journal') {
+        deliverOrQueue(() => {
+          if (api.panel !== 'journal' && current().quests?.active?.some((i) => i.uid === waiting.uid && i.prompt)) {
+            api.message(`${waiting.title}: question waiting — press J to open Journal.`, { kind: 'quest', ttl: 9000, onclick: show });
+          }
+        });
+      }
+    }
     rerender();
   });
   api.on('account', () => { resetSession(); ui.owner = null; rerender(); });
   api.on('connection', rerender);
+  api.on('screen', () => { flushPending(); syncBadge(); });
+  api.on('cinematicEnd', () => { flushPending(); syncBadge(); });
   api.on('event', (ev) => {
     if (!ev || typeof ev.kind !== 'string' || !ev.kind.startsWith('quest')) return;
     // The journal announces quest events itself (a short toast; full text in the page), so
@@ -115,36 +191,53 @@ export function install(api) {
         // also in the journal, from the authoritative snapshot, until answered.
         // `ev.talkHandled`: the in-chat conversation (npcs.js) is showing it with Accept/Refuse.
         if (ev.talkHandled || (api.panel === 'dialogue' && api.getPanel('dialogue')?.handlesQuestOffers)) rerender();
-        else show();
+        else deliverOrQueue(show, { priority: true });
         break;
       case 'questAccepted':
-        push(ev.title, ev.text, 'accept');
-        if (!ev.talkHandled) api.message(`Journal: ${ev.title} added.`, { kind: 'quest' });
+        push(ev.title, ev.text, 'accept', ev.uid ?? null);
+        if (!ev.talkHandled && !ev.background) {
+          deliverOrQueue(() => {
+            if (api.panel !== 'journal') api.message(`Journal: ${ev.title} added.`, { kind: 'quest', onclick: show });
+          });
+        }
         rerender();
         break;
       case 'questRefused':
-        push(ev.title, ev.text, 'refuse');
+        push(ev.title, ev.text, 'refuse', ev.uid ?? null);
         rerender();
         break;
-      case 'questMessage':
-        push(ev.title ?? 'Journal', ev.text);
-        if (!ev.talkHandled) api.message(firstLine(ev.text), { kind: 'quest' });
+      case 'questMessage': {
+        push(ev.title ?? 'Journal', ev.text, 'say', ev.uid ?? null);
+        if (api.panel !== 'journal' || isBlocked()) ui.unread += 1;
+        if (!ev.talkHandled) {
+          const line = formatToastLine(ev.text);
+          const long = String(ev.text ?? '').trim().length > 120;
+          deliverOrQueue(() => {
+            if (ev.uid && api.panel === 'journal') return;
+            api.message(line, { kind: 'quest', ttl: long ? 9500 : 5500, onclick: show });
+          });
+        }
         rerender();
         break;
+      }
       case 'questPrompt':
-        push(ev.title, ev.text, 'prompt');
+        if (ev.uid && ev.text) ui.promptText.set(ev.uid, ev.text);
         if (ev.talkHandled) rerender();
-        else show();
+        else deliverOrQueue(show, { priority: true });
         break;
       case 'questLog':
-        api.message(`Journal updated: ${ev.title}`, { kind: 'quest' });
+        if (api.panel !== 'journal' || isBlocked()) ui.unread += 1;
+        deliverOrQueue(() => {
+          if (api.panel !== 'journal') api.message(`Journal updated: ${ev.title}`, { kind: 'quest', onclick: show });
+        });
         rerender();
         break;
       case 'questReward':
-        api.message(ev.gold ? `You receive ${ev.gold} gold.` : `You receive ${ev.item}.`, { kind: 'quest' });
+        deliverOrQueue(() => api.message(ev.gold ? `You receive ${ev.gold} gold.` : `You receive ${ev.item}.`, { kind: 'quest' }));
         break;
       case 'questEnd':
-        api.message(`${ev.title}: ${RESULT[ev.result] ?? ev.result}.`, { kind: 'quest' });
+        if (ev.uid) ui.promptText.delete(ev.uid);
+        deliverOrQueue(() => api.message(`${ev.title}: ${RESULT[ev.result] ?? ev.result}.`, { kind: 'quest' }));
         rerender();
         break;
       case 'questSound':
@@ -169,11 +262,10 @@ export function install(api) {
     return el('section', { class: 'qj-card qj-offer', 'aria-label': 'Quest offer' },
       el('p', { class: 'qj-kicker', text: `${o.giver?.name ?? 'Someone'} offers work` }),
       el('h4', { class: 'qj-title', text: o.title }),
-      el('p', { class: 'qj-meta', text: `classic ${o.name}` }),
       el('p', { class: 'qj-text', text: reflow(o.text) || '…' }),
       el('div', { class: 'qj-buttons' },
-        el('button', { type: 'button', class: 'btn btn-primary', 'data-focus-key': 'qj-accept', disabled: ui.busy || stale, onclick: () => act('quest.accept', { offerId: o.id }) }, 'Accept'),
-        el('button', { type: 'button', class: 'btn', 'data-focus-key': 'qj-refuse', disabled: ui.busy || stale, onclick: () => act('quest.refuse', { offerId: o.id }) }, 'Refuse')));
+        el('button', { type: 'button', class: 'btn btn-primary', 'data-focus-key': 'qj-accept', disabled: ui.busy || stale, onclick: () => act('quest.accept', { offerId: o.id }, { refocus: true }) }, 'Accept'),
+        el('button', { type: 'button', class: 'btn', 'data-focus-key': 'qj-refuse', disabled: ui.busy || stale, onclick: () => act('quest.refuse', { offerId: o.id }, { refocus: true }) }, 'Refuse')));
   }
 
   function promptBox(inst, text, stale) {
@@ -181,8 +273,8 @@ export function install(api) {
       el('p', { class: 'qj-kicker', text: inst.title }),
       el('p', { class: 'qj-text', text: reflow(text) || 'Will you?' }),
       el('div', { class: 'qj-buttons' },
-        el('button', { type: 'button', class: 'btn btn-primary', 'data-focus-key': `qj-yes-${inst.uid}`, disabled: ui.busy || stale, onclick: () => act('quest.answer', { uid: inst.uid, yes: true }) }, 'Yes'),
-        el('button', { type: 'button', class: 'btn', 'data-focus-key': `qj-no-${inst.uid}`, disabled: ui.busy || stale, onclick: () => act('quest.answer', { uid: inst.uid, yes: false }) }, 'No')));
+        el('button', { type: 'button', class: 'btn btn-primary', 'data-focus-key': `qj-yes-${inst.uid}`, disabled: ui.busy || stale, onclick: () => act('quest.answer', { uid: inst.uid, yes: true }, { refocus: true }) }, 'Yes'),
+        el('button', { type: 'button', class: 'btn', 'data-focus-key': `qj-no-${inst.uid}`, disabled: ui.busy || stale, onclick: () => act('quest.answer', { uid: inst.uid, yes: false }, { refocus: true }) }, 'No')));
   }
 
   function questEntry(inst, stale) {
@@ -193,20 +285,36 @@ export function install(api) {
     const source = inst.giver;
     const place = source?.location && locationName(source.location, null, null, { to: source.location, label: source.buildingName, townName: source.townName });
     const giver = source?.name ? `From ${source.name}${place ? `, ${place}` : ''}` : null;
+    const msgs = Array.isArray(inst.messages) ? inst.messages.filter((m) => m && m.text) : [];
+    let body;
+    if (inst.log?.length) {
+      body = el('ol', { class: 'qj-log' }, inst.log.map((e) => el('li', { class: 'qj-text', text: reflow(e.text) })));
+    } else if (msgs.length) {
+      const latest = msgs[msgs.length - 1];
+      const earlier = msgs.slice(0, -1).reverse();
+      body = el('div', { class: 'qj-messages' },
+        el('p', { class: 'qj-text', text: reflow(latest.text) }),
+        earlier.length ? el('details', { class: 'qj-messages' },
+          el('summary', { text: `Earlier messages (${earlier.length})` }),
+          el('ul', { class: 'qj-messages-list' }, earlier.map((m) => el('li', { class: 'qj-text', text: reflow(m.text) })))) : null);
+    } else {
+      body = el('p', { class: 'qj-meta', text: 'No journal entry yet.' });
+    }
     return el('li', { class: 'qj-quest', 'data-quest': inst.uid },
       el('div', { class: 'qj-quest-head' },
         el('strong', { class: 'qj-quest-title', text: inst.title }),
         el('span', { class: `qj-chip${inst.success ? ' qj-chip-good' : ''}`, text: status })),
-      el('p', { class: 'qj-meta', text: [giver, `classic ${inst.name}`].filter(Boolean).join(' · ') }),
+      giver ? el('p', { class: 'qj-meta', text: giver }) : null,
       Number.isFinite(inst.acceptedAt) || due !== null ? el('p', { class: 'qj-meta' },
         Number.isFinite(inst.acceptedAt) ? `Accepted ${dateText(inst.acceptedAt)}` : null,
         Number.isFinite(inst.acceptedAt) && due !== null ? ' · ' : null,
         due !== null ? el('span', { class: 'qj-due', text: `Due by ${dateText(due)}` }) : null) : null,
       // Classic escort faces (`add _P_ face`): people travelling with the player for this quest.
       inst.faces?.length ? el('p', { class: 'qj-meta qj-faces', text: `Travelling with you: ${inst.faces.map((f) => f.name).join(', ')}` }) : null,
-      inst.log?.length
-        ? el('ol', { class: 'qj-log' }, inst.log.map((e) => el('li', { class: 'qj-text', text: reflow(e.text) })))
-        : el('p', { class: 'qj-meta', text: 'No journal entry yet.' }),
+      body,
+      inst.log?.length && msgs.length ? el('details', { class: 'qj-messages' },
+        el('summary', { text: `Recent messages (${msgs.length})` }),
+        el('ul', { class: 'qj-messages-list' }, [...msgs].reverse().map((m) => el('li', { class: 'qj-text', text: reflow(m.text) })))) : null,
       held.length ? el('div', { class: 'qj-items' },
         el('span', { class: 'qj-meta', text: 'Carrying:' }),
         held.flatMap(([k, it]) => {
@@ -228,7 +336,7 @@ export function install(api) {
         })) : null,
       inst.report || inst.notes?.length ? el('details', { class: 'qj-report', open: expanded, ontoggle: (e) => { if (e.target.open) ui.open.add(inst.uid); else ui.open.delete(inst.uid); } },
         el('summary', { text: 'How this quest runs here' }),
-        el('p', { class: 'qj-meta', text: inst.report?.source === 'classic' ? 'Logic and text read from your ARENA2 QBN/QRC files.' : 'Logic from the operator’s quest script; text from ARENA2 when present.' }),
+        el('p', { class: 'qj-meta', text: `${inst.report?.source === 'classic' ? 'Logic and text read from your ARENA2 QBN/QRC files.' : 'Logic from the operator’s quest script; text from ARENA2 when present.'} (Script: ${inst.name})` }),
         inst.report?.approximations?.length ? el('ul', { class: 'qj-notes' }, inst.report.approximations.map((a) => el('li', { text: `Simplified: ${a}` }))) : null,
         inst.notes?.length ? el('ul', { class: 'qj-notes' }, inst.notes.map((a) => el('li', { text: `Not supported: ${a}` }))) : null) : null);
   }
@@ -275,6 +383,7 @@ export function install(api) {
 
   function render(root) {
     container = root;
+    if (api.panel === 'journal' && !isBlocked()) ui.unread = 0;
     const js = current();
     root.dataset.journal = js.kind;
     const kids = [];
@@ -283,21 +392,30 @@ export function install(api) {
     }
     if (js.kind !== 'ready') {
       kids.push(statusBox(js.kind));
-      root.replaceChildren(el('div', { class: 'qj-root' }, kids));
+      root.replaceChildren(el('div', { class: 'qj-root', tabindex: '-1' }, kids));
+      syncBadge();
       return;
     }
     const q = js.quests;
     const stale = !!js.stale;
+    const visibleActive = q.active.filter((inst) => !isHiddenBackgroundQuest(inst));
     if (q.offer) kids.push(offerBox(q.offer, stale));
-    for (const inst of q.active) {
+    for (const inst of visibleActive) {
       if (inst.prompt) {
-        const recent = ui.feed.find((f) => f.title === inst.title && f.tone === 'prompt');
-        kids.push(promptBox(inst, inst.prompt.text ?? recent?.text, stale));
+        kids.push(promptBox(inst, inst.prompt.text ?? ui.promptText.get(inst.uid), stale));
       }
     }
-    if (ui.feed.length) {
+    // Only show ephemeral feed messages that are not already persisted inside an active quest card.
+    const persistedTexts = new Set();
+    for (const inst of visibleActive) {
+      if (!inst.log?.length && Array.isArray(inst.messages) && inst.messages.length) {
+        persistedTexts.add(`${inst.uid}:${inst.messages[inst.messages.length - 1].text}`);
+      }
+    }
+    const extraFeed = ui.feed.filter((f) => !(f.uid && persistedTexts.has(`${f.uid}:${f.text}`)));
+    if (extraFeed.length) {
       kids.push(el('section', { class: 'qj-card qj-feed', 'aria-label': 'Recent quest messages', 'aria-live': 'polite' },
-        ui.feed.slice(0, 3).map((f) => el('div', { class: `qj-say qj-say-${f.tone}` },
+        extraFeed.slice(0, 3).map((f) => el('div', { class: `qj-say qj-say-${f.tone}` },
           el('p', { class: 'qj-kicker', text: f.title }),
           el('p', { class: 'qj-text', text: reflow(f.text) })))));
     }
@@ -309,8 +427,8 @@ export function install(api) {
           type: 'button', class: 'btn btn-small', 'data-focus-key': `qj-take-${e.id}`, disabled: ui.busy || stale, onclick: () => act('quest.click', { targetId: e.id }),
         }, `Take ${e.name}`)))));
     }
-    kids.push(el('h4', { class: 'qj-h4', text: `Current work${q.active.length ? ` (${q.active.length})` : ''}` }));
-    kids.push(q.active.length ? el('ul', { class: 'qj-list' }, q.active.map((inst) => questEntry(inst, stale))) : (q.offer ? el('p', { class: 'menu-empty', text: 'None yet — accept the offer above to add it.' }) : emptyBox()));
+    kids.push(el('h4', { class: 'qj-h4', text: `Current work${visibleActive.length ? ` (${visibleActive.length})` : ''}` }));
+    kids.push(visibleActive.length ? el('ul', { class: 'qj-list' }, visibleActive.map((inst) => questEntry(inst, stale))) : (q.offer ? el('p', { class: 'menu-empty', text: 'None yet — accept the offer above to add it.' }) : emptyBox()));
     if (q.done.length) {
       kids.push(el('h4', { class: 'qj-h4', text: `Finished (${q.done.length})` }));
       kids.push(el('ul', { class: 'qj-list qj-done' }, q.done.slice(0, 12).map((d) => el('li', { class: 'qj-quest', 'data-quest': d.uid },
@@ -323,15 +441,16 @@ export function install(api) {
     if (ui.showReport && ui.report) kids.push(reportBox(ui.report));
     kids.push(el('p', { class: 'qj-foot' },
       el('button', { type: 'button', class: 'btn btn-small', 'data-focus-key': 'qj-catalog', disabled: stale, onclick: () => api.act('quest.catalog', {}) }, 'Quest support report')));
-    root.replaceChildren(el('div', { class: 'qj-root' }, kids));
+    root.replaceChildren(el('div', { class: 'qj-root', tabindex: '-1' }, kids));
+    syncBadge();
   }
 
   api.registerPanel('journal', 'Journal', (root) => render(root));
 }
 
-function firstLine(text) {
-  const s = String(text ?? '').split('\n').join(' ').trim();
-  return s.length > 120 ? `${s.slice(0, 117)}…` : s;
+function formatToastLine(text) {
+  const s = String(text ?? '').split('\n').join(' ').replace(/\s+/g, ' ').trim();
+  return s.length > 120 ? `${s.slice(0, 117)}… — press J to read` : s;
 }
 
 export default install;

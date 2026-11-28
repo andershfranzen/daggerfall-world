@@ -8,6 +8,45 @@ export const CORRECTIONS = Object.freeze({
     note: 'The Dragonslayer uses a Dragon’s Den (QBN dungeon type 14 and the reference script’s dungeon14 only).',
     adapt: (lines) => lines.map((line) => line === 'Place _L.00_ remote dungeon14' ? `${line} only` : line),
   },
+  _TUTOR__: {
+    note: 'Leaving Privateer’s Hold stops stale indoor lesson timers, indoor follow-ups only start inside the Hold, and arriving in Daggerfall city fires Lesson 9 only once.',
+    adapt: (lines) => {
+      const indoorFollow = {
+        '_S.16_': '_S.04_',
+        '_S.17_': '_S.06_',
+        '_S.18_': '_S.05_',
+        '_S.19_': '_S.07_',
+        '_S.20_': '_S.08_',
+      };
+      let currentTask = null;
+      const extra = ['', 'variable _atdf_'];
+      const adapted = lines.map((line) => {
+        const m = /^(_S\.\d+_) task:$/.exec(line);
+        if (m) currentTask = m[1];
+        if (line === '\tpc at _L.01_ set _S.25_') return '\tpc at _L.01_ set _atdf_';
+        if (line === '\tsay 1040') {
+          return [
+            '\tstop timer _S.03_',
+            '\tstop timer _S.04_',
+            '\tstop timer _S.05_',
+            '\tstop timer _S.06_',
+            '\tstop timer _S.07_',
+            '\tstop timer _S.08_',
+            line,
+          ].join('\n');
+        }
+        if (line === '_S.25_ task:') return '_S.25_ task:\n\twhen _atdf_ and not _S.22_';
+        if (currentTask && indoorFollow[currentTask] && line === `\tstart timer ${indoorFollow[currentTask]}`) {
+          const timer = indoorFollow[currentTask];
+          const gate = `_hold_${currentTask.slice(1, -1)}_`;
+          extra.push('', `${gate} task:`, `\twhen ${currentTask} and _S.00_`, `\tstart timer ${timer}`);
+          return '';
+        }
+        return line;
+      });
+      return [...adapted, ...extra];
+    },
+  },
   _BRISIEN: {
     note: 'The starting dungeon holds the contact clock until the character leaves, as in the _BRISIEN exit task.',
     adapt: (lines) => [

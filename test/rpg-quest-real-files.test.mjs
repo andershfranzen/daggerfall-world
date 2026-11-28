@@ -12,6 +12,7 @@ import { AudioEngine } from '../client/gameplay/atmosphere/engine.js';
 import { BsaArchive, NUMBER_RECORD } from '../client/world/bsa.js';
 import { questItemIdentity } from '../server/rpg/quests/itemIdentity.js';
 import { permanentQuestItem } from '../server/rpg/campaign/rewards.js';
+import { expand } from '../server/rpg/quests/text.js';
 import { addItem } from '../server/rpg/inventory.js';
 
 const arena2 = localArena2();
@@ -66,4 +67,39 @@ test('make permanent fallback on an installed quest item yields an ordinary, tra
   const [rec] = player.rpg.inventory;
   assert.equal(rec.quest, undefined, 'not flagged as a quest item (untradeable, unsellable, unstorable)');
   assert.equal(quest.items[r.key].permanent, true);
+});
+
+test('all classic % macros across installed ARENA2 quests expand with zero unknown tokens', { skip: !arena2 && 'no local ARENA2' }, () => {
+  const cat = loadCatalog({ dataPath: arena2, artifact: () => true });
+  const host = new Proxy({
+    location: () => 'town:Daggerfall/Gothway Garden',
+    remoteTown: () => 'town:Daggerfall/Daggerfall',
+    makeName: () => 'Alaric',
+    itemName: (r) => r.className || 'item',
+    text: () => '',
+  }, { get: (o, k) => o[k] ?? (() => null) });
+  const unknown = new Set();
+  for (const [, entry] of cat.quests) {
+    const inst = createInstance(entry.def, {
+      uid: `m-${entry.name}`, seed: 1,
+      giver: { id: 'npc:1', name: 'Test Giver', location: 'town:Daggerfall/Gothway Garden', faction: 41, factionName: 'The Fighters Guild' },
+      host, now: 1000,
+    });
+    for (const [, msg] of entry.def.messages) {
+      for (const v of msg.variants) {
+        const res = expand(v, entry.def, inst, {
+          playerName: 'Aldora', race: 'Breton', className: 'Warrior',
+          here: 'town:Daggerfall/Gothway Garden', now: 1000,
+          dateText: () => '1st of Morning Star',
+          titleOf: () => 'resident',
+          factionNameOf: () => 'The Fighters Guild',
+          direction: 'north',
+          makeName: (g) => (g === 'female' ? 'Mirabelle' : 'Alaric'),
+          townName: () => 'Gothway Garden',
+        });
+        for (const u of res.unknown) unknown.add(`${entry.name}:${u}`);
+      }
+    }
+  }
+  assert.deepEqual([...unknown], [], 'no unknown % macro tokens remain across installed quests');
 });

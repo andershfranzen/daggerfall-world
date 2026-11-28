@@ -163,9 +163,15 @@ test('installed campaign opening, tutorial choice, resurrection at the exit and 
   p.x = tavern.entrances[0].x;
   p.z = tavern.entrances[0].z;
   client.must('portal.use', { portalId: tavern.id });
+  await world.ctx.services.collision.whenSettled(interior);
   const lady = await until(world, () => client.state.entities.find((e) => e.kind === 'npc' && e.faction === 352), 'Lady Brisienna');
-  p.x = lady.x;
-  p.z = lady.z;
+  const tavernWorld = world.ctx.services.collision.instanceWorld(interior);
+  const ladyY = Number.isFinite(lady.y) ? lady.y : tavernWorld.standHeight(lady.x, lady.z);
+  assert.ok(tavernWorld.isClear(lady.x, lady.z, ladyY), 'Lady Brisienna must stand on clear interior floor');
+  const walk = tavernWorld.move(p.x, p.z, lady.x, lady.z, { y: p.rpg.portal.footY });
+  assert.ok(Math.hypot(walk.x - lady.x, walk.z - lady.z) <= 3.5, `Lady Brisienna must be walkable from the tavern entrance (stopped ${Math.hypot(walk.x - lady.x, walk.z - lady.z).toFixed(2)}m away)`);
+  p.x = walk.x;
+  p.z = walk.z;
   client.must('npc.talk', { targetId: lady.id });
   assert.equal(client.character.quests.globals[31], true);
   assert.equal(readPersisted(dbPath, client.id).rpg.quests.globals[31], true);
@@ -599,4 +605,65 @@ test('all 34 S0000* campaign scripts pass static analysis and S0000008 -> S00000
     assert.deepEqual(movies, [3, movie], `${recipient}: plays Mantella + ending movie ${movie}`);
     assert.equal(globals.has(ending), true, `${recipient}: ending global ${ending} set`);
   }
+});
+
+test('rushed Privateer’s Hold exit queues pending prompts, stops indoor timers, and triggers Lesson 9 once', gate, () => {
+  assert.ok(dataPath, 'strict integration requires the installed game files');
+  const { def } = loadCatalog({ dataPath }).quests.get('_TUTOR__');
+  let loc = OPENING_DUNGEON;
+  let minute = 100;
+  const prompts = [];
+  const messages = [];
+  const host = {
+    location: () => loc,
+    isAt: (pl) => (pl.interior ? loc === pl.interior : loc === pl.location),
+    text: (_, id) => `msg-${id}`,
+    message: (_, id) => messages.push(id),
+    prompt: (inst, id) => { if (inst.prompt) inst.prompt.text = `prompt-${id}`; prompts.push(id); },
+    startQuest() {},
+    end: (inst) => { inst.status = 'ended'; },
+  };
+  const inst = createInstance(def, { uid: 'tutor-rush', seed: 1, giver: null, host, now: minute });
+  const step = (n = 4) => { for (let i = 0; i < n; i++) updateQuest(def, inst, host, minute); };
+
+  step();
+  assert.equal(inst.prompt?.id, 1010);
+  assert.ok(answerPrompt(def, inst, true));
+  step();
+  assert.ok(messages.includes(1012));
+
+  // Advance so Lesson 2 (1013) fires while still inside Privateer's Hold, leave it unanswered, then exit the Hold.
+  minute += 10;
+  step();
+  assert.equal(inst.prompt?.id, 1013);
+  loc = 'town:Daggerfall/Gothway Garden';
+  step();
+  assert.equal(inst.prompt?.id, 1013, 'existing unanswered prompt is preserved instead of overwritten');
+  assert.equal(inst.promptQueue?.[0]?.id, 1041, 'Lesson 8 (1041) waits in promptQueue');
+  assert.equal(inst.clocks['s.04']?.running, false, 'indoor lesson timers do not run outdoors');
+
+  // Answer Yes to 1013 -> queued 1041 promotes cleanly.
+  assert.ok(answerPrompt(def, inst, true));
+  step();
+  assert.equal(inst.prompt?.id, 1041);
+  // Advance past all indoor timers: no indoor lesson should interrupt 1041.
+  minute += 60;
+  step();
+  assert.equal(inst.prompt?.id, 1041, 'stale indoor lesson timer never overwrites Lesson 8');
+
+  assert.ok(answerPrompt(def, inst, true));
+  step();
+  // Arrive in Daggerfall city -> Lesson 9 (1045 / 1046) fires once.
+  loc = 'town:Daggerfall/Daggerfall';
+  step();
+  assert.equal(messages.filter((m) => m === 1045).length, 1);
+  assert.equal(inst.prompt?.id, 1046);
+  assert.ok(answerPrompt(def, inst, true));
+  step();
+  // Leave Daggerfall and return -> Lesson 9 must NOT fire a second time.
+  loc = 'town:Daggerfall/Gothway Garden';
+  step();
+  loc = 'town:Daggerfall/Daggerfall';
+  step();
+  assert.equal(messages.filter((m) => m === 1045).length, 1, 'Lesson 9 does not repeat on subsequent Daggerfall visits');
 });

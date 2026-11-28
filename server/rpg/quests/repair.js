@@ -38,6 +38,7 @@ function hasQuestItemInInventory(p, questUid, itemKey, rec) {
   const inv = inventoryOf(p);
   return inv.some((it) => {
     if (!it || typeof it !== 'object') return false;
+    if (rec.invId && it.id === rec.invId) return true;
     if (rec.inventoryItemId && it.id === rec.inventoryItemId) return true;
     if (it.questUid === questUid && (it.questKey === itemKey || it.key === itemKey)) return true;
     if (rec.template && it.template === rec.template && it.questUid === questUid) return true;
@@ -128,7 +129,7 @@ export function install(ctx) {
 
       // 2. Check placed targets (foes / NPCs)
       for (const [targetKey, rec] of Object.entries(inst.foes ?? {})) {
-        if (!rec || typeof rec !== 'object' || rec.killed || rec.dead) continue;
+        if (!rec || typeof rec !== 'object' || rec.killed || rec.dead || rec.removed) continue;
         if (rec.placedAt && (!rec.markerId || rec.targetMissing)) {
           findings.push({
             scope: 'personal',
@@ -147,6 +148,7 @@ export function install(ctx) {
 
       for (const [placeKey, place] of Object.entries(inst.places ?? {})) {
         if (!place || typeof place !== 'object') continue;
+        if (place.scope === 'permanent' || inst.story) continue;
         const site = place.interior ?? place.location;
         if (typeof site === 'string' && site.startsWith('dungeon:') && !place.layoutId) {
           findings.push({
@@ -268,25 +270,41 @@ export function install(ctx) {
         if (!rec || !rec.given || rec.handedOver || inst.paid) continue;
         if (hasQuestItemInInventory(p, f.questUid, f.resourceKey, rec)) continue;
         if (!Array.isArray(p.rpg.inventory)) p.rpg.inventory = [];
-        const restoredId = rec.inventoryItemId || `qrep_${f.questUid}_${f.resourceKey}_${randomBytes(3).toString('hex')}`;
-        const restoredItem = {
-          id: restoredId,
-          template: rec.template ?? 'quest-relic',
-          name: rec.name ?? 'Recovered Quest Item',
-          quantity: 1,
-          questUid: f.questUid,
-          questKey: f.resourceKey,
-          recoveredByRepair: true,
-        };
-        p.rpg.inventory.push(restoredItem);
-        rec.inventoryItemId = restoredId;
+        let restoredId = rec.invId || rec.inventoryItemId || `qrep_${f.questUid}_${f.resourceKey}_${randomBytes(3).toString('hex')}`;
+        let restoredName = rec.name ?? 'Recovered Quest Item';
+        let granted = null;
+        if (!rec.inventoryItemId && rec.template && typeof services.giveItem === 'function') {
+          try {
+            granted = services.giveItem(p, rec.template, 1, rec.appearance);
+          } catch {
+            granted = null;
+          }
+        }
+        if (granted && typeof granted.id === 'string') {
+          restoredId = granted.id;
+          restoredName = granted.name ?? restoredName;
+          rec.invId = restoredId;
+        } else {
+          const restoredItem = {
+            id: restoredId,
+            template: rec.template ?? 'quest-relic',
+            name: restoredName,
+            quantity: 1,
+            questUid: f.questUid,
+            questKey: f.resourceKey,
+            recoveredByRepair: true,
+          };
+          p.rpg.inventory.push(restoredItem);
+          rec.invId = restoredId;
+          rec.inventoryItemId = restoredId;
+        }
         const entry = {
           at: Math.trunc(ctx.now?.() ?? Date.now()),
           questUid: f.questUid,
           questName: f.questName,
           issue: f.state,
           action: 'restored-collected-item',
-          recoveredResource: `${restoredItem.name} (${restoredItem.id})`,
+          recoveredResource: `${restoredName} (${restoredId})`,
           payoutPreserved: true,
         };
         log.unshift(entry);

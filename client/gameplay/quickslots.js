@@ -152,17 +152,23 @@ export function formatCountdown(minutesLeft) {
   return `${Math.max(1, mins)}m left`;
 }
 
-/** Soonest active quest deadline from character.quests using the character's own quest clocks. */
+/** Soonest active quest deadline from character.quests using the character's personal quest clock. */
 export function soonestQuestDeadline(character, nowMinutes = null) {
   const q = character?.quests;
   const active = Array.isArray(q?.active) ? q.active : [];
-  const now = Number.isFinite(nowMinutes) ? nowMinutes : (Number.isFinite(q?.minutes) ? q.minutes : null);
+  const personalOffset = Math.max(0, Number(character?.atmosphere?.personalMinutes) || 0);
+  const now = Number.isFinite(nowMinutes)
+    ? nowMinutes + personalOffset
+    : (Number.isFinite(q?.minutes) ? q.minutes : null);
   if (!active.length || now === null) return null;
   let best = null;
   for (const inst of active) {
     if (!inst || typeof inst !== 'object') continue;
+    if (inst.name === '_TUTOR__' || inst.background) continue;
+    const brisienPreLetter = inst.name === '_BRISIEN' && !inst.items?.['i.00']?.held && !inst.items?.['i.00']?.handedOver;
     let endAt = null;
-    for (const clk of Object.values(inst.clocks ?? {})) {
+    for (const [key, clk] of Object.entries(inst.clocks ?? {})) {
+      if (brisienPreLetter && key === 's.00') continue;
       if (clk && clk.running && !clk.done && Number.isFinite(clk.endAt)) {
         endAt = endAt === null ? clk.endAt : Math.min(endAt, clk.endAt);
       }
@@ -191,8 +197,10 @@ export function restWarningsFor(state, camera = null) {
   const loc = String(c?.location ?? state?.location ?? '');
   const entities = Array.isArray(state?.entities) ? state.entities : [];
   if (camera && Number.isFinite(camera.x) && Number.isFinite(camera.z)) {
+    const playerFootY = Number.isFinite(camera.y) ? camera.y - 1.6 : null;
     const hostileNear = entities.some((e) => {
       if (!e || e.kind !== 'monster' || e.dead || (Number.isFinite(e.hp) && e.hp <= 0)) return false;
+      if (playerFootY !== null && Number.isFinite(e.y) && Math.abs(e.y - playerFootY) > 4.5) return false;
       return Math.hypot(e.x - camera.x, e.z - camera.z) <= REST_MONSTER_RADIUS;
     });
     if (hostileNear) warnings.push({ code: 'enemies', severity: 'danger', text: 'Enemies are nearby — resting may be interrupted by combat.' });

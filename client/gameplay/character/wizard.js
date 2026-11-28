@@ -231,7 +231,7 @@ const STEP_VIEWS = {
         h('tbody', null, [...career.primarySkills, ...career.majorSkills, ...career.minorSkills].map((s) =>
           h('tr', null, h('th', null, s), h('td', null, `${finalSkill(d, s)}%`))))),
       biographySummary(d),
-      h('p', { class: 'cc-note cc-wide' }, 'Creation is permanent. Your current default adventurer will be replaced.'),
+      h('p', { class: 'cc-note cc-wide' }, 'Creation is permanent. Review your choices before entering the world.'),
     );
   },
 };

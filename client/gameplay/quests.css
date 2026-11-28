@@ -58,7 +58,10 @@
 .qj-say { border-left: 2px solid var(--qj-line); padding-left: 8px; }
 .qj-say-accept { border-left-color: var(--qj-good); }
 .qj-say-refuse { border-left-color: var(--qj-bad); }
-.qj-say .qj-text { font-style: italic; }
+.qj-messages { display: grid; gap: 6px; }
+.qj-messages summary { cursor: pointer; color: var(--qj-dim); font-size: 0.8rem; }
+.qj-messages-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
+.qj-messages-list li { border-left: 2px solid var(--qj-line); padding-left: 8px; }
 .qj-report summary:focus-visible { outline: 2px solid var(--qj-accent); outline-offset: 1px; }
 .qj-report summary { cursor: pointer; color: var(--qj-dim); font-size: 0.8rem; }
 .qj-notes { margin: 4px 0 0; padding-left: 1.2em; color: var(--qj-dim); font-size: 0.8rem; display: grid; gap: 2px; }

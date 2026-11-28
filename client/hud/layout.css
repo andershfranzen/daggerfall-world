@@ -94,7 +94,8 @@ body[data-classic-compass="true"] #hud-compass.has-classic-compass { width: 138p
 }
 /* With a page open, notices sit at the bottom edge, over the backdrop and not on the page body. */
 body[data-menu] #hud-toasts {
-  position: absolute;
+  grid-area: auto;
+  position: fixed;
   left: 50%;
   bottom: max(0.6rem, env(safe-area-inset-bottom));
   translate: -50% 0;

@@ -283,6 +283,22 @@ describe('Party Quests & Quest Repair', () => {
     const secondRun = a.events('questRepair').at(-1);
     assert.equal(secondRun.repaired.length, 0);
     assert.equal(a.character.inventory.filter((it) => it.id === 'signet-1').length, 1);
+
+    // Real quest engine shape (`invId` + permanent/story dungeon place) must not duplicate items or flag unpinned-layout.
+    a.player.rpg.inventory.push({ id: 'real-inv-1', template: 'amulet', name: 'Royal Amulet', quantity: 1 });
+    a.player.rpg.quests.active.push({
+      uid: 'q-real-engine',
+      name: '_BRISIEN',
+      title: 'Lady Brisienna',
+      story: true,
+      places: { 'l.00': { interior: 'dungeon:Daggerfall/Privateer’s Hold', scope: 'permanent' } },
+      items: { 'i.00': { name: 'Royal Amulet', template: 'amulet', invId: 'real-inv-1', given: true, handedOver: false } },
+    });
+    a.must('quest.repair.scan', {});
+    const realScan = a.events('questRepair').at(-1);
+    assert.equal(realScan.actionableCount, 0, 'real engine invId item and permanent story dungeon are intact');
+    a.must('quest.repair.run', {});
+    assert.equal(a.character.inventory.filter((it) => it.template === 'amulet').length, 1, 'no item duplication');
   });
 });
 

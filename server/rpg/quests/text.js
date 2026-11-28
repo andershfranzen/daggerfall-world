@@ -64,7 +64,7 @@ export function expand(text, def, inst, ctx) {
     // Some QRC sentences supply the article before the building macro themselves.
     const buildingText = value => /^the\s/i.test(value) && /\bthe\s+$/i.test(template.slice(0, at))
       ? value.replace(/^the\s+/i, '') : value;
-    if (eq === '==') return factionOf(r, k, inst) ?? m;
+    if (eq === '==') return factionOf(r, k, inst, ctx) ?? m;
     if (eq === '=' && r.kind === 'foe') { lastGender = inst.foes[k]?.gender ?? lastGender; return inst.foes[k]?.name ?? m; }
     if (eq === '=' && r.kind === 'person') { lastGender = inst.people[k]?.gender ?? lastGender; return ctx.titleOf?.(inst.people[k]) ?? 'resident'; }
     const depth = us?.length;
@@ -120,25 +120,82 @@ function clockDays(c, now) {
   return String(Math.max(1, Math.round(left / 1440)));
 }
 
-function factionOf(r, k, inst) {
-  if (r.kind === 'person' && inst.people[k]?.questor) return inst.giver?.factionName ?? null;
+function factionOf(r, k, inst, ctx) {
+  if (r.kind === 'person') {
+    const person = inst.people[k];
+    if (person?.questor && inst.giver?.factionName) return inst.giver.factionName;
+    const fid = person?.questor ? inst.giver?.faction : (person?.faction ?? inst.giver?.faction);
+    if (fid != null) {
+      const name = ctx?.factionNameOf?.(fid);
+      if (name) return name;
+    }
+    return inst.giver?.factionName ?? 'the local order';
+  }
   return null;
 }
+
+const REGION_VAMPIRE_CLAN = Object.freeze({
+  Daggerfall: 'the Lyrezi',
+  Wayrest: 'the Anthotis',
+  Sentinel: 'the Montalion',
+  Betony: 'the Lyrezi',
+  Anticlere: 'the Lyrezi',
+  Alikr: 'the Montalion',
+  'Alik\'r Desert': 'the Montalion',
+  Dragontail: 'the Selenu',
+  Wrothgarian: 'the Haarvenu',
+  'Wrothgarian Mountains': 'the Haarvenu',
+  Menevia: 'the Vraseth',
+  Gavaudon: 'the Thrafey',
+  Orsinium: 'the Haarvenu',
+});
+
+const REGION_KNIGHTLY_ORDER = Object.freeze({
+  Daggerfall: 'Order of the Dragon',
+  Wayrest: 'Order of the Rose',
+  Sentinel: 'Order of the Candle',
+  Anticlere: 'Order of the Flame',
+  Betony: 'Order of the Dragon',
+  Menevia: 'Order of the Raven',
+  Bhoriane: 'Order of the Hawk',
+  Gavaudon: 'Order of the Scarab',
+  'Alik\'r Desert': 'Order of the Scarab',
+});
+
+const REGION_RULER = Object.freeze({
+  Daggerfall: { title: 'King', name: 'Gothryd' },
+  Wayrest: { title: 'King', name: 'Eadwyre' },
+  Sentinel: { title: 'Queen', name: 'Akorithi' },
+  Orsinium: { title: 'Lord', name: 'Gortwog' },
+});
 
 function contextMacro(code, ctx) {
   const g = pron[ctx.lastGender] ?? pron.male;
   if (g[code]) return g[code];
   const first = String(ctx.playerName || '').split(/\s+/)[0];
+  const here = townOf(ctx.here, ctx.townName);
+  const ruler = REGION_RULER[here.region] ?? { title: 'Lord', name: 'the local lord' };
   switch (code) {
     case 'pcn': return ctx.playerName || 'traveler';
     case 'pcf': return first || 'traveler';
+    case 'pct': return ctx.playerTitle || ctx.className || 'adventurer';
     case 'ra': return ctx.race || 'traveler';
-    case 'cn': return townOf(ctx.here, ctx.townName).town;
-    case 'crn': case 'reg': return townOf(ctx.here).region;
-    case 'qdt': return ctx.dateText?.(ctx.inst.startedAt) ?? '';
-    case 'di': return 'nearby';
+    case 'cn': return here.town || 'this town';
+    case 'crn': case 'reg': return here.region || 'the Iliac Bay';
+    case 'qdt': case 'qdat': return ctx.dateText?.(ctx.inst?.startedAt) ?? '';
+    case 'dat': return ctx.dateText?.(ctx.now) ?? ctx.dateText?.(ctx.inst?.startedAt) ?? '';
+    case 'di': return ctx.direction || 'nearby';
     case 'oth': return 'by the gods';
-    case 't': return ctx.title ?? '';
+    case 'god': return ctx.deity || 'the Divines';
+    case 'vam': case 'vcn': return REGION_VAMPIRE_CLAN[here.region] || 'the bloodline';
+    case 'kno': return REGION_KNIGHTLY_ORDER[here.region] || 'the knightly order';
+    case 'jok': return 'Why did the Breton bring a ladder to the tavern? He heard the drinks were on the house.';
+    case 't': case 'rt': return ctx.title || ruler.title;
+    case 'rn': return ctx.rulerName || ruler.name;
+    case 'n': return ctx.inst?.giver?.name || ctx.playerName || 'a friend';
+    case 'qbn': return ctx.playerName || 'traveler';
+    case 'nrn': case 'nam': case 'mn': return ctx.makeName?.('male') || 'Alaric';
+    case 'fn': return ctx.makeName?.('female') || 'Mirabelle';
     default: return null;
   }
 }

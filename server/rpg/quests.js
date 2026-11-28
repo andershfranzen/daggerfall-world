@@ -66,6 +66,8 @@ const ROLE_GROUPS = Object.freeze({ crier: 'Commoners', noble: 'Nobility', fight
 const QUEST_DUNGEON_TYPES = new Set(['keep', 'labyrinth', 'ruin', 'graveyard']);
 const REMOTE_TOWN_TYPES = new Set(['city', 'village', 'hamlet']); // DFRegion TownCity | TownVillage | TownHamlet
 const STARTER_TOWN_QUESTS = new Set(['_BRISIEN', 'S0000008']);
+const BACKGROUND_STORY_QUESTS = new Set(['S0000977']);
+const MAX_MESSAGES = 12;
 const COMMON_SITE_TYPES = /^(tavern|generalstore|temple|house\d?|town\d|random|shop)$/i;
 const MAX_DUNGEON_TYPE = 16;
 const FLOOR_REACH = 2.5; // a quest object on another storey of a dungeon is out of reach
@@ -240,6 +242,29 @@ export function install(ctx, opts = {}) {
   };
   const locOf = (p) => (typeof p.rpg?.location === 'string' ? p.rpg.location : ctx.defaultLocation);
   const townName = loc => services.travel?.lookup?.(exteriorOf(loc) ?? loc)?.name?.trim();
+  const factionNameOf = (id) => {
+    if (!Number.isInteger(id)) return null;
+    return factions?.get(id)?.name ?? DIVINES[id]?.name ?? null;
+  };
+  const COMPASS = ['east', 'southeast', 'south', 'southwest', 'west', 'northwest', 'north', 'northeast'];
+  const directionOf = (fromLoc, inst) => {
+    const lookup = services.travel?.lookup;
+    if (typeof lookup !== 'function') return 'nearby';
+    const from = lookup(exteriorOf(fromLoc) ?? fromLoc);
+    if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.y)) return 'nearby';
+    for (const pl of Object.values(inst.places ?? {})) {
+      const loc = exteriorOf(pl?.location) ?? pl?.location;
+      if (!loc || loc === (exteriorOf(fromLoc) ?? fromLoc)) continue;
+      const to = lookup(loc);
+      if (!to || !Number.isFinite(to.x) || !Number.isFinite(to.y)) continue;
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      if (Math.hypot(dx, dy) < 1) continue;
+      const idx = Math.round(Math.atan2(dy, dx) / (Math.PI / 4));
+      return COMPASS[((idx % 8) + 8) % 8];
+    }
+    return 'nearby';
+  };
 
   // ---------------------------------------------------------------- host bindings for the engine
 
@@ -253,10 +278,14 @@ export function install(ctx, opts = {}) {
       const expanded = expand(v, def, inst, {
         playerName: p.rpg?.character?.name || p.name,
         race: p.rpg?.character?.race,
+        className: p.rpg?.character?.className || p.rpg?.character?.career,
         here: locOf(p),
         now: nowFor(p),
         dateText: (m) => formatDate(dateFromMinutes(m)),
         titleOf: () => 'resident',
+        factionNameOf,
+        direction: directionOf(locOf(p), inst),
+        makeName: (gender) => (nameBanks ? bretonName(nameBanks, gender, () => nextRandom(inst)) : null),
         townName,
         buildingName: (loc) => {
           const portal = services.portals?.into?.(loc);
@@ -337,7 +366,15 @@ export function install(ctx, opts = {}) {
       },
       message: (inst, id) => {
         const t = text(inst, id);
-        if (t) send({ kind: 'questMessage', uid: inst.uid, title: inst.title, id, text: t });
+        if (t) {
+          if (!Array.isArray(inst.messages)) inst.messages = [];
+          const prev = inst.messages.at(-1);
+          if (!prev || prev.id !== id || prev.text !== t) {
+            inst.messages.push({ id, text: t, at: nowFor(p) });
+            if (inst.messages.length > MAX_MESSAGES) inst.messages.splice(0, inst.messages.length - MAX_MESSAGES);
+          }
+          send({ kind: 'questMessage', uid: inst.uid, title: inst.title, id, text: t });
+        }
         noteQuestClues(inst, SPECIAL_QUESTS[inst.name]?.messages?.[id]);
         revealCampaignDestination(services, p, inst, id);
       },
@@ -840,7 +877,7 @@ export function install(ctx, opts = {}) {
     for (const [pk, pl] of Object.entries(inst.places)) {
       if (pl.interior || pl.noBuilding || pl.dungeon || pl.scope === 'permanent') continue;
       const selectedHome = pl.home && inst.people[pk.slice(5)]?.homeBuilding;
-      const required = selectedHome || (inst.special === 'invitation' && pk === 'l.00')
+      const required = selectedHome || STARTER_TOWN_QUESTS.has(inst.name) || (inst.special === 'invitation' && pk === 'l.00')
         || (inst.special === 'summoning' && (pl.building === 'palace' || pl.building === 'tavern'));
       // A local place named by a giver standing indoors (every building work giver) is in the town around that
       // room, never the room itself. Older saves that bound it to the room move their people/foes/items with it.
@@ -904,8 +941,13 @@ export function install(ctx, opts = {}) {
       pl.interior = pick.to;
       pl.label = pick.label;
       if (pick.meta?.buildingName) pl.buildingName = pick.meta.buildingName;
-      const door = pick.entrances?.[0]?.inner;
-      pl.door = door ? { x: door.x, z: door.z } : null;
+      const entrance = pick.entrances?.[0];
+      const enter = entrance?.enter ?? entrance?.inner;
+      pl.door = enter ? {
+        x: enter.x, z: enter.z,
+        ...(Number.isFinite(enter.y) ? { y: enter.y } : {}),
+        ...(Number.isFinite(enter.yaw) ? { yaw: enter.yaw } : {}),
+      } : null;
     }
   }
 
@@ -993,12 +1035,87 @@ export function install(ctx, opts = {}) {
     }
   }
 
+  const doorOf = (pl) => {
+    if (!pl) return null;
+    if (pl.interior) {
+      const entrance = services.portals?.into?.(pl.interior)?.entrances?.[0];
+      const enter = entrance?.enter ?? entrance?.inner;
+      if (enter && Number.isFinite(enter.x) && Number.isFinite(enter.z)) {
+        return {
+          x: enter.x, z: enter.z,
+          ...(Number.isFinite(enter.y) ? { y: enter.y } : {}),
+          ...(Number.isFinite(enter.yaw) ? { yaw: enter.yaw } : {}),
+        };
+      }
+    }
+    return pl.door ?? null;
+  };
   const whereOf = (inst, thing) => {
     const pl = thing.place ? inst.places[thing.place] : null;
-    if (pl && thing.location === pl.location && pl.interior) return { location: pl.interior, door: pl.door };
+    if (pl && thing.location === pl.location && pl.interior) return { location: pl.interior, door: doorOf(pl) };
     return { location: thing.location, door: null };
   };
-  const near = (door, at) => (door ? { x: door.x + at.x * 0.6, z: door.z + 1.5 + Math.abs(at.z) * 0.15 } : at);
+  const near = (door, at) => {
+    if (!door) return at;
+    if (Number.isFinite(door.yaw)) {
+      const fx = Math.sin(door.yaw);
+      const fz = -Math.cos(door.yaw);
+      const rx = Math.cos(door.yaw);
+      const rz = Math.sin(door.yaw);
+      const fwd = 1.5 + Math.abs(at.z) * 0.15;
+      const side = at.x * 0.45;
+      return { x: door.x + fx * fwd + rx * side, z: door.z + fz * fwd + rz * side };
+    }
+    return { x: door.x + at.x * 0.6, z: door.z + 1.5 + Math.abs(at.z) * 0.15 };
+  };
+
+  /**
+   * Places a fallback quest NPC or item on verified walkable floor reachable from the interior entrance.
+   * Prevents spawning behind an inward-facing doorway outside the room's collision hull.
+   */
+  function interiorFallbackSpot(location, door, fallbackAt, id) {
+    const world = services.collision?.instanceWorld?.(location);
+    if (!world || !door) {
+      const guess = near(door, fallbackAt);
+      if (door && !world && services.collision?.instanceWorld) {
+        return { x: guess.x, z: guess.z, y: door.y, snapped: false };
+      }
+      const c = services.collision?.nearestClear?.(location, guess.x, guess.z, 4);
+      if (c) return { x: c.x, z: c.z, y: c.y, snapped: true };
+      return { x: guess.x, z: guess.z, snapped: !services.collision?.nearestClear };
+    }
+    const baseY = Number.isFinite(door.y) ? world.heightAt(door.x, door.z, door.y) : world.standHeight(door.x, door.z);
+    const anchor = world.isClear(door.x, door.z, baseY)
+      ? { x: door.x, z: door.z, y: baseY }
+      : (world.nearestClear(door.x, door.z, { maxDist: 1.5, y: baseY }) ?? { x: door.x, z: door.z, y: baseY });
+    const yaws = Number.isFinite(door.yaw) ? [door.yaw] : [0, Math.PI, Math.PI / 2, -Math.PI / 2];
+    const lat = ((hash32(id) % 5) - 2) * 0.45;
+    const sides = [...new Set([lat, -lat, 0, 0.8, -0.8, 1.4, -1.4])];
+    const dists = [1.6, 2.2, 1.0, 2.8, 0.6, 3.4];
+    let bestPartial = null;
+    for (const yaw of yaws) {
+      const fx = Math.sin(yaw);
+      const fz = -Math.cos(yaw);
+      const rx = Math.cos(yaw);
+      const rz = Math.sin(yaw);
+      for (const d of dists) {
+        for (const s of sides) {
+          const cx = anchor.x + fx * d + rx * s;
+          const cz = anchor.z + fz * d + rz * s;
+          const m = world.move(anchor.x, anchor.z, cx, cz, { y: anchor.y });
+          if (!world.isClear(m.x, m.z, m.y)) continue;
+          const moved = Math.hypot(m.x - anchor.x, m.z - anchor.z);
+          if (Math.hypot(m.x - cx, m.z - cz) < 0.35 && moved >= 0.4) {
+            return { x: m.x, z: m.z, y: m.y, snapped: true };
+          }
+          if (moved >= 0.25 && (!bestPartial || moved > bestPartial.moved)) {
+            bestPartial = { x: m.x, z: m.z, y: m.y, moved, snapped: true };
+          }
+        }
+      }
+    }
+    return bestPartial ?? { x: anchor.x, z: anchor.z, y: anchor.y, snapped: true };
+  }
 
   /** Brings ctx.entities in line with the player's quest state. */
   function syncEntities(p) {
@@ -1032,19 +1149,17 @@ export function install(ctx, opts = {}) {
             continue;
           }
           const marked = inside && person.spawnAt.id !== null;
-          let at = marked ? { x: person.spawnAt.x, z: person.spawnAt.z } : near(w.door, spot(id, Object.keys(inst.people).indexOf(k)));
+          let at = marked ? { x: person.spawnAt.x, z: person.spawnAt.z, y: person.spawnAt.y } : near(w.door, spot(id, Object.keys(inst.people).indexOf(k)));
           if (!marked && inside) {
-            const c = services.collision?.nearestClear?.(w.location, at.x, at.z, 4);
-            if (c) at = { x: c.x, z: c.z };
-            // The door-relative spot can lie behind the door, outside the room: until that instance's collision is
-            // loaded (a join right after a restart) the person is re-placed on clear floor as soon as it is.
-            else if (services.collision?.nearestClear) unsnapped.add(id);
+            const placed = interiorFallbackSpot(w.location, w.door, spot(id, Object.keys(inst.people).indexOf(k)), id);
+            at = { x: placed.x, z: placed.z, y: placed.y };
+            if (!placed.snapped) unsnapped.add(id);
           }
           wantAt.set(id, w.location);
           if (marked && person.marker != null) wantMarker.set(id, person.spawnAt.id);
           want.set(id, () => ({
             id, kind: 'npc', role: 'townsfolk', title: 'Resident', name: person.name, location: w.location,
-            x: at.x, z: at.z, ...(marked && Number.isFinite(person.spawnAt.y) ? { y: person.spawnAt.y } : {}),
+            x: at.x, z: at.z, ...(Number.isFinite(at.y) ? { y: at.y } : {}),
             yaw: Math.PI, sprite: person.sprite ?? { archive: 334, record: [0, 2, 8, 12, 18][hash32(id) % 5] },
             faction: person.faction ?? 201, ...(person.individual !== undefined ? { individual: true } : {}),
             quest: inst.title, visibleTo: [p.id], _quest: { owner: p.id, uid: inst.uid, person: k },
@@ -1074,7 +1189,11 @@ export function install(ctx, opts = {}) {
           const onMarker = inside && it.markerAt.id !== null && Number.isFinite(it.markerAt.x);
           let at = onMarker ? { x: -it.markerAt.x, z: it.markerAt.z } : near(w.door, spot(id, 5));
           let snapped = true;
-          if (!onMarker) {
+          if (!onMarker && inside) {
+            const placed = interiorFallbackSpot(w.location, w.door, spot(id, 5), id);
+            at = { x: -placed.x, z: placed.z };
+            snapped = placed.snapped;
+          } else if (!onMarker) {
             // Never inside furniture or walls: the nearest clear floor (when that instance's collision is loaded).
             const c = services.collision?.nearestClear?.(w.location, -at.x, at.z, 4);
             if (c) at = { x: -c.x, z: c.z };
@@ -1166,7 +1285,8 @@ export function install(ctx, opts = {}) {
       if (person.individual !== undefined && person.location) hostFor(p).individualAway(inst, person.individual, false);
     }
     q.active = q.active.filter((x) => x !== inst);
-    q.done.unshift({ uid: inst.uid, name: inst.name, title: inst.title, result: inst.status, endedAt: inst.endedAt, giver: inst.giver?.name ?? null, log: inst.log.map((e) => e.text).slice(-4) });
+    const doneLog = inst.log.length ? inst.log.map((e) => e.text).slice(-4) : (inst.messages ?? []).map((m) => m.text).slice(-2);
+    q.done.unshift({ uid: inst.uid, name: inst.name, title: inst.title, result: inst.status, endedAt: inst.endedAt, giver: inst.giver?.name ?? null, log: doneLog });
     q.done.length = Math.min(q.done.length, MAX_DONE);
     ctx.notify(p, { kind: 'questEnd', uid: inst.uid, title: inst.title, result: inst.status });
     // Ordinary offers carry their Quest.FactionId; special starts keep the faction their trigger supplied.
@@ -1206,12 +1326,13 @@ export function install(ctx, opts = {}) {
       }
     }
     inst.story = true;
+    if (BACKGROUND_STORY_QUESTS.has(entry.name)) inst.background = true;
     inst.startedBy = from;
     inst.acceptedAt = nowFor(p);
     inst.report = { source: entry.source, approximations: entry.analysis.approximations.slice(0, 12), ignored: entry.analysis.ignored.length, unsupported: entry.analysis.unsupported.slice(0, 12) };
     q.active.push(inst);
     ctx.dirty(p);
-    ctx.notify(p, { kind: 'questAccepted', uid: inst.uid, title: inst.title, text: '' });
+    ctx.notify(p, { kind: 'questAccepted', uid: inst.uid, title: inst.title, text: '', ...(inst.background ? { background: true } : {}) });
     return inst;
   }
 
@@ -1343,7 +1464,12 @@ export function install(ctx, opts = {}) {
     for (let i = 0; i < pool.length; i++) {
       entry = pool[(seed + i) % pool.length];
       uid = `${entry.name}-${(q.seq + 1).toString(36)}-${(seed % 46656).toString(36)}`;
-      inst = createInstance(entry.def, { uid, seed, giver: { ...giver, gender: giver.gender }, host: hostFor(p), now: nowFor(p) });
+      const factionId = questFactionId(group, giver);
+      inst = createInstance(entry.def, {
+        uid, seed,
+        giver: { ...giver, gender: giver.gender, factionName: giver.factionName ?? factionNameOf(factionId ?? giver.faction) },
+        host: hostFor(p), now: nowFor(p),
+      });
       if (!Object.entries(inst.places).some(([key, pl]) =>
         !pl.interior && (pl.local || (pl.dungeon && entry.def.resources.get(key)?.only)))) break;
       inst = null;
@@ -1771,7 +1897,11 @@ export function install(ctx, opts = {}) {
       const day = Math.floor(worldMinutes() / 1440);
       const seed = hash32(`${p.id}:${giver.id}:${entry.name}:${day}:${q.seq}`);
       const uid = `${entry.name}-${(++q.seq).toString(36)}-${(seed % 46656).toString(36)}`;
-      const inst = createInstance(entry.def, { uid, seed, giver: { ...giver, location: giver.location ?? locOf(p) }, host: hostFor(p), now: nowFor(p), source });
+      const inst = createInstance(entry.def, {
+        uid, seed,
+        giver: { ...giver, location: giver.location ?? locOf(p), factionName: giver.factionName ?? factionNameOf(giver.faction) },
+        host: hostFor(p), now: nowFor(p), source,
+      });
       if (source === 'summoning' && Object.values(inst.places).some((place) => place.dungeon && !place.location)) {
         fail('This region has no suitable dungeon for the demand.');
       }
