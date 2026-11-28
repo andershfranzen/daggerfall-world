@@ -141,7 +141,7 @@ function showScreen(name) {
   ui.failure.hidden = name !== 'failure';
   ui.hud.hidden = name !== 'game';
   input.setEnabled(name === 'game');
-  if (name !== 'game') shell?.close();
+  if (name !== 'game') shell?.close({ force: true });
   if (name === 'landing') refreshLanding();
   api.screen = name;
   emit('game:screen', { screen: name });
@@ -1571,7 +1571,7 @@ function onClosed(conn, info) {
     return;
   }
   setConn('lost');
-  shell?.close();
+  shell?.close({ force: true });
   showBanner(d.text, { replaced: info.code === CLOSE.REPLACED, reconnect: d.canReconnect !== false, signIn: !!d.signIn });
   addChat(null, d.text, { system: true });
 }
@@ -1603,7 +1603,7 @@ function leave({ switching = false } = {}) {
   conn?.close();
   releaseClaim();
   clearRemotes();
-  shell?.close();
+  shell?.close({ force: true });
   api._reset();
   S.arrival = S.lastJourney = null;
   S.sceneError = null;

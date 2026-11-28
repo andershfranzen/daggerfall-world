@@ -302,9 +302,14 @@ test('website export and game client share one origin', async () => {
     await ok('/_next/static/media/font.woff2', /^font\/woff2/);
     r = await ok('/images/mark.svg', /^image\/svg/);
     assert.equal(r.headers['cache-control'], 'no-cache');
-    // Game client wins for exact files.
-    assert.match((await ok('/play.html', /^text\/html/)).body, /play/);
-    await ok('/js/main.js', /^text\/javascript/);
+    // Game client wins for exact files and opts out of CDN/browser TTL caching so deploys land immediately.
+    const playRes = await ok('/play.html', /^text\/html/, undefined);
+    assert.match(playRes.body, /play/);
+    assert.match(playRes.headers['cache-control'], /no-store/);
+    assert.equal(playRes.headers['cdn-cache-control'], 'no-store');
+    const jsRes = await ok('/js/main.js', /^text\/javascript/);
+    assert.match(jsRes.headers['cache-control'], /no-store/);
+    assert.equal(jsRes.headers['cdn-cache-control'], 'no-store');
     // trailingSlash redirect keeps the query string.
     r = await get(port, '/guide?x=1');
     assert.equal(r.status, 308);

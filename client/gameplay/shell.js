@@ -466,7 +466,8 @@ function restoreEdited(list, root) {
 export function createShell({ api, input, actions, settings }) {
   const $ = (id) => document.getElementById(id);
   const ui = {
-    menu: $('game-menu'), tabs: $('menu-tabs'), subtabs: $('menu-subtabs'), title: $('menu-title'), panel: $('menu-panel'),
+    menu: $('game-menu'), topbar: $('game-menu')?.querySelector?.('.menu-topbar') ?? null,
+    tabs: $('menu-tabs'), subtabs: $('menu-subtabs'), title: $('menu-title'), panel: $('menu-panel'),
     close: $('menu-close'), hint: $('menu-hint'),
     vitals: $('hud-vitals'), breath: $('hud-breath'), target: $('hud-target'), toasts: $('hud-toasts'), bar: $('hud-bar'),
     readyBtn: $('hud-ready-btn'), menuBtn: $('hud-menu-btn'), helpDl: $('hud-help-list'),
@@ -635,7 +636,7 @@ export function createShell({ api, input, actions, settings }) {
     leave: () => { closePanel({ force: true }); actions.leave?.(); },
   };
 
-  const isWizardLocked = () => ui.menu.dataset.wizard === 'true';
+  const isWizardLocked = () => ui.menu.dataset.wizard === 'true' || api.state?.character?.character?.created === false;
 
   // ---------------------------------------------------- open / close / render
 
@@ -716,9 +717,11 @@ export function createShell({ api, input, actions, settings }) {
     }
     ui.panel.replaceChildren(body);
     // Character creation is a mandatory focused dialog: hide tabs and close controls until finished.
-    const inWizard = Boolean(body.querySelector('.cc-wizard') || body.classList.contains('cc-wizard'));
+    const inWizard = Boolean(body.querySelector('.cc-wizard') || body.classList.contains('cc-wizard') || api.state?.character?.character?.created === false);
     if (inWizard) ui.menu.dataset.wizard = 'true';
     else delete ui.menu.dataset.wizard;
+    if (ui.topbar) ui.topbar.hidden = inWizard;
+    if (ui.hint) ui.hint.hidden = inWizard;
     ui.close.hidden = inWizard;
     ui.close.disabled = inWizard;
     restoreEdited(edited, ui.panel);
@@ -760,6 +763,8 @@ export function createShell({ api, input, actions, settings }) {
     delete document.body.dataset.menu;
     ui.panel.replaceChildren();
     delete ui.menu.dataset.wizard;
+    if (ui.topbar) ui.topbar.hidden = false;
+    if (ui.hint) ui.hint.hidden = false;
     ui.close.hidden = false;
     ui.close.disabled = false;
     updateBar();

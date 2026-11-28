@@ -32,6 +32,9 @@ const MIME = {
 
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const IMMUTABLE = 'public, max-age=31536000, immutable';
+// Unversioned game client scripts and styles must bypass CDN/browser TTL overrides (e.g. Cloudflare's
+// default 4-hour Browser Cache TTL on .js/.css) so players receive fixes immediately after a deploy.
+const CLIENT_NO_STORE = 'no-store, must-revalidate';
 
 function sendText(res, status, body, headers = {}) {
   res.writeHead(status, {
@@ -98,7 +101,7 @@ export function createStaticRoot(dir, label = 'static') {
   };
 }
 
-async function sendFile(req, res, file, status = 200, cacheControl = 'no-cache') {
+async function sendFile(req, res, file, status = 200, cacheControl = 'no-cache', extraHeaders = {}) {
   let fh;
   try {
     fh = await open(file.path, 'r');
@@ -109,6 +112,7 @@ async function sendFile(req, res, file, status = 200, cacheControl = 'no-cache')
       'Cache-Control': cacheControl,
       'X-Content-Type-Options': 'nosniff',
       'Cross-Origin-Resource-Policy': 'same-origin',
+      ...extraHeaders,
     });
     res.end(req.method === 'HEAD' ? undefined : data);
   } catch {
@@ -136,7 +140,7 @@ export function createStaticHandler(clientDir) {
     if (p.dirStyle && p.segments.length > 0) return sendText(res, 404, 'Not Found');
     const file = await client.lookup(p.segments.length ? p.segments : ['index.html']);
     if (!file) return sendText(res, 404, 'Not Found');
-    return sendFile(req, res, file);
+    return sendFile(req, res, file, 200, CLIENT_NO_STORE, { 'CDN-Cache-Control': 'no-store' });
   };
 }
 
@@ -163,7 +167,7 @@ export function createSiteHandler({ clientDir, siteDir, fallback = null }) {
     // 1. Game client: exact files only (never a directory index, so client/index.html cannot shadow /).
     if (client && !p.dirStyle && (!fallback || req.method === 'GET' || req.method === 'HEAD')) {
       const file = await client.lookup(p.segments);
-      if (file) return sendFile(req, res, file);
+      if (file) return sendFile(req, res, file, 200, CLIENT_NO_STORE, { 'CDN-Cache-Control': 'no-store' });
     }
 
     // 2. Dev: Next.js dev server handles the website, HMR assets and its own 404s.

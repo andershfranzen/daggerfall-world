@@ -113,6 +113,7 @@ export function install(api) {
       send('character.create', d.createRequest());
     },
     cancel: () => {
+      if (!character()?.created) return; // Character creation is mandatory for uncreated characters.
       if (character()?.draft) send('character.cancel');
       ui.dismissedWizard = true;
       ui.mode = 'sheet';
