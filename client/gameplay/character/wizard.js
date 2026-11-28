@@ -40,6 +40,7 @@ export function renderWizard(root, d, ctl) {
   const showsProblem = d.step === 'summary' || d.step === 'attributes' || d.step === 'skills' || (d.step === 'class' && d.classMode !== 'list');
   const message = ctl.error ?? (showsProblem ? problem : null);
   const nav = h('div', { class: 'cc-nav' },
+    typeof ctl.leave === 'function' ? button('Back to lobby', () => ctl.leave(), { class: 'btn cc-leave' }) : null,
     h('span', { class: 'cc-nav-spacer' }),
     d.stepIndex > 0 ? button('Back', () => { d.back(); ctl.update(); }, { class: 'btn cc-back' }) : null,
     d.step === 'summary'

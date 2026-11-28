@@ -175,6 +175,7 @@ export function install(api, opts = {}) {
   // ---------------------------------------------------------------- instance scenes
 
   function syncScene() {
+    if (api.state?.character?.character?.created === false) return;
     const loc = api.location;
     const p = parseLocation(loc);
     if (!p || p.kind === 'town') {
@@ -348,7 +349,9 @@ export function install(api, opts = {}) {
     api.refreshPanel?.('places');
   });
   api.on('state', (state) => {
+    if (state?.character?.character?.created === false) return;
     const loc = state && parseLocation(api.location)?.kind === 'dungeon' ? api.location : null;
+    if (loc && S.sceneLoc !== loc && S.loading !== loc) syncScene();
     if (S.syncLoc === loc) return;
     S.syncLoc = loc;
     if (loc) api.act('dungeon.sync', {});

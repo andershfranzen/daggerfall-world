@@ -280,8 +280,9 @@ export function install(api) {
   }
 
   function syncScene() {
-    if (!S.sceneSeen) return;
+    if (api.state?.character?.character?.created === false) return;
     const id = currentId();
+    if (!S.sceneSeen && !(api.screen === 'loading' && id && id !== 'town:Daggerfall/Gothway Garden')) return;
     if (!id || !parseLocationId(id)) {
       if (S.loadingId) { S.loadSeq++; S.loadingId = null; }
       return;

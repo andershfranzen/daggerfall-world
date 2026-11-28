@@ -440,7 +440,11 @@ select option { color: var(--text); background: var(--surface-1); }
   border-bottom: 2px solid #343c49;
   box-shadow: 0 2px 0 #030407, 0 8px 24px rgba(0, 0, 0, 0.5);
 }
-body[data-screen="game"] .play-site-bar { display: none; }
+body[data-screen="game"] .play-site-bar,
+body[data-screen="creation"] .play-site-bar { display: none; }
+/* Dedicated pre-world character creation: show only the creation dialog over the title painting. */
+body[data-screen="creation"] #hud > :not(#game-menu) { display: none; }
+body[data-screen="creation"] #game-menu { background: rgba(7, 10, 14, 0.42); }
 .play-site-bar-row {
   width: min(100% - 2 * clamp(14px, 4vw, 32px), 1120px);
   margin-inline: auto;

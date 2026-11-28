@@ -665,7 +665,13 @@ export function install(api, {
   }
 
   let lastLocation = api.location ?? null;
+  let wasCreating = false;
   function sync() {
+    if (api.state?.character?.character?.created === false) {
+      wasCreating = true;
+      return;
+    }
+    wasCreating = false;
     const loc = api.location;
     if (loc !== lastLocation) {
       cross(lastLocation, loc);
@@ -794,7 +800,7 @@ export function install(api, {
       if (S.reskin) { S.reskin.ctrl.aborted = true; S.reskin = null; }
     }),
     api.on('location', sync),
-    api.on('state', (state) => { if (locationOf(state) !== lastLocation) sync(); }),
+    api.on('state', (state) => { if (locationOf(state) !== lastLocation || (wasCreating && state?.character?.character?.created !== false)) sync(); }),
     api.on('scene', onScene),
     api.on('scenery', () => {
       // The scenery feature now draws the current town's flats and sky; stop drawing ours.

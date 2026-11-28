@@ -336,8 +336,19 @@ export function createGameServer(options = {}) {
   const services = runtime.ctx.services;
   runtime.ctx.isMuted = (p) => services.isMuted(p); // alias used by chat features
 
+  // Uncreated Play-client characters (`conn.arrival === true`) remain in `arriving` staging
+  // (hidden from peers, combat, chat, movement, and the public world map) until character creation
+  // completes and their starting scene finishes loading.
+  const isUncreated = (p) => p?.rpg?.character?.created === false;
+
   // Mark slot draft complete (and sync name if changed) when character creation finishes.
   runtime.ctx.on?.('characterCreated', ({ player: p } = {}) => {
+    if (p && p.conn?.arrival === true) {
+      p.arriving = true;
+      p.dirty = true;
+      broadcastState(true);
+      runtime.sync();
+    }
     if (!p || p.accountId == null || typeof store.markCharacterDraftComplete !== 'function') return;
     const chosen = cleanName(p.rpg?.character?.name ?? p.name, cfg.maxNameLength);
     Promise.resolve(store.markCharacterDraftComplete(p.accountId, p.id, chosen && chosen !== p.name ? chosen : null))
@@ -618,7 +629,7 @@ export function createGameServer(options = {}) {
           route: 'world',
         });
       }
-      if (kind === 'switch' && live.arriving === true) {
+      if (kind === 'switch' && live.arriving === true && !isUncreated(live)) {
         blockers.push({
           code: 'ACTIVE_TRANSITION',
           message: 'Wait until your character finishes arriving before switching.',
@@ -1753,7 +1764,7 @@ export function createGameServer(options = {}) {
 
   function handleArrived(conn) {
     const p = conn.player;
-    if (!p.arriving) return;
+    if (!p.arriving || isUncreated(p)) return;
     p.arriving = false;
     broadcastState(true);
     runtime.sync();
@@ -2084,6 +2095,7 @@ export function createGameServer(options = {}) {
       return sendError(conn.ws, 'input requires finite numbers forward, strafe, yaw');
     }
     const p = conn.player;
+    if (p.arriving && isUncreated(p)) return;
     p.forward = clamp(forward, -1, 1);
     p.strafe = clamp(strafe, -1, 1);
     // Optional traversal fields (older clients omit them: walking only). Booleans, a vertical axis and a
@@ -2107,6 +2119,7 @@ export function createGameServer(options = {}) {
       return sendError(conn.ws, `chat message longer than ${cfg.maxChatLength} characters`);
     }
     const p = conn.player;
+    if (p.arriving && isUncreated(p)) return sendError(conn.ws, 'create your character before speaking in the world');
     if (services.isMuted(p)) return sendError(conn.ws, 'you are muted');
     if (!p.chatOk()) return sendError(conn.ws, 'chatting too fast');
     // Local chat reaches the speaker's location, and outdoors the players visible across a

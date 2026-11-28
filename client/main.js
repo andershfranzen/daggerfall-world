@@ -14,7 +14,7 @@ import { Avatar, LABEL_HEIGHT } from './render/avatar.js';
 import { Input, PITCH_LIMIT, PadReader, PAD } from './input.js';
 import {
   createGameplayApi, installFeatures, manifestEntries, actionForCode, pickTarget, targetables,
-  interactionFor, readiedOf, statsOf, locationName,
+  interactionFor, readiedOf, statsOf, locationName, DEFAULT_LOCATION,
 } from './gameplay/api.js';
 import { createShell, loadSettings } from './gameplay/shell.js';
 import { arrivalStatus, crossesDoor } from './lib/arrival.js';
@@ -139,9 +139,9 @@ function showScreen(name) {
   ui.landing.hidden = name !== 'landing';
   ui.loading.hidden = name !== 'loading';
   ui.failure.hidden = name !== 'failure';
-  ui.hud.hidden = name !== 'game';
+  ui.hud.hidden = name !== 'game' && name !== 'creation';
   input.setEnabled(name === 'game');
-  if (name !== 'game') shell?.close({ force: true });
+  if (name !== 'game' && name !== 'creation') shell?.close({ force: true });
   if (name === 'landing') refreshLanding();
   api.screen = name;
   emit('game:screen', { screen: name });
@@ -992,8 +992,12 @@ async function loadAccounts() {
 // ---------------------------------------------------------------- loading pipeline
 
 function ensureRenderer() {
-  if (renderer) return renderer;
+  if (renderer) {
+    api.renderer = renderer;
+    return renderer;
+  }
   renderer = new Renderer(ui.canvas);
+  api.renderer = renderer;
   renderer.onContextChange = (what) => {
     if (what === 'lost' && S.screen === 'game') addChat(null, 'Graphics were reset by the browser; restoring…', { system: true });
   };
@@ -1029,25 +1033,107 @@ function townJob(data) {
   return promise;
 }
 
+/** Wait for a state predicate on the active join op, rejecting if cancelled or disconnected. */
+function waitForRpgCondition(op, pred, closedMessage) {
+  if (op !== S.op) return Promise.reject(Object.assign(new Error('cancelled'), { kind: 'cancelled' }));
+  if (pred()) return Promise.resolve();
+  if (!S.connected) return Promise.reject(Object.assign(new Error(closedMessage), { kind: 'closed' }));
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (op !== S.op) { cleanup(); reject(Object.assign(new Error('cancelled'), { kind: 'cancelled' })); return; }
+      if (!S.connected) { cleanup(); reject(Object.assign(new Error(closedMessage), { kind: 'closed' })); return; }
+      if (pred()) { cleanup(); resolve(); }
+    };
+    const offState = api.on('state', check);
+    const offScreen = api.on('screen', () => { if (op !== S.op) check(); });
+    const timer = setInterval(check, 250);
+    function cleanup() {
+      offState();
+      offScreen();
+      clearInterval(timer);
+    }
+    check();
+  });
+}
+
 async function enter({ reconnecting = false } = {}) {
   const op = ++S.op;
   S.doorArrival = false;
   S.firstFrame = api.firstFrame = null;
   const data = S.data;
-  ui.loadingTitle.textContent = townReadyFor(data) ? `Returning to ${S.town.name || 'town'}…` : 'Travelling…';
+  ui.loadingTitle.textContent = townReadyFor(data) ? `Returning to ${S.town.name || 'town'}…` : 'Connecting…';
   setStep('*', 'pending');
   ui.loadingDetail.textContent = '';
   showScreen('loading');
   ui.loadingCancel.focus();
 
-  if (!townReadyFor(data)) {
+  // Connect first so uncreated characters enter the dedicated pre-world creation screen without
+  // loading Gothway Garden or appearing in the world before creation finishes.
+  setStep('connect', 'active');
+  ui.loadingDetail.textContent = 'Connecting to the server…';
+  try {
+    await join(op);
+  } catch (err) {
+    if (op !== S.op || err.kind === 'cancelled') return;
+    setStep('connect', 'failed');
+    releaseClaim();
+    if ((err.kind === 'rejected' || err.kind === 'account') && !err.retryable) {
+      showScreen('landing');
+      ui.formError.textContent = err.message;
+      ui.formError.hidden = false;
+      (S.account ? ui.enter : ui.name).focus();
+      return;
+    }
+    return fail({
+      title: err.kind === 'full' ? 'The town is full' : 'Could not reach the town',
+      message: err.message,
+      hint: err.kind === 'full'
+        ? 'Wait for someone to leave, then try again.'
+        : 'The town server may be offline or restarting. Try again in a moment.',
+      retry: enter,
+    });
+  }
+  if (op !== S.op) return;
+  setStep('connect', 'done');
+
+  try {
+    await featuresReady;
+    await waitForRpgCondition(op, () => !S.greet && api.state !== null, 'The connection closed before character data arrived.');
+  } catch (err) {
+    if (op !== S.op || err.kind === 'cancelled') return;
+    return failArrival(err, reconnecting);
+  }
+  if (op !== S.op) return;
+
+  // Uncreated character: hold on the dedicated pre-world creation screen until character.create completes.
+  if (statsOf(api.state)?.created === false) {
+    showScreen('creation');
+    api.openPanel('character');
+    try {
+      await waitForRpgCondition(op, () => statsOf(api.state)?.created === true, 'The connection closed during character creation.');
+    } catch (err) {
+      if (op !== S.op || err.kind === 'cancelled') return;
+      return failArrival(err, false);
+    }
+    if (op !== S.op) return;
+    shell?.close({ force: true });
+    S.arrival = { location: api.location, as: S.selfName };
+    ui.loadingTitle.textContent = 'Travelling…';
+    ui.loadingDetail.textContent = '';
+    showScreen('loading');
+    ui.loadingCancel.focus();
+  }
+
+  // Only build Gothway Garden if that is actually the character's current location (e.g. a returning
+  // player in Gothway Garden, or a server without the Privateer's Hold opening). Dungeons, interiors,
+  // wilderness and other towns load directly for their real location.
+  const needsDefaultTown = !api.location || api.location === DEFAULT_LOCATION;
+  if (needsDefaultTown && !townReadyFor(data)) {
     setStep('read', 'active');
     ui.loadingDetail.textContent = `${data.files.length} files from ${data.dir || 'the selected folder'}`;
     let town;
     try {
       const job = townJob(data);
-      // The builder does reading and building in one call; advance the indicator once it
-      // has had a moment to start.
       const tick = setTimeout(() => { if (op === S.op) { setStep('read', 'done'); setStep('build', 'active'); } }, 400);
       town = await job;
       clearTimeout(tick);
@@ -1093,36 +1179,23 @@ async function enter({ reconnecting = false } = {}) {
         retry: webgl ? null : enter, folder: !webgl,
       });
     }
+  } else {
+    try {
+      ensureRenderer();
+    } catch (err) {
+      console.error(err);
+      setStep('build', 'failed');
+      const webgl = /webgl/i.test(err.message);
+      return fail({
+        title: webgl ? 'Your browser cannot draw the world' : 'Could not start the renderer',
+        message: err.message,
+        hint: webgl ? 'Enable hardware acceleration / WebGL in your browser settings, or try another browser.' : '',
+        retry: webgl ? null : enter, folder: !webgl,
+      });
+    }
   }
   setStep('read', 'done');
   setStep('build', 'done');
-  setStep('connect', 'active');
-  ui.loadingDetail.textContent = 'Connecting to the town server…';
-
-  try {
-    await join(op);
-  } catch (err) {
-    if (op !== S.op || err.kind === 'cancelled') return;
-    setStep('connect', 'failed');
-    releaseClaim();
-    if ((err.kind === 'rejected' || err.kind === 'account') && !err.retryable) {
-      showScreen('landing');
-      ui.formError.textContent = err.message;
-      ui.formError.hidden = false;
-      (S.account ? ui.enter : ui.name).focus();
-      return;
-    }
-    return fail({
-      title: err.kind === 'full' ? 'The town is full' : 'Could not reach the town',
-      message: err.message,
-      hint: err.kind === 'full'
-        ? 'Wait for someone to leave, then try again.'
-        : 'The town server may be offline or restarting. Your town is loaded, so retrying is quick.',
-      retry: enter,
-    });
-  }
-  if (op !== S.op) return;
-  setStep('connect', 'done');
   setStep('arrive', 'active');
   try {
     const outcome = await arrive(op);
@@ -1513,15 +1586,16 @@ function onRpg(rpg) {
     input.clear();
     S.sender.reset();
   }
-  if (locationChanged || S.greet) {
+  const uncreated = statsOf(api.state)?.created === false;
+  if (!uncreated && (locationChanged || S.greet)) {
     S.arrival = { location: api.location, as: S.greet && !locationChanged ? S.selfName : null };
   }
-  updatePlace();
+  if (!uncreated) updatePlace();
   if (S.greet) {
     S.greet = false;
     const returning = S.returning ?? statsOf(api.state)?.created === true;
     const who = S.selfName || S.account?.username;
-    if (S.account) addChat(null, returning ? `Welcome back, ${who}.` : `Welcome, ${who}. Your story starts here.`, { system: true });
+    if (S.account && !uncreated) addChat(null, returning ? `Welcome back, ${who}.` : `Welcome, ${who}. Your story starts here.`, { system: true });
   }
   if (S.pendingPositions?.location === api.location) onState(S.pendingPositions.players, api.location);
 }

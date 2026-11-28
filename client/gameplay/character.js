@@ -122,6 +122,7 @@ export function install(api) {
       rerender();
     },
     startCreate: () => startWizard(),
+    leave: () => api._shellContext?.leave?.(),
     submitLevel: () => {
       const lv = ui.levelDraft;
       if (!lv || lv.problem()) return;
