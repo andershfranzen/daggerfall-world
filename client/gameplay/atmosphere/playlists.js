@@ -195,6 +195,32 @@ export function hearingRadius(advantages, improved = []) {
   return CREATURE_ATTRACT.radius * (Array.isArray(improved) && improved.includes('acuteHearing') ? 1.5 : 1.25);
 }
 
+/**
+ * Spatial volume for a creature sound in 3D space with optional geometry occlusion (`segmentClear`).
+ * Monsters behind walls/doors are muffled and audible at shorter range; monsters on separate dungeon
+ * storeys behind solid rock/floors are silent.
+ */
+export function creatureSoundVolume(entity, cam, { base = 0.8, radius = CREATURE_ATTRACT.radius, segmentClear = null } = {}) {
+  if (!cam || !entity || !Number.isFinite(entity.x) || !Number.isFinite(entity.z)) return 0;
+  const ey = Number.isFinite(entity.y) ? entity.y + 1.0 : cam.y;
+  const dy = Number.isFinite(cam.y) ? ey - cam.y : 0;
+  const d = Math.hypot(entity.x - cam.x, dy, entity.z - cam.z);
+  if (d > radius) return 0;
+  let occluded = false;
+  if (typeof segmentClear === 'function' && Number.isFinite(cam.y)) {
+    try {
+      occluded = !segmentClear(cam.x, cam.y, cam.z, entity.x, ey, entity.z);
+    } catch {
+      occluded = false;
+    }
+  }
+  if (occluded && Math.abs(dy) > 3.5) return 0;
+  const effectiveRadius = occluded ? radius * 0.55 : radius;
+  if (d >= effectiveRadius) return 0;
+  const t = 1 - d / effectiveRadius;
+  return base * t * t * (occluded ? 0.35 : 1);
+}
+
 /** Which creature clip to play: 'attack' on a monster attack, 'attract' (move or bark) while nearby. null if silent. */
 export function creatureClip(monsterId, what, rand = Math.random) {
   const id = Number(monsterId);

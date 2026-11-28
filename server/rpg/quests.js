@@ -55,6 +55,7 @@ import { DIVINES } from './guilds/rules.js';
 import { installCampaignOpening } from './campaign/opening.js';
 import { acceptsCampaignGlobal, revealCampaignDestination, storyTitle, updateSavedCampaignInstance } from './campaign/progress.js';
 import { deliverCampaignRewards, permanentQuestItem } from './campaign/rewards.js';
+import { annotateTutorialText } from './campaign/tutorial.js';
 import { SPECIAL_QUESTS } from './special/quests.js';
 import { regionFactions } from './npcs/people.js';
 
@@ -249,7 +250,7 @@ export function install(ctx, opts = {}) {
       const msg = def?.messages.get(id);
       if (!msg) return null;
       const v = msg.variants[Math.floor(nextRandom(inst) * msg.variants.length)] ?? msg.variants[0];
-      return expand(v, def, inst, {
+      const expanded = expand(v, def, inst, {
         playerName: p.rpg?.character?.name || p.name,
         race: p.rpg?.character?.race,
         here: locOf(p),
@@ -262,6 +263,7 @@ export function install(ctx, opts = {}) {
           return portal?.meta?.buildingName || (portal?.label ? `the ${portal.label.toLowerCase()}` : null);
         },
       }).text;
+      return annotateTutorialText(inst.name, id, expanded);
     };
     const factionOfPerson = (inst, k) => {
       const person = inst.people[k];

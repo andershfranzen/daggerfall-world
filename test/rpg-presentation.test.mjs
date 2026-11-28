@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { VidDecoder, SEQUENCES, filesForCue, videoFileName, pcm8ToFloat, BLOCK } from '../client/gameplay/cinematics/vid.js';
-import { creatureClip, hearingRadius, CREATURE_SOUNDS, footstepClips, mechanismClip, ambienceFor, clipsForEvent, DUNGEON_AMBIENCE, CLIP } from '../client/gameplay/atmosphere/playlists.js';
+import { creatureClip, hearingRadius, creatureSoundVolume, CREATURE_SOUNDS, footstepClips, mechanismClip, ambienceFor, clipsForEvent, DUNGEON_AMBIENCE, CLIP } from '../client/gameplay/atmosphere/playlists.js';
 import { lightFor, heldLightRadius, DUNGEON_AMBIENT_RADIUS, LIGHT_RADIUS } from '../client/gameplay/atmosphere/light.js';
 
 const ARENA2 = fileURLToPath(new URL('../gamedata/DaggerfallGameFiles/arena2/', import.meta.url));
@@ -200,6 +200,22 @@ test('creature voices follow DFU EnemyBasics and EnemySounds', () => {
   assert.equal(hearingRadius([]), 16);
   assert.equal(hearingRadius([{ key: 'acuteHearing' }]), 20);
   assert.equal(hearingRadius(undefined), 16);
+
+  // 3D spatial distance + occlusion: stacked dungeon floors and stone walls do not bleed at full volume.
+  const cam = { x: 12.75, y: 1.6, z: -41.8 };
+  const closeClear = creatureSoundVolume({ x: 15, y: 0, z: -41.8 }, cam, { segmentClear: () => true });
+  const farClear = creatureSoundVolume({ x: 24, y: 0, z: -41.8 }, cam, { segmentClear: () => true });
+  assert.ok(closeClear > farClear && farClear > 0 && farClear < closeClear * 0.25, 'smooth quadratic falloff with distance');
+  assert.equal(creatureSoundVolume({ x: 28.75, y: 0.6, z: -41.8 }, cam, { segmentClear: () => true }), 0, 'silent at radius edge');
+  // Monster 20 m directly above (like Privateer's Hold upper-floor rat): small 2D distance, huge 3D distance.
+  assert.equal(creatureSoundVolume({ x: 15.28, y: 20.23, z: -43.08 }, cam, { segmentClear: () => true }), 0, 'upper storey is out of 3D hearing range');
+  // Occluded monster on another storey within 16 m 3D (e.g. 6 m up through rock): silent.
+  assert.equal(creatureSoundVolume({ x: 13, y: 6.5, z: -41.8 }, cam, { segmentClear: () => false }), 0, 'occluded separate storey is silent');
+  // Occluded monster on the same floor behind a wall: muffled and shorter audible range.
+  const sameFloorClear = creatureSoundVolume({ x: 17.75, y: 0.6, z: -41.8 }, cam, { segmentClear: () => true });
+  const sameFloorWall = creatureSoundVolume({ x: 17.75, y: 0.6, z: -41.8 }, cam, { segmentClear: () => false });
+  assert.ok(sameFloorWall > 0 && sameFloorWall < sameFloorClear * 0.35, 'behind a wall is muffled');
+  assert.equal(creatureSoundVolume({ x: 22.5, y: 0.6, z: -41.8 }, cam, { segmentClear: () => false }), 0, 'distant monster behind wall is silent');
 });
 
 test('footsteps by surface follow DFU PlayerFootsteps', () => {

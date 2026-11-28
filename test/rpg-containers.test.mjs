@@ -307,3 +307,49 @@ test('GenerateItems extras: keys J-O roll a map, potion and recipe; descriptors 
   assert.ok(items.some((it) => it.template === 'parchment'), 'a treasure pile with the recipe roll');
   for (const it of items.filter((i) => i.template === 'parchment')) assert.deepEqual(it.recipe, { key: 'x', name: 'Recipe for X' });
 });
+
+test('Privateer\'s Hold emptied treasure restocks after openingRestockMs, grounds sprites, and registers as loot in client helpers', async () => {
+  const { createRpgRuntime } = await import('../server/rpg/runtime.js');
+  const inventoryFeature = await import('../server/rpg/inventory.js');
+  const containers = await import('../server/rpg/containers.js');
+  const { OPENING_DUNGEON } = await import('../server/rpg/campaign/sites.js');
+  const { hasLoot } = await import('../client/gameplay/actors/logic.js');
+  const { describeTarget } = await import('../client/gameplay/actors.js');
+  const { useLabel } = await import('../client/gameplay/shell.js');
+
+  let clock = 1000;
+  const players = new Map();
+  const rt = createRpgRuntime({
+    players, save: () => {}, send: () => {}, now: () => clock, log: { error() {}, warn() {}, info() {} },
+    features: [
+      inventoryFeature,
+      { name: 'ground-stub', install: (ctx) => { ctx.services.collision = { groundAt: () => 1.025 }; } },
+      { name: 'containers', install: (ctx) => containers.install(ctx, {
+        openingRestockMs: 60_000,
+        scene: async () => ({ kind: 'dungeon', dungeonType: 2, containers: [{ id: 'altar', kind: 'treasure', x: 32, y: 1.575, z: -13 }] }),
+      }) },
+    ],
+  });
+  const p = { id: 1, name: 'P', x: 32, y: 1.025, z: -13, yaw: 0, rpg: { location: OPENING_DUNGEON, character: { level: 1, attributes: { Strength: 100 } } } };
+  players.set(1, p);
+  rt.join(p);
+  await rt.ctx.services.containers.ready(OPENING_DUNGEON);
+  const cid = `ct:altar@${OPENING_DUNGEON}`;
+  const ent = rt.ctx.entities.get(cid);
+  assert.equal(ent.y, 1.025, 'dungeon treasure grounded onto altar surface');
+  assert.equal(hasLoot(ent), true, 'treasure container recognized as loot');
+  assert.equal(describeTarget({ kind: 'container', containerType: 'treasure', loot: true }), 'Treasure');
+  assert.equal(useLabel(ent), 'Loot');
+
+  assert.equal(rt.act(p, 'container.open', { containerId: cid }).ok, true);
+  assert.equal(rt.act(p, 'container.take', { containerId: cid }).ok, true);
+  assert.equal(rt.ctx.entities.get(cid).empty, true);
+  assert.equal(rt.ctx.entities.get(cid).sprite, undefined);
+
+  clock += 61_000;
+  rt.tick(1000);
+  assert.equal(rt.ctx.entities.get(cid).empty, false, 'emptied Privateer\'s Hold treasure restocks');
+  assert.equal(rt.ctx.entities.get(cid).sprite?.archive, 216, 'restocked treasure restores sprite');
+  assert.equal(rt.act(p, 'container.open', { containerId: cid }).ok, true);
+  assert.ok(rt.ctx.services.containers.contents(cid).length > 0, 'restocked treasure holds fresh loot');
+});

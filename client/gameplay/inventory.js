@@ -47,7 +47,7 @@ export function inventoryWatch(state) {
   return [
     c?.inventory, c?.equipment, c?.gold, c?.weaponView,
     ch.race, ch.gender, ch.faceIndex, ch.className, ch.effectiveAttributes?.Strength ?? ch.attributes?.Strength,
-    (state?.entities || []).filter((e) => e.kind === 'loot').map((e) => [e.id, e.name, e.count]),
+    (state?.entities || []).filter((e) => e.kind === 'loot' || (e.kind === 'container' && e.containerType === 'treasure' && !e.empty)).map((e) => [e.id, e.name, e.count, e.empty]),
     c?.lightSource?.itemId,
   ];
 }
@@ -624,13 +624,26 @@ export function install(api) {
   }
 
   function nearbyLoot() {
-    const piles = (api.state?.entities || []).filter((e) => e.kind === 'loot');
+    const cam = api.camera;
+    const piles = (api.state?.entities || []).filter((e) => {
+      if (e.kind === 'loot') return true;
+      if (e.kind === 'container' && e.containerType === 'treasure' && !e.empty) {
+        if (!cam || !Number.isFinite(e.x) || !Number.isFinite(e.z)) return false;
+        const d = Math.hypot(e.x - cam.x, e.z - cam.z);
+        const dy = Number.isFinite(e.y) && Number.isFinite(cam.y) ? Math.abs(e.y - (cam.y - 1.6)) : 0;
+        return d <= 4 && dy <= 3;
+      }
+      return false;
+    });
     if (!piles.length) return null;
     const sec = el('section', { class: 'inv-loot', 'aria-label': 'Nearby loot' }, el('h4', { class: 'inv-h4', text: 'Nearby' }));
     const ul = el('ul', { class: 'inv-loot-list' });
     for (const p of piles) {
+      const open = p.kind === 'container'
+        ? () => act('container.open', { containerId: p.id })
+        : () => act('inventory.inspectLoot', { targetId: p.id });
       ul.append(el('li', {}, el('span', { text: `${p.name}${p.count ? ` (${p.count})` : ''}` }),
-        el('button', { type: 'button', class: 'btn', 'data-focus-key': `loot-${p.id}`, onclick: () => act('inventory.inspectLoot', { targetId: p.id }) }, 'Search')));
+        el('button', { type: 'button', class: 'btn', 'data-focus-key': `loot-${p.id}`, onclick: open }, 'Search')));
     }
     sec.append(ul);
     return sec;

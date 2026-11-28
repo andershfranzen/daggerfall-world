@@ -119,6 +119,8 @@ export const DEFAULTS = Object.freeze({
   reclaimMs: 3 * 60_000,
   /** Corpses stay this long. */
   corpseMs: 5 * 60_000,
+  /** Authored dungeon monsters respawn this long after death while the dungeon stays occupied. */
+  respawnMs: 2 * 60_000,
   /** Corpses become lootable by anyone after this long; before, only by players who hurt it. */
   lootOpenMs: 60_000,
   lootReach: 3.5,
@@ -655,6 +657,21 @@ export function install(ctx, options = {}) {
           level, team: site.team, yaw: site.yaw, y: site.y, key, origin, gender, waterY,
         });
         if (e && site.passive === true) e.hostile = false;
+        if (e && kindOf(location) === 'dungeon' && e._ally == null && e.visibleTo == null && !e._quest && !e._m.guard) {
+          e._respawn = {
+            monsterId: id,
+            x: site.x + Math.sin(a) * off,
+            z: site.z - Math.cos(a) * off,
+            y: site.y,
+            yaw: site.yaw,
+            team: site.team,
+            key,
+            origin,
+            gender,
+            waterY,
+            passive: site.passive === true,
+          };
+        }
       });
     }
   }
@@ -822,6 +839,13 @@ export function install(ctx, options = {}) {
     e._pursuit = null;
     e._pending = [];
     e._diedAt = ctx.now();
+    if (e._respawn && cfg.respawnMs > 0) {
+      const scene = scenes.get(e.location);
+      if (scene) {
+        scene.respawns ??= [];
+        scene.respawns.push({ ...e._respawn, at: e._diedAt + cfg.respawnMs });
+      }
+    }
     e._loot = e._ally == null ? rollLoot(e, killer) : [];
     if (e._ally == null && Array.isArray(e._stuckArrows) && e._stuckArrows.length) {
       const stacks = new Map();
@@ -1555,6 +1579,26 @@ export function install(ctx, options = {}) {
         else foes.push(e);
       }
       if (!occupants) continue;
+      if (scene.respawns?.length && geometryReady(loc)) {
+        const level = sceneLevel(occupants);
+        const pending = [];
+        for (const r of scene.respawns) {
+          if (now < r.at) { pending.push(r); continue; }
+          const crowded = occupants.some((p) => sameFloor(r, p, loc) && dist(r, p) < 6);
+          if (crowded) { pending.push(r); continue; }
+          const e = spawnMonster(loc, r.monsterId, r.x, r.z, scene, {
+            level, team: r.team, yaw: r.yaw, y: r.y, key: r.key, origin: r.origin, gender: r.gender, waterY: r.waterY,
+          });
+          if (e) {
+            if (r.passive) e.hostile = false;
+            e._respawn = { ...r };
+            delete e._respawn.at;
+            if (e._playerAlly) allies.push(e);
+            else foes.push(e);
+          }
+        }
+        scene.respawns = pending;
+      }
       for (const e of foes) if (livingMonster(e)) think(e, occupants, allies, dt, now);
       for (const e of allies) if (livingMonster(e)) think(e, occupants, foes, dt, now);
     }

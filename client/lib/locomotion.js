@@ -35,9 +35,9 @@ export const LOCO = Object.freeze({
   slowScale: 0.5, // classic walk-slowly modifier (Alt held), approximation
   wadeDepth: 1.0, // water deeper than this over the feet makes the body swim
   floatDepth: 1.45, // a swimmer at rest floats with feet this far below the surface (head above)
-  climbDelay: 1.2, // s pushing against a wall before climbing starts at Climbing 0 (approximation)
-  climbDelayMin: 0.25,
-  climbSpeed: 0.8, // m/s up a wall at Climbing 0 (approximation)
+  climbDelay: 1.15, // s pushing against a wall before climbing starts at Climbing 0 (approximation)
+  climbDelayMin: 0.2,
+  climbSpeed: 0.85, // m/s up a wall at Climbing 0 (approximation)
   climbSkillBonus: 1.4, // m/s added at Climbing 100
   levitateSpeed: SPEED,
   breathBase: 10, // s of breath before drowning starts, plus Endurance / 4 (approximation of PlayerEntity breath)
@@ -207,9 +207,11 @@ export function stepBody(world, body, input, dt, modsIn) {
   if (body.mode === 'ground') {
     if (moving) moveGround(world, body, tx, tz, height, mods.waterWalk);
     // Walked off an edge higher than a stair: fall instead of snapping down.
-    // Pushing into a wall: start climbing after the delay.
-    // Head-on and stopped: sliding or creeping along a wall (even ~5% of the speed) is not a climb.
-    const pushed = moving && f > 0.5 && Math.abs(s) < 0.5 && Math.hypot(body.x - x0, body.z - z0) < Math.hypot(tx - x0, tz - z0) * 0.03;
+    // Pushing into a wall: start climbing after the delay. Measure progress along the facing vector
+    // so approaching a wall slightly off-perpendicular (~35 deg) still engages without triggering on glancing slides.
+    const intendedDist = Math.hypot(tx - x0, tz - z0);
+    const fwdDist = (body.x - x0) * Math.sin(yaw) - (body.z - z0) * Math.cos(yaw);
+    const pushed = moving && f > 0.5 && Math.abs(s) < 0.5 && intendedDist > 1e-6 && fwdDist < intendedDist * 0.35;
     if (pushed && !mods.mounted && !body.crouch && mods.fatigue > 0 && world) {
       body.climbHold += dt;
       const skill = mods.climbSpell ? 100 : Math.min(100, mods.climbing + mods.climbingBonus);
@@ -236,19 +238,37 @@ export function stepBody(world, body, input, dt, modsIn) {
     } else {
       const up = (LOCO.climbSpeed + (LOCO.climbSkillBonus * skill) / 100) * dt;
       const ny = body.y + up;
-      if (world.fits(body.x, body.z, ny, { height: LOCO.height, step: LOCO.height - 0.05 })) body.y = ny;
-      // Try to get over the top: the whole body forward at the new height with the airborne slab, far
-      // enough to clear a thin wall or fence (onto a thick wall's top, the landing finds its roof).
+      const rose = world.fits(body.x, body.z, ny, { height: LOCO.height, step: LOCO.height - 0.05 });
+      if (rose) body.y = ny;
+      // Try to get over the top: full clearance over thin fences/walls, or a partial step onto a
+      // narrow/enclosed ledge with floor support (even under a low ceiling).
       const reach = world.player.radius * 2 + 0.3;
-      const fx = body.x + Math.sin(yaw) * reach, fz = body.z - Math.cos(yaw) * reach;
+      const dirX = Math.sin(yaw), dirZ = -Math.cos(yaw);
+      const fx = body.x + dirX * reach, fz = body.z + dirZ * reach;
       const m = world.move(body.x, body.z, fx, fz, { y: body.y, fly: true, height: LOCO.height });
       if (!m.blocked) {
         body.x = m.x; body.z = m.z;
         body.mode = 'air'; body.vy = 0; body.peak = body.y;
         events.push({ kind: 'climb', stop: true, top: true });
-      } else if (!wallAhead(world, body, yaw)) {
-        body.mode = 'air'; body.vy = 0; body.peak = body.y;
-        events.push({ kind: 'climb', stop: true });
+      } else {
+        // Check whether the body already moved forward onto a walkable ledge (e.g. a narrow platform
+        // or doorway with a back wall closer than `reach`).
+        let mantled = false;
+        const movedFwd = (m.x - body.x) * dirX + (m.z - body.z) * dirZ;
+        if (rose && movedFwd >= world.player.radius * 2) {
+          const ledge = supportAt(world, m.x, m.z, body.y, FLY_STEP);
+          if (ledge !== null && ledge >= body.y - 0.3 && ledge <= body.y + FLY_STEP
+            && world.fits(m.x, m.z, ledge, { height: LOCO.height, step: FLY_STEP })) {
+            body.x = m.x; body.z = m.z; body.y = ledge;
+            body.mode = 'ground'; body.vy = 0; body.peak = null;
+            events.push({ kind: 'climb', stop: true, top: true });
+            mantled = true;
+          }
+        }
+        if (!mantled && !wallAhead(world, body, yaw)) {
+          body.mode = 'air'; body.vy = 0; body.peak = body.y;
+          events.push({ kind: 'climb', stop: true });
+        }
       }
       events.push({ kind: 'exert', fatigue: LOCO.climbFatigue * mods.exertion * dt, skill: 'Climbing', seconds: dt });
     }
@@ -258,6 +278,17 @@ export function stepBody(world, body, input, dt, modsIn) {
       const st = { y: body.y, fly: true, height };
       const m = world.move(x0, z0, tx, tz, st);
       body.x = m.x; body.z = m.z;
+      if (body.mode === 'air' && body.vy >= -1.0 && !mods.mounted && mods.fatigue > 0 && f > 0.5 && Math.abs(s) < 0.5) {
+        const intendedDist = Math.hypot(tx - x0, tz - z0);
+        const fwdDist = (body.x - x0) * Math.sin(yaw) - (body.z - z0) * Math.cos(yaw);
+        if (m.blocked && intendedDist > 1e-6 && fwdDist < intendedDist * 0.35 && wallAhead(world, body, yaw)) {
+          body.climbHold += dt;
+          if (body.climbHold >= 0.15) {
+            body.mode = 'climb'; body.vy = 0; body.climbHold = 0; body.peak = null;
+            events.push({ kind: 'climb', start: true });
+          }
+        } else body.climbHold = 0;
+      }
       if (m.blocked && body.mode === 'swim' && waterY !== null && body.y >= waterY - LOCO.floatDepth - 0.1) {
         // Climb out of the water onto a ledge at most one stair above the surface: probe the floor just past
         // the edge and vault onto it when the body fits there.

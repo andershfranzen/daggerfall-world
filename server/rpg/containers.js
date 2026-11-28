@@ -27,6 +27,7 @@
 
 import { generateItems, dungeonTreasure, stockHouseContainer, stockedDate, randomBook, DUNGEON_LOOT_KEYS, TREASURE_ARCHIVE, TREASURE_ICON_RECORDS } from './items/loot.js';
 import { normalizeRecord, carriedWeight, maxEncumbrance, GOLD_PER_KG } from './inventory.js';
+import { OPENING_DUNGEON } from './campaign/sites.js';
 
 export const name = 'containers';
 export const WORLD_PREFIX = 'containers/';
@@ -35,6 +36,7 @@ export const CONTAINER_REACH = 128 * 0.025 + 0.6; // + body radius: the server m
 const VERTICAL_REACH = 2.5;
 const MAX_CONTENTS = 64;
 const BOOKSHELF_BOOKS = 10;
+const OPENING_RESTOCK_MS = 5 * 60_000; // emptied Privateer's Hold piles restock so later new characters find loot
 const LABELS = { treasure: 'Treasure', house: 'Private property', bookshelf: 'Bookshelf', shelf: 'Shelves', storage: 'Storage', ownedShelf: 'Shelves' };
 // FactionFile.FactionIDs used by the library check.
 const MAGES_GUILD = 40;
@@ -65,6 +67,10 @@ export function install(ctx, options = {}) {
   const adapters = new Map(); // containerType -> adapter
   const viewers = new Map(); // containerKey -> Set(player id)
   const sceneOf = options.scene ?? ((location) => services.interiors?.scene(location));
+  const openingRestockMs = Number.isFinite(options.openingRestockMs) ? options.openingRestockMs : OPENING_RESTOCK_MS;
+  const nowMs = () => (typeof ctx.now === 'function' ? ctx.now() : Date.now());
+  const isOpeningRestockDue = (location, rec) => location === OPENING_DUNGEON && openingRestockMs > 0
+    && !!rec && rec.stocked !== 0 && !rec.items.length && Number.isFinite(rec.emptiedAt) && nowMs() - rec.emptiedAt >= openingRestockMs;
 
   for (const [key, v] of ctx.loadWorld?.(WORLD_PREFIX) ?? []) {
     const rec = hydrate(v);
@@ -79,9 +85,21 @@ export function install(ctx, options = {}) {
       const it = normalizeRecord(raw);
       if (it) { delete it.equipped; items.push(it); }
     }
-    return { stocked: Number.isFinite(v.stocked) ? v.stocked : 0, items: items.slice(0, MAX_CONTENTS), books: Array.isArray(v.books) ? v.books.filter(Number.isInteger) : undefined };
+    return {
+      stocked: Number.isFinite(v.stocked) ? v.stocked : 0,
+      items: items.slice(0, MAX_CONTENTS),
+      books: Array.isArray(v.books) ? v.books.filter(Number.isInteger) : undefined,
+      ...(Number.isFinite(v.emptiedAt) ? { emptiedAt: v.emptiedAt } : {}),
+      ...(Number.isInteger(v.restocks) && v.restocks > 0 ? { restocks: v.restocks } : {}),
+    };
   }
-  const serialize = (rec) => ({ stocked: rec.stocked, items: rec.items, ...(rec.books ? { books: rec.books } : {}) });
+  const serialize = (rec) => ({
+    stocked: rec.stocked,
+    items: rec.items,
+    ...(rec.books ? { books: rec.books } : {}),
+    ...(Number.isFinite(rec.emptiedAt) ? { emptiedAt: rec.emptiedAt } : {}),
+    ...(Number.isInteger(rec.restocks) && rec.restocks > 0 ? { restocks: rec.restocks } : {}),
+  });
 
   const entityId = (location, localId) => `ct:${localId}@${location}`;
   const keyOf = (location, localId) => `${location}#${localId}`;
@@ -133,6 +151,19 @@ export function install(ctx, options = {}) {
     return site.kind;
   }
 
+  function treasureSpriteFor(id, site) {
+    return site.sprite ?? { archive: TREASURE_ARCHIVE, record: TREASURE_ICON_RECORDS[hash32(id) % TREASURE_ICON_RECORDS.length] };
+  }
+
+  /** Ground a dungeon treasure flat onto the altar or floor directly below its authored centre, else centre-anchor it. */
+  function treasurePlacement(location, site) {
+    if (site.meta?.kind === 'dungeon' && typeof services.collision?.groundAt === 'function') {
+      const g = services.collision.groundAt(location, site.x, site.z, site.y);
+      if (Number.isFinite(g) && site.y - g >= 0 && site.y - g <= 1.25) return { y: Math.round(g * 1000) / 1000 };
+    }
+    return { y: site.y, ...(site.meta?.kind === 'dungeon' ? { anchor: 'centre' } : {}) };
+  }
+
   function publish(location) {
     const map = siteMap(location);
     if (!map) return;
@@ -140,17 +171,45 @@ export function install(ctx, options = {}) {
       const type = typeFor(site, null);
       if (!type) continue;
       const id = entityId(location, site.id);
-      const rec = state.get(keyOf(location, site.id));
-      const sprite = type === 'treasure'
-        ? site.sprite ?? { archive: TREASURE_ARCHIVE, record: TREASURE_ICON_RECORDS[hash32(id) % TREASURE_ICON_RECORDS.length] }
-        : null;
+      const key = keyOf(location, site.id);
+      let rec = state.get(key);
+      if (type === 'treasure' && isOpeningRestockDue(location, rec)) {
+        rec = null;
+        state.delete(key);
+        saveRec(key);
+      }
+      const sprite = type === 'treasure' ? treasureSpriteFor(id, site) : null;
+      const placed = type === 'treasure' ? treasurePlacement(location, site) : { y: site.y };
+      const empty = !!rec && rec.stocked !== 0 && !rec.items.length && type !== 'bookshelf';
       const e = {
         id, kind: 'container', containerType: type, name: LABELS[type] ?? 'Container', location,
-        x: site.x, y: site.y, z: site.z, yaw: 0,
-        empty: !!rec && rec.stocked !== 0 && !rec.items.length && type !== 'bookshelf',
-        ...(sprite && !(rec && rec.stocked && !rec.items.length) ? { sprite } : {}),
+        x: site.x, y: placed.y, z: site.z, yaw: 0,
+        ...(placed.anchor ? { anchor: placed.anchor } : {}),
+        empty,
+        ...(sprite && !empty ? { sprite } : {}),
       };
       ctx.entities.set(id, e);
+    }
+  }
+
+  function refreshOpeningTreasure() {
+    const map = siteMap(OPENING_DUNGEON);
+    if (!map) return;
+    for (const site of map.values()) {
+      if (typeFor(site, null) !== 'treasure') continue;
+      const key = keyOf(OPENING_DUNGEON, site.id);
+      const rec = state.get(key);
+      if (!isOpeningRestockDue(OPENING_DUNGEON, rec)) continue;
+      const id = entityId(OPENING_DUNGEON, site.id);
+      const e = ctx.entities.get(id);
+      const restocks = (rec.restocks ?? 0) + 1;
+      state.set(key, { stocked: 0, items: [], restocks });
+      saveRec(key);
+      if (e) {
+        ctx.touchEntity?.(e);
+        e.empty = false;
+        e.sprite = treasureSpriteFor(id, site);
+      }
     }
   }
 
@@ -162,6 +221,7 @@ export function install(ctx, options = {}) {
       if (seen.has(loc)) continue;
       seen.add(loc);
       if (!sites.has(loc)) ensureSites(loc);
+      else if (loc === OPENING_DUNGEON) refreshOpeningTreasure();
     }
   });
   ctx.on?.('locationChanged', ({ to }) => { if (to) ensureSites(to); });
@@ -209,12 +269,13 @@ export function install(ctx, options = {}) {
       },
     };
     if (type === 'treasure') {
-      if (rec) return rec;
-      const rand = seeded(hash32(key));
+      if (rec && rec.stocked !== 0 && !isOpeningRestockDue(site.location, rec)) return rec;
+      const restocks = rec ? (rec.restocks ?? 0) + (rec.stocked !== 0 ? 1 : 0) : 0;
+      const rand = seeded(hash32(restocks ? `${key}#${restocks}` : key));
       const spec = site.meta.kind === 'dungeon'
         ? dungeonTreasure(site.meta.dungeonType ?? 0, { ...opts, rand })
         : generateItems(DUNGEON_LOOT_KEYS[site.meta.locationType] ?? 'N', { ...opts, rand });
-      rec = { stocked: date, items: materialise(spec.items) };
+      rec = { stocked: date, items: materialise(spec.items), ...(restocks ? { restocks } : {}) };
     } else if (type === 'house') {
       if (rec && rec.stocked >= date) return rec;
       const rand = seeded(hash32(`${key}/${date}`));
@@ -309,7 +370,13 @@ export function install(ctx, options = {}) {
     if (!e) return;
     ctx.touchEntity?.(e);
     e.empty = c.type !== 'bookshelf' && rec.items.length === 0;
-    if (c.type === 'treasure' && e.empty) delete e.sprite;
+    if (c.type === 'treasure' && e.empty) {
+      delete e.sprite;
+      if (c.site.location === OPENING_DUNGEON && !Number.isFinite(rec.emptiedAt)) rec.emptiedAt = nowMs();
+    } else if (c.type === 'treasure' && !e.empty) {
+      if (!e.sprite) e.sprite = treasureSpriteFor(c.id, c.site);
+      if ('emptiedAt' in rec) delete rec.emptiedAt;
+    }
   }
 
   ctx.onAction('container.open', (p, args = {}) => {
@@ -365,8 +432,8 @@ export function install(ctx, options = {}) {
       if (q >= r.quantity) rec.items.splice(i, 1);
       else rec.items[i] = { ...r, quantity: r.quantity - q };
     }
-    saveRec(c.key);
     updateEntity(c, rec);
+    saveRec(c.key);
     ctx.dirty?.(p);
     show(p, c, rec);
     refreshViewers(c, rec, p);
@@ -391,8 +458,8 @@ export function install(ctx, options = {}) {
     const same = moved.stackable ? rec.items.find((r) => r.template === moved.template && JSON.stringify([r.magic, r.bookId, r.letter, r.recipe]) === JSON.stringify([moved.magic, moved.bookId, moved.letter, moved.recipe])) : null;
     if (same) rec.items[rec.items.indexOf(same)] = { ...same, quantity: same.quantity + moved.quantity };
     else rec.items.push(moved);
-    saveRec(c.key);
     updateEntity(c, rec);
+    saveRec(c.key);
     show(p, c, rec);
     refreshViewers(c, rec, p);
     say(p, `You leave ${moved.quantity > 1 ? `${moved.quantity} × ` : ''}${moved.name}.`);

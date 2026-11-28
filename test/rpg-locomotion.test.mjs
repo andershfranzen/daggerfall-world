@@ -549,3 +549,42 @@ test('[stage 8] a saved swimmer stays below a higher dry floor, with the same Ky
   assert.equal(initial.maxBreath, 33);
   assert.equal(maxBreath(movementMods({ character: rpg })), initial.maxBreath);
 });
+
+test('[stage 3] climbing engages at natural off-normal angles, mid-air wall contact, and mantles narrow ledges', () => {
+  // Approaching a wall 25 degrees off perpendicular still engages climbing.
+  const wallWorld = build({ boxes: [{ x0: -10, x1: 10, z0: -3.2, z1: -3, y1: 4, roof: false }] });
+  const angled = newBody(0, -1.5, 0);
+  const angleRad = (25 * Math.PI) / 180;
+  const angledEvs = run(wallWorld, angled, { forward: 1, yaw: angleRad }, 7, { climbing: 10 });
+  assert.ok(kinds(angledEvs).includes('climb'), 'angled approach starts climbing');
+  assert.ok(angledEvs.some((e) => e.kind === 'climb' && e.top), 'angled climber clears the top');
+
+  // Glancing nearly parallel to a corridor wall (70 degrees off normal) slides along it without climbing.
+  const glance = newBody(0, -2.5, 0);
+  const glanceEvs = run(wallWorld, glance, { forward: 1, yaw: (70 * Math.PI) / 180 }, 2, { climbing: 50 });
+  assert.ok(!kinds(glanceEvs).includes('climb'), 'glancing slide along a wall does not start climbing');
+
+  // Jumping into a wall grabs it in mid-air and climbs up.
+  const jumper = newBody(0, -1.5, 0);
+  run(wallWorld, jumper, { jumpSeq: 0 }, 0.04, { climbing: 10 });
+  const jumpEvs = run(wallWorld, jumper, { forward: 1, jumpSeq: 1 }, 5, { climbing: 10 });
+  assert.ok(kinds(jumpEvs).includes('jump'), 'jumped first');
+  assert.ok(kinds(jumpEvs).includes('climb'), 'grabbed the wall in mid-air');
+  assert.ok(jumpEvs.some((e) => e.kind === 'climb' && e.top), 'topped out after mid-air grab');
+
+  // Narrow enclosed ledge (only 0.9 m deep with a back wall): full reach (1.0 m) is blocked, but mantling onto floor support succeeds.
+  const narrow = build({
+    boxes: [{ x0: -6, x1: 6, z0: -3.9, z1: -3, y1: 2.5, roof: true }],
+    walls: [{ a: [-6, -3.9], b: [6, -3.9], y0: 2.5, y1: 6 }],
+  });
+  const climber = newBody(0, -2.0, 0);
+  const narrowMods = normalizeMods({ climbing: 20 });
+  let mantled = false;
+  for (let t = 0; t < 6 && !mantled; t += 0.04) {
+    const evs = stepBody(narrow, climber, { yaw: 0, forward: 1 }, 0.04, narrowMods);
+    if (evs.some((e) => e.kind === 'climb' && e.top)) mantled = true;
+  }
+  assert.ok(mantled, 'mantled onto narrow enclosed ledge');
+  assert.equal(climber.mode, 'ground');
+  assert.ok(Math.abs(climber.y - 2.5) < 0.05, `landed on ledge at y=${climber.y}`);
+});

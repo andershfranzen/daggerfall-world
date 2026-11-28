@@ -91,7 +91,7 @@ export function useLabel(e) {
   const it = interactionFor(e);
   if (!it) return 'Use';
   if (it.verb === 'npc.talk') return 'Talk';
-  if (it.verb === 'inventory.inspectLoot' || it.verb === 'combat.loot') return 'Loot';
+  if (it.verb === 'inventory.inspectLoot' || it.verb === 'combat.loot' || (it.verb === 'container.open' && e.containerType === 'treasure')) return 'Loot';
   if (it.verb === 'combat.revive') return 'Revive';
   if (it.panel === 'party') return 'Party';
   return 'Use';
@@ -505,7 +505,7 @@ export function createShell({ api, input, actions, settings }) {
       ['Click view', 'Capture mouse to look · Esc releases'], ['Touch drag', 'Look'],
       [`${keys(b.run)} · ${keys(b.slow)}`, 'Run · walk slowly (hold)'],
       [keys(b.jump), 'Jump · swim up'], [keys(b.crouch), 'Crouch · dive'],
-      ['Into a wall', 'Climb'],
+      ['Hold W into a wall (or jump)', 'Climb'],
       [keys(b.ready), 'Ready / sheathe weapon'],
       [`${keys(b.attack)} · Click`, 'Attack'], ['Right-drag', 'Directional strike'],
       [keys(b.interact), 'Talk · use · loot'],
@@ -842,7 +842,9 @@ const builtinPanels = {
         .flatMap(([k, d]) => [h('dt', { text: k }), h('dd', { text: d })]))));
 
     grid.append(card('account', 'Account',
-      h('p', { class: 'settings-note', text: api.account ? `Signed in as ${api.account.username}.` : 'Playing as a guest on this server.' }),
+      h('p', { class: 'settings-note', text: api.account
+        ? `Signed in as ${api.account.username}. Your character and progress are saved automatically on the server.`
+        : 'Playing as a guest on this server. Your character is saved for this browser session; sign in with an account to keep it permanently.' }),
       h('div', { class: 'menu-actions' },
         h('button', { type: 'button', class: 'btn', onclick: leave, text: 'Leave the world' }),
         api.account && globalThis.dfwAccount?.logout

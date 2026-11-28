@@ -55,7 +55,9 @@ export function describeTarget(info) {
     return info.readied ? 'Traveller · weapon readied' : 'Traveller';
   }
   if (info.dead) return info.loot ? 'Corpse · something to take' : 'Corpse · searched';
-  if (info.kind === 'loot' || info.kind === 'treasure') return info.loot ? 'Treasure' : 'Picked clean';
+  if (info.kind === 'loot' || info.kind === 'treasure' || (info.kind === 'container' && info.containerType === 'treasure')) {
+    return info.loot ? 'Treasure' : 'Picked clean';
+  }
   if (info.kind === 'npc') {
     const role = String(info.role ?? '').trim();
     return role ? role[0].toUpperCase() + role.slice(1) : 'Townsperson';
@@ -386,6 +388,7 @@ export class ActorController {
     return {
       id: v.id, kind: dead && d.kind === 'monster' ? 'corpse' : d.kind ?? 'entity', name: d.name ?? '', distance,
       dead, loot: hasLoot(d), hp: d.hp, maxHp: d.maxHp, role: d.role ?? null, sourceKind: d.kind ?? null,
+      containerType: d.containerType ?? null,
     };
   }
 

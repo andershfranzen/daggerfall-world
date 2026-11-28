@@ -22,7 +22,7 @@ import {
 import { AudioEngine } from './atmosphere/engine.js';
 import { regionOfPlace, climateOfPlace } from './travel/catalog.js';
 import { loadPrefs, savePrefs } from './atmosphere/prefs.js';
-import { sceneKind, chooseSong, clipsForEvent, ambienceFor, footstepClips, creatureClip, mechanismClip, hearingRadius, CREATURE_ATTRACT, CLIP } from './atmosphere/playlists.js';
+import { sceneKind, chooseSong, clipsForEvent, ambienceFor, footstepClips, creatureClip, mechanismClip, hearingRadius, creatureSoundVolume, CREATURE_ATTRACT, CLIP } from './atmosphere/playlists.js';
 import { lightFor, restoreLight, heldLightRadius, gutter } from './atmosphere/light.js';
 import { WeatherLayer } from './atmosphere/weather.js';
 import { cityGatesClosed } from '../world/cityGates.js';
@@ -226,16 +226,15 @@ export function install(api) {
     const sheet = c && typeof c.character === 'object' && c.character ? c.character : c;
     return hearingRadius(sheet?.career?.advantages, sheet?.improvedTalents);
   };
-  /** Distance-scaled volume inside the hearing radius. No wall occlusion is modelled. */
+  /** 3D distance- and occlusion-scaled volume inside the hearing radius. */
   function nearVolume(e, base = 0.8, radius = hearing()) {
     const cam = api.camera ?? lastCam;
-    if (!cam || !Number.isFinite(e?.x)) return base * 0.5;
-    const d = Math.hypot(e.x - cam.x, e.z - cam.z);
-    if (d > radius) return 0;
-    return base * (1 - 0.75 * (d / radius));
+    const world = api.locomotionWorld?.();
+    const segmentClear = world?.segmentClear ? world.segmentClear.bind(world) : null;
+    return creatureSoundVolume(e, cam, { base, radius, segmentClear });
   }
 
-  // Creature voices (DFU EnemySounds): every 3-9 s within 16 m, 20% move else bark; the attack voice on attack.
+  // Creature voices (DFU EnemySounds): every 3-9 s within hearing range, 20% move else bark; the attack voice on attack.
   const creatureWait = new Map();
   function creatureVoices(dt) {
     if (!engine.running) return;
@@ -246,13 +245,14 @@ export function install(api) {
     for (const e of api.state?.entities ?? []) {
       if (e?.kind !== 'monster' || e.dead || !Number.isFinite(e.monsterId)) continue;
       seen.add(e.id);
-      if (Math.hypot(e.x - cam.x, e.z - cam.z) > radius) continue;
+      const vol = nearVolume(e, 0.8, radius);
+      if (vol <= 0.01) continue;
       let t = creatureWait.get(e.id);
       if (t === undefined) t = CREATURE_ATTRACT.minDelay + Math.random() * (CREATURE_ATTRACT.maxDelay - CREATURE_ATTRACT.minDelay + 1);
       t -= dt;
       if (t <= 0) {
         const clip = creatureClip(e.monsterId, 'attract');
-        if (clip !== null) { engine.playClip(clip, { volume: nearVolume(e, 0.8, radius), pan: panAt(e.x, e.z) }); lastCreature = { id: e.id, monsterId: e.monsterId, clip }; }
+        if (clip !== null) { engine.playClip(clip, { volume: vol, pan: panAt(e.x, e.z) }); lastCreature = { id: e.id, monsterId: e.monsterId, clip }; }
         t = CREATURE_ATTRACT.minDelay + Math.floor(Math.random() * (CREATURE_ATTRACT.maxDelay - CREATURE_ATTRACT.minDelay + 1));
       }
       creatureWait.set(e.id, t);
@@ -282,7 +282,8 @@ export function install(api) {
     if (ev.kind === 'monsterAttack') {
       const e = entityById(ev.entityId);
       const clip = e ? creatureClip(e.monsterId, 'attack') : null;
-      if (clip !== null) { engine.playClip(clip, { volume: Math.max(0.3, nearVolume(e, 0.9)), pan: panAt(e.x, e.z) }); lastCreature = { id: e.id, monsterId: e.monsterId, clip, attack: true }; }
+      const vol = e ? nearVolume(e, 0.9) : 0;
+      if (clip !== null && vol > 0.01) { engine.playClip(clip, { volume: vol, pan: panAt(e.x, e.z) }); lastCreature = { id: e.id, monsterId: e.monsterId, clip, attack: true }; }
     }
     for (const { clip, self, at, record } of clipsForEvent(ev, { selfId })) {
       if (at) { engine.playClip(clip, { volume: 0.8, pan: panAt(at.x, at.z) }); lastMechanism = { id: at.id, clip, cue: at.cue }; continue; }
@@ -437,7 +438,7 @@ export function install(api) {
         }
       }
     }
-    if (cam) lastCam = { x: cam.x, z: cam.z, yaw: cam.yaw ?? 0 };
+    if (cam) lastCam = { x: cam.x, y: cam.y, z: cam.z, yaw: cam.yaw ?? 0 };
 
     weather.draw({ type: info.indoors ? 'indoors' : info.weather, intensity: info.intensity, dt, dyaw, reduced: !!reduceMotion?.matches, flash });
 

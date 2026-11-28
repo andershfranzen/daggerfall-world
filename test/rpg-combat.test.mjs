@@ -740,3 +740,32 @@ test('feedback: a monster blow soaked by a shield is absorbed, not a miss; hurt 
   assert.equal(c.rpg.character.health, before - 9);
   assert.equal(w2.events(2, 'hurt').length, 0, 'hurt goes to the injured player only');
 });
+
+test('authored dungeon monsters respawn while the dungeon stays occupied, waiting if a player stands on the spot', () => {
+  const DUNGEON = "dungeon:Daggerfall/Privateer's Hold";
+  const w = world({
+    seed: 11,
+    services: {
+      encounterSites: (loc) => (loc === DUNGEON ? [{ x: 20, y: 0, z: -10, monsters: [RAT], key: 'rat-1' }] : undefined),
+    },
+    combatOptions: { respawnMs: 30_000, corpseMs: 120_000 },
+  });
+  const a = w.join(1, 'Ann', 0, 0, { location: DUNGEON });
+  w.tick(0.04);
+  const first = [...w.ctx.entities.values()].find((e) => e.kind === 'monster' && !e.dead);
+  assert.ok(first, 'initial dungeon monster spawned');
+  w.S.damageEntity(a, first.id, 100);
+  assert.equal(first.dead, true);
+
+  // Move player onto the spawn spot and pass respawnMs: defers while crowded.
+  a.x = 20; a.z = -10;
+  w.tick(31);
+  assert.equal([...w.ctx.entities.values()].filter((e) => e.kind === 'monster' && !e.dead).length, 0, 'deferred while crowded');
+
+  // Move away: monster respawns at its authored site even while the dungeon remains occupied.
+  a.x = 0; a.z = 0;
+  w.tick(0.5);
+  const living = [...w.ctx.entities.values()].filter((e) => e.kind === 'monster' && !e.dead);
+  assert.equal(living.length, 1, 'monster respawned while dungeon occupied');
+  assert.notEqual(living[0].id, first.id);
+});

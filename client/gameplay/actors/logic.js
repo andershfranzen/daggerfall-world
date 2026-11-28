@@ -45,7 +45,9 @@ export function isDead(e) {
 /** True when an entity carries loot the player could take. */
 export function hasLoot(e) {
   if (!e) return false;
-  if (e.kind === 'loot' || e.kind === 'treasure') return e.looted !== true && e.empty !== true;
+  if (e.kind === 'loot' || e.kind === 'treasure' || (e.kind === 'container' && e.containerType === 'treasure')) {
+    return e.looted !== true && e.empty !== true;
+  }
   if (e.lootable === true) return true;
   if (Array.isArray(e.loot)) return e.loot.length > 0;
   if (Array.isArray(e.items)) return e.items.length > 0;

@@ -487,3 +487,14 @@ test('all seven installed S0000016 endings resolve from saved receipt flags (scr
     assert.deepEqual([...globals].sort((a, b) => a - b), [receipt, ending, 36], recipient);
   }
 });
+
+test('tutorial lessons include Daggerfall World controls and auto-save guidance without altering other quests', async () => {
+  const { annotateTutorialText } = await import('../server/rpg/campaign/tutorial.js');
+  const saveLesson = annotateTutorialText('_TUTOR__', 1030, 'Classic save prompt.');
+  assert.match(saveLesson, /saved automatically on the server/i);
+  assert.match(saveLesson, /no Save Game menu under Esc/i);
+  assert.ok(saveLesson.indexOf('saved automatically') < saveLesson.indexOf('Classic save prompt.'));
+  assert.match(annotateTutorialText('_TUTOR__', 1012, 'Move lesson'), /W A S D/);
+  assert.match(annotateTutorialText('_TUTOR__', 1020, 'Door lesson'), /press G/i);
+  assert.equal(annotateTutorialText('_BRISIEN', 1030, 'Unrelated quest'), 'Unrelated quest');
+});
